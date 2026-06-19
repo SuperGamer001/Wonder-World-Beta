@@ -1,0 +1,16 @@
+{
+    "textures": {
+        "logo": "textures/UI/Logo_Beta.png",
+        "item": "textures/app.png"
+    },
+    "loadingText": [
+        "Wonder World is currently in Beta Phase.",
+        "Expect bugs and incomplete features.",
+        "Please report any issues you encounter.",
+        "Thank you for playing!"
+    ],
+    "titleScreenBG": {
+        "colors": ["#1e3c72", "#2a5298"],
+        "angle": 45
+    }
+}

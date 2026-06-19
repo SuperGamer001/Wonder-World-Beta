@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="index.css">
+    <!-- Favicon -->
+    <link rel="icon" type="image/png" href="./data/textures/favicon.ico">
+    <title>Wonder World</title>
+    <script>
+        // If the body is focused, focus the iframe as well to ensure key events are captured
+        document.addEventListener('focus', () => {
+            let iframe = document.getElementById('mainFrame') != null ? document.getElementById('mainFrame') : null;
+            
+            if (iframe != null) iframe.focus();
+        });
+    </script>
+</head>
+<body>
+    <iframe id="mainFrame" src="game.html"></iframe>
+</body>
+</html>

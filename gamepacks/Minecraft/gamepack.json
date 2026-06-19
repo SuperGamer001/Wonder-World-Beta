@@ -1,0 +1,12 @@
+{
+    "textures": {
+        "logo": "textures/UI/logo.png"
+    },
+    "loadingText": [
+        ""
+    ],
+    "titleScreenBG": {
+        "colors": ["brown", "brown", "brown", "green"],
+        "angle": 0
+    }
+}

@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="src/css/game.css">
+    <script src="src/main.js" defer></script>
+    <!-- game.html -->
+    <script type="importmap">
+    {
+    "imports": {
+        "three": "/node_modules/three/build/three.module.js"
+    }
+    }
+    </script>
+
+    <script type="module" src="src/scripts/world.js" defer></script>
+</head>
+<body>
+
+    <img id="TitleLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 60%; height: auto; margin-top: 8vw;">
+
+    <div id="confirmPopup" class="popup hidden">
+        <div id="confirmTitle" class="popupTitle">Confirm Action</div>
+        <div id="confirmMessage" class="popupMessage">Are you sure?</div>
+        <div id="confirmButtons" class="popupButtons">
+            <div class="menuButton" id="confirmYes">Yes</div>
+            <div class="menuButton" id="confirmNo" onclick="document.getElementById('confirmPopup').classList.add('hidden');">No</div>
+        </div>
+    </div>
+    
+    <div class="loadingContainer">
+
+        <div id="packName" class="packName hidden">Vanilla Gamepack</div>
+
+        <div class="loadingText">Welcome to Wonder World Beta!</div>
+
+        <div id="appLoadingBar" class="loadingBar">
+            <div class="progressBar"></div>
+        </div>
+    </div>
+    
+    
+    <div class="hidden" id="TitleScreen">
+        <div class="menuButton" id="startButton">Start Game</div>
+        <div class="menuButton">Settings</div>
+
+        <!-- The "Leave Game" button only appears in electron apps. In the web version, it is hidden from the user -->
+        <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
+    </div>
+
+    <div class="hidden" id="SettingsScreen">
+        <div class="menuButton">Back</div>
+        <div class="menuButton">Audio</div>
+        <div class="menuButton">Graphics</div>
+    </div>
+
+    <div class="hidden" id="GameScreen">
+        <div id="gameUI">
+            <div id="playerInfo">
+                <div id="playerHealth"><img src="./data/textures/UI/Heart.png" width="25vw"> Health: 100 / 100</div>
+                <div id="playerHunger"><img src="./data/textures/UI/Bread.png" width="25vw"> Hunger: 100 / 100</div>
+                <div id="playerEnergy"><img src="./data/textures/UI/Energy1.png" width="25vw"> Energy: 100 / 100</div>
+                <div id="playerProtection" class="hidden">Protection: 0%</div>
+                <div id="playerArrows" class="hidden">Arrows: 0/0</div>
+            </div>
+            <div id="hotbar">
+                <div class="hotbarSlot selected"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+                <div class="hotbarSlot"><img src=""></div>
+
+                <div class="offhand hotbarSlot"><img src=""></div>
+            </div>
+
+            <div id="crosshair"></div>
+        </div>
+
+        <div class="hidden" id="PauseScreen">
+            <img id="PauseLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 20%; height: auto; margin-top: -15vw;">
+            <div class="menuButton" onclick="resumeGame()">Resume</div>
+            <div class="menuButton">Settings</div>
+            <div class="menuButton" onclick="leaveWorld()">Quit</div>
+        </div>
+
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+
+
+
+
+
+</body>
+</html>

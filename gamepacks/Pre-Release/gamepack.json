@@ -1,0 +1,14 @@
+{
+    "textures": {
+        "logo": "textures/UI/Logo.png"
+    },
+    "loadingText": [
+        "This Gamepack is for the official Pre-Release of Wonder World after the Beta Phase.",
+        "The Pre-Release Gamepack contains altered information and textures to reflect the transition from Beta to Pre-Release for a more polished experience.",
+        "Hmm????"
+    ],
+    "titleScreenBG": {
+        "colors": ["#982a52", "#512b28"],
+        "angle": 90
+    }
+}
