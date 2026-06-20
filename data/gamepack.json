@@ -12,5 +12,271 @@
     "titleScreenBG": {
         "colors": ["#1e3c72", "#2a5298"],
         "angle": 45
-    }
+    },
+    "blocks": [
+        {
+            "id": 0,
+            "name": "AIR",
+            "transparent": true,
+            "noCollision": true,
+            "color": [0, 0, 0]
+        },
+        {
+            "id": 1,
+            "name": "GRASS",
+            "color": [0.38, 0.32, 0.18],
+            "topColor": [0.32, 0.58, 0.18],
+            "sideColor": [0.38, 0.32, 0.18]
+        },
+        {
+            "id": 2,
+            "name": "DIRT",
+            "color": [0.50, 0.35, 0.20]
+        },
+        {
+            "id": 3,
+            "name": "STONE",
+            "color": [0.50, 0.50, 0.50]
+        },
+        {
+            "id": 4,
+            "name": "SAND",
+            "color": [0.85, 0.80, 0.55]
+        },
+        {
+            "id": 5,
+            "name": "WATER",
+            "transparent": true,
+            "liquid": true,
+            "color": [0.10, 0.40, 0.80]
+        },
+        {
+            "id": 6,
+            "name": "WOOD",
+            "color": [0.45, 0.30, 0.15],
+            "topColor": [0.50, 0.38, 0.22]
+        },
+        {
+            "id": 7,
+            "name": "LEAVES",
+            "transparent": true,
+            "color": [0.18, 0.52, 0.14]
+        },
+        {
+            "id": 8,
+            "name": "GRAVEL",
+            "color": [0.46, 0.45, 0.43]
+        },
+        {
+            "id": 9,
+            "name": "COAL_ORE",
+            "color": [0.30, 0.30, 0.30]
+        },
+        {
+            "id": 10,
+            "name": "IRON_ORE",
+            "color": [0.56, 0.46, 0.40]
+        },
+        {
+            "id": 11,
+            "name": "GOLD_ORE",
+            "color": [0.70, 0.62, 0.20]
+        },
+        {
+            "id": 12,
+            "name": "SNOW",
+            "color": [0.95, 0.96, 0.97]
+        },
+        {
+            "id": 13,
+            "name": "ICE",
+            "transparent": true,
+            "color": [0.70, 0.85, 0.90]
+        },
+        {
+            "id": 14,
+            "name": "SANDSTONE",
+            "color": [0.78, 0.72, 0.50],
+            "topColor": [0.82, 0.76, 0.54]
+        },
+        {
+            "id": 15,
+            "name": "CLAY",
+            "color": [0.62, 0.58, 0.55]
+        },
+        {
+            "id": 16,
+            "name": "SNOW_DIRT",
+            "color": [0.50, 0.35, 0.20],
+            "topColor": [0.95, 0.96, 0.97]
+        },
+        {
+            "id": 17,
+            "name": "GRANITE",
+            "color": [0.60, 0.42, 0.38]
+        },
+        {
+            "id": 18,
+            "name": "DIORITE",
+            "color": [0.75, 0.74, 0.73]
+        },
+        {
+            "id": 19,
+            "name": "BEDROCK",
+            "color": [0.20, 0.20, 0.22]
+        }
+    ],
+    "biomes": [
+        {
+            "name": "PLAINS",
+            "temperature": 0.60,
+            "humidity": 0.50,
+            "baseHeight": 64,
+            "heightVariation": 12,
+            "heightOctaves": 4,
+            "heightFrequency": 0.003,
+            "mountainBlend": 0.05,
+            "surfaceBlock": "GRASS",
+            "subsurfaceBlock": "DIRT",
+            "stoneBlock": "STONE",
+            "deepBlock": "STONE",
+            "structures": {
+                "tree": { "frequency": 0.0035, "minSpacing": 5 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 96,  "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -96, "maxY": 56,  "frequency": 0.014, "minSize": 3,  "maxSize": 9  },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 24, "frequency": 0.006, "minSize": 2,  "maxSize": 6  }
+            ]
+        },
+        {
+            "name": "FOREST",
+            "temperature": 0.58,
+            "humidity": 0.72,
+            "baseHeight": 66,
+            "heightVariation": 14,
+            "heightOctaves": 4,
+            "heightFrequency": 0.003,
+            "mountainBlend": 0.08,
+            "surfaceBlock": "GRASS",
+            "subsurfaceBlock": "DIRT",
+            "stoneBlock": "STONE",
+            "deepBlock": "STONE",
+            "structures": {
+                "tree": { "frequency": 0.028, "minSpacing": 3 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 96,  "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -96, "maxY": 56,  "frequency": 0.014, "minSize": 3,  "maxSize": 9  },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 24, "frequency": 0.006, "minSize": 2,  "maxSize": 6  }
+            ]
+        },
+        {
+            "name": "DESERT",
+            "temperature": 0.90,
+            "humidity": 0.10,
+            "baseHeight": 62,
+            "heightVariation": 10,
+            "heightOctaves": 3,
+            "heightFrequency": 0.0025,
+            "mountainBlend": 0.03,
+            "surfaceBlock": "SAND",
+            "subsurfaceBlock": "SAND",
+            "stoneBlock": "SANDSTONE",
+            "deepBlock": "STONE",
+            "structures": {
+                "tree": { "frequency": 0.0002, "minSpacing": 20 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 80,  "frequency": 0.012, "minSize": 3,  "maxSize": 10 },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 20, "frequency": 0.008, "minSize": 2,  "maxSize": 7  }
+            ]
+        },
+        {
+            "name": "MOUNTAINS",
+            "temperature": 0.30,
+            "humidity": 0.40,
+            "baseHeight": 90,
+            "heightVariation": 90,
+            "heightOctaves": 6,
+            "heightFrequency": 0.004,
+            "mountainBlend": 0.80,
+            "surfaceBlock": "STONE",
+            "subsurfaceBlock": "STONE",
+            "stoneBlock": "STONE",
+            "deepBlock": "GRANITE",
+            "structures": {
+                "tree": { "frequency": 0.001, "minSpacing": 8 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 128, "frequency": 0.022, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -128, "maxY": 80, "frequency": 0.018, "minSize": 3,  "maxSize": 10 },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 40, "frequency": 0.009, "minSize": 2,  "maxSize": 7  }
+            ]
+        },
+        {
+            "name": "OCEAN",
+            "temperature": 0.50,
+            "humidity": 1.00,
+            "baseHeight": 36,
+            "heightVariation": 12,
+            "heightOctaves": 3,
+            "heightFrequency": 0.002,
+            "mountainBlend": 0.02,
+            "surfaceBlock": "GRAVEL",
+            "subsurfaceBlock": "CLAY",
+            "stoneBlock": "STONE",
+            "deepBlock": "STONE",
+            "structures": {
+                "tree": { "frequency": 0.000, "minSpacing": 99 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -64, "maxY": 48,  "frequency": 0.012, "minSize": 3,  "maxSize": 10 },
+                { "block": "IRON_ORE",  "minY": -128, "maxY": 40, "frequency": 0.010, "minSize": 2,  "maxSize": 7  }
+            ]
+        },
+        {
+            "name": "SNOWY_PLAINS",
+            "temperature": 0.10,
+            "humidity": 0.30,
+            "baseHeight": 64,
+            "heightVariation": 10,
+            "heightOctaves": 4,
+            "heightFrequency": 0.003,
+            "mountainBlend": 0.06,
+            "surfaceBlock": "SNOW",
+            "subsurfaceBlock": "SNOW_DIRT",
+            "stoneBlock": "STONE",
+            "deepBlock": "DIORITE",
+            "structures": {
+                "tree": { "frequency": 0.004, "minSpacing": 6 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 96,  "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -96, "maxY": 56,  "frequency": 0.016, "minSize": 3,  "maxSize": 10 }
+            ]
+        },
+        {
+            "name": "SNOWY_MOUNTAINS",
+            "temperature": 0.05,
+            "humidity": 0.35,
+            "baseHeight": 88,
+            "heightVariation": 80,
+            "heightOctaves": 6,
+            "heightFrequency": 0.004,
+            "mountainBlend": 0.85,
+            "surfaceBlock": "SNOW",
+            "subsurfaceBlock": "STONE",
+            "stoneBlock": "STONE",
+            "deepBlock": "GRANITE",
+            "structures": {
+                "tree": { "frequency": 0.0005, "minSpacing": 12 }
+            },
+            "ores": [
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 128, "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -128, "maxY": 80, "frequency": 0.016, "minSize": 3,  "maxSize": 10 },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 40, "frequency": 0.009, "minSize": 2,  "maxSize": 7  }
+            ]
+        }
+    ]
 }

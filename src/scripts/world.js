@@ -1,469 +1,330 @@
-// World.js - Handles the 3D world rendering and logic using Three.js
-import * as THREE from "three";
-
-let scene, camera, renderer, light;
-
-const CHUNK_SIZE = 16;
-const CHUNK_VOLUME = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
-const BLOCK_TYPES = {
-    0: { name: "Air", solid: false },
-
-    1: { name: "Stone", solid: true },
-    2: { name: "Dirt", solid: true },
-    3: { name: "Grass", solid: true },
-    4: { name: "Bedrock", solid: true }
-};
-
-const RENDER_DISTANCE = 10;
-
-let lastPlayerChunk = {
-    x: null,
-    y: null,
-    z: null
-};
-
-const chunkMaterial =
-    new THREE.MeshLambertMaterial({
-        color: 0xaaaaaa
-    });
-
-const WORKERS_COUNT = 4;
-const workers = [];
-for (let i = 0; i < WORKERS_COUNT; i++) {
-    let newWorker = new Worker("src/scripts/meshWorker.js");
-    workers.push({ worker: newWorker, busy: false });
-    // Send a special message to the worker to let it know which block types are solid and what materials to use for them. This will allow the worker to generate the mesh for the chunk based on the block data and the neighboring chunks.
-    newWorker.postMessage({ type: "init", blockTypes: BLOCK_TYPES });
-}
-
-
-class Chunk {
-    constructor(x, y, z) {
-        this.position = { x, y, z };
-        this.blocks = new Uint8Array(CHUNK_VOLUME); // Placeholder for block data
-        this.mesh = null; // Placeholder for the chunk's mesh
-    }
-
-    unload() {
-        if (this.mesh) {
-            scene.remove(this.mesh);
-            this.mesh.geometry.dispose();
-            this.mesh.material.dispose();
-            this.mesh = null;
-        }
-    }
-
-    async generateMesh() {
-
-        const meshData =
-            await callNextAvailableWorker(
-                this.blocks,
-                this.getNeighboringChunks()
-            );
-
-        const geometry =
-            new THREE.BufferGeometry();
-
-        geometry.setAttribute(
-            "position",
-            new THREE.Float32BufferAttribute(
-                meshData.vertices,
-                3
-            )
-        );
-
-        geometry.setIndex(meshData.indices);
-
-        geometry.computeVertexNormals();
-
-        const newMesh =
-            new THREE.Mesh(
-                geometry,
-                chunkMaterial
-            );
-
-        newMesh.position.set(
-            this.position.x * CHUNK_SIZE,
-            this.position.y * CHUNK_SIZE,
-            this.position.z * CHUNK_SIZE
-        );
-
-        if (this.mesh) {
-            scene.remove(this.mesh);
-            this.mesh.geometry.dispose();
-        }
-
-        this.mesh = newMesh;
-
-        scene.add(this.mesh);
-    }  
-
-    getNeighboringChunks() {
-
-        const result = {
-            nx: null,
-            px: null,
-            ny: null,
-            py: null,
-            nz: null,
-            pz: null
-        };
-
-        result.nx =
-            World.chunks.get(
-                `${this.position.x - 1},${this.position.y},${this.position.z}`
-            )?.blocks ?? null;
-
-        result.px =
-            World.chunks.get(
-                `${this.position.x + 1},${this.position.y},${this.position.z}`
-            )?.blocks ?? null;
-
-        result.ny =
-            World.chunks.get(
-                `${this.position.x},${this.position.y - 1},${this.position.z}`
-            )?.blocks ?? null;
-
-        result.py =
-            World.chunks.get(
-                `${this.position.x},${this.position.y + 1},${this.position.z}`
-            )?.blocks ?? null;
-
-        result.nz =
-            World.chunks.get(
-                `${this.position.x},${this.position.y},${this.position.z - 1}`
-            )?.blocks ?? null;
-
-        result.pz =
-            World.chunks.get(
-                `${this.position.x},${this.position.y},${this.position.z + 1}`
-            )?.blocks ?? null;
-
-        return result;
-    }
-}
-
-
-async function callNextAvailableWorker(
-    blockData,
-    neighborBlocks
-) {
-
-    return new Promise((resolve) => {
-
-        const check = () => {
-
-            const workerWrapper =
-                workers.find(w => !w.busy);
-
-            if (!workerWrapper) {
-                setTimeout(check, 1);
-                return;
-            }
-
-            workerWrapper.busy = true;
-
-            workerWrapper.worker.onmessage =
-                (event) => {
-
-                    workerWrapper.busy = false;
-
-                    resolve(event.data.meshData);
-                };
-
-            workerWrapper.worker.postMessage({
-                type: "generateMesh",
-                blockData,
-                neighborBlocks
-            });
-        };
-
-        check();
-    });
-}
-
-
-const World = {
-    chunks: new Map(),  
-
-    modifyBlock(x, y, z, blockID) {
-        const chunkX = Math.floor(x / CHUNK_SIZE);
-        const chunkY = Math.floor(y / CHUNK_SIZE);
-        const chunkZ = Math.floor(z / CHUNK_SIZE);
-        const chunkKey = `${chunkX},${chunkY},${chunkZ}`;
-        const chunk = this.chunks.get(chunkKey);
-        if (chunk) {
-            const localX = x - chunkX * CHUNK_SIZE;
-            const localY = y - chunkY * CHUNK_SIZE;
-            const localZ = z - chunkZ * CHUNK_SIZE;
-            const index = localX + localY * CHUNK_SIZE + localZ * CHUNK_SIZE * CHUNK_SIZE;
-            chunk.blocks[index] = blockID;
-            chunk.generateMesh();
-        }
-    },
+/**
+ * world.js  —  Render layer
+ *
+ * Responsibilities (main thread only):
+ *   • Three.js scene, camera, renderer, lighting
+ *   • First-person player controls (WASD + mouse look)
+ *   • Calls ChunkManager.update() every frame
+ *   • Converts greedy-meshed geometry data into Three.js BufferGeometry / Mesh
+ *   • Disposes geometry and materials when chunks unload
+ *
+ * World state (voxel data, generation) lives in WorldState / ChunkManager
+ * and is fully decoupled from rendering.
+ */
 
-    generateChunk(x, y, z) {
-        // Placeholder for world generation logic
-        // This will create chunks and populate them with blocks based on some algorithm (e.g., Perlin noise)
-        // For simplicity, we'll just create a flat world with:
-        // - bedrock at Y = -126
-        // - stone from Y = -125 to Y = -4
-        // - dirt from Y = -3 to Y = -1
-        // - grass at Y = 0, with the rest being air.
+import * as THREE from 'three';
 
+import { buildRegistryFromGamePack } from './engine/BlockRegistry.js';
+import { WorldState }                from './engine/WorldState.js';
+import { WorkerPool }                from './engine/WorkerPool.js';
+import { ChunkManager }              from './engine/ChunkManager.js';
+import { CHUNK_SIZE }                from './engine/ChunkData.js';
 
-        // First: Create the chunk.
-        const chunk = new Chunk(x, y, z);
+// ── Three.js singletons ───────────────────────────────────────────────────────
 
-        // Then: Populate the chunk with blocks based on the Y level.
-        for (let localX = 0; localX < CHUNK_SIZE; localX++) {
-            for (let localY = 0; localY < CHUNK_SIZE; localY++) {
-                for (let localZ = 0; localZ < CHUNK_SIZE; localZ++) {
-                    const worldX = x * CHUNK_SIZE + localX;
-                    const worldY = y * CHUNK_SIZE + localY;
-                    const worldZ = z * CHUNK_SIZE + localZ;
-                    let blockID = 0; // Air
-                    if (worldY < -126) {
-                        blockID = 1; // Bedrock
-                    } else if (worldY >= -125 && worldY <= -4) {
-                        blockID = 2; // Stone
-                    } else if (worldY >= -3 && worldY <= -1) {
-                        blockID = 3; // Dirt
-                    } else if (worldY === 0) {
-                        blockID = 4; // Grass
-                    }
-                    chunk.blocks[localX + localY * CHUNK_SIZE + localZ * CHUNK_SIZE * CHUNK_SIZE] = blockID;
-                }
-            }
-        }
+let scene, camera, renderer;
+let ambientLight, sunLight;
 
-        this.chunks.set(`${x},${y},${z}`, chunk);
+// ── Engine singletons ─────────────────────────────────────────────────────────
 
-        chunk.generateMesh();
-    },
+let worldState   = null;
+let workerPool   = null;
+let chunkManager = null;
 
-    updateLoadedChunks(playerX, playerY, playerZ) {
+// ── Shared materials (reused across all chunk meshes) ─────────────────────────
 
-        const centerChunkX = Math.floor(playerX / CHUNK_SIZE);
-        const centerChunkY = Math.floor(playerY / CHUNK_SIZE);
-        const centerChunkZ = Math.floor(playerZ / CHUNK_SIZE);
+let opaqueMaterial      = null;
+let transparentMaterial = null;
 
-        // Generate nearby chunks
-        for (let x = centerChunkX - RENDER_DISTANCE; x <= centerChunkX + RENDER_DISTANCE; x++) {
-            for (let z = centerChunkZ - RENDER_DISTANCE; z <= centerChunkZ + RENDER_DISTANCE; z++) {
+// ── Active mesh map  key → { opaque: Mesh|null, transparent: Mesh|null } ──────
 
-                // Flat world for now
-                const y = 0;
+const chunkMeshes = new Map();
 
-                const key = `${x},${y},${z}`;
+// ── Player / camera state ─────────────────────────────────────────────────────
 
-                if (!this.chunks.has(key)) {
-                    this.generateChunk(x, y, z);
-                }
-            }
-        }
+const playerVelocity = { x: 0, y: 0, z: 0 };
+const PLAYER_SPEED   = 12;          // blocks/second (run: ×3)
+const GRAVITY        = 0;           // 0 = creative / fly mode for now
+const CAMERA_HEIGHT  = 1.6;        // eye offset above player.position.y
 
-        // Unload distant chunks
-        for (const [key, chunk] of this.chunks.entries()) {
+let   yaw   = 0;    // horizontal camera angle  (radians)
+let   pitch = 0;    // vertical camera angle    (radians)
+const PITCH_LIMIT = Math.PI / 2 - 0.01;
 
-            const dx = chunk.position.x - centerChunkX;
-            const dz = chunk.position.z - centerChunkZ;
+// ── Input state ───────────────────────────────────────────────────────────────
 
-            if (
-                Math.abs(dx) > RENDER_DISTANCE + 1 ||
-                Math.abs(dz) > RENDER_DISTANCE + 1
-            ) {
-                chunk.unload();
-                this.chunks.delete(key);
-            }
-        }
-    }
+const KEYS = {};
 
+// ── Initialisation ─────────────────────────────────────────────────────────────
 
-}
+document.addEventListener('DOMContentLoaded', () => {
+    const canvas = document.getElementById('gameCanvas');
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-const worldTick = () => {
-
-    if (!me || me.health <= 0)
-        return;
-
-    const chunkX = Math.floor(me.position.x / CHUNK_SIZE);
-    const chunkY = Math.floor(me.position.y / CHUNK_SIZE);
-    const chunkZ = Math.floor(me.position.z / CHUNK_SIZE);
-
-    if (
-        chunkX !== lastPlayerChunk.x ||
-        chunkY !== lastPlayerChunk.y ||
-        chunkZ !== lastPlayerChunk.z
-    ) {
-
-        lastPlayerChunk.x = chunkX;
-        lastPlayerChunk.y = chunkY;
-        lastPlayerChunk.z = chunkZ;
-
-        World.updateLoadedChunks(
-            me.position.x,
-            me.position.y,
-            me.position.z
-        );
-    }
-
-    camera.position.x = me.position.x;
-    camera.position.y = me.position.y + 1.5;
-    camera.position.z = me.position.z;
-};
-
-document.addEventListener("DOMContentLoaded", () => {
-    let canvas = document.getElementById("gameCanvas");
-
-    // Prepare Three.js scene, camera, and renderer
-    scene = new THREE.Scene();
+    // Scene
+    scene            = new THREE.Scene();
     scene.background = new THREE.Color(0x87CEEB);
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+    scene.fog        = new THREE.Fog(0x87CEEB, 160, 280);
 
+    // Camera
+    camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        512,    // far plane — covers 16 chunks of content
+    );
+
+    // Renderer
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-    let light = new THREE.DirectionalLight(0xffffff, 1, 0);
+    // Lighting
+    ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
+    scene.add(ambientLight);
 
-    camera.position.z = 5;
-    scene.add(light);
+    sunLight = new THREE.DirectionalLight(0xfffaed, 0.90);
+    sunLight.position.set(0.6, 1.0, 0.4).normalize();
+    scene.add(sunLight);
+
+    // Shared materials
+    opaqueMaterial = new THREE.MeshLambertMaterial({
+        vertexColors: true,
+    });
+
+    transparentMaterial = new THREE.MeshLambertMaterial({
+        vertexColors:  true,
+        transparent:   true,
+        opacity:       0.72,
+        side:          THREE.DoubleSide,
+        depthWrite:    false,
+    });
 });
 
-// Begin world gen and loading when the "WorldJS_startWorldLoad" event is fired
-document.addEventListener("WorldJS_startWorldLoad", () => {
+// ── World load event (fired by main.js → startGame) ───────────────────────────
 
-    me.position = {
-        x: 0,
-        y: 1.01,
-        z: 0
-    };
+document.addEventListener('WorldJS_startWorldLoad', async (e) => {
+    const gamepackData = e.data?.gamepackData ?? {};
 
-    World.updateLoadedChunks(
-        me.position.x,
-        me.position.y,
-        me.position.z
-    );
+    // Build block registry from GamePack
+    const registry = buildRegistryFromGamePack(gamepackData);
 
-    camera.position.x = me.position.x;
-    camera.position.y = me.position.y + 1.5;
-    camera.position.z = me.position.z;
+    // WorldState
+    worldState = new WorldState();
+
+    // Worker URL relative to world.js (works with module workers)
+    const workerUrl = new URL('./workers/worldWorker.js', import.meta.url);
+
+    // Worker pool (auto-sizes to hardware)
+    workerPool = new WorkerPool(workerUrl);
+
+    // Initialise all workers — send seed, block registry, biome data
+    await workerPool.init({
+        seed:          worldState.seed,
+        blockRegistry: registry.serialize(),
+        biomes:        gamepackData.biomes ?? [],
+    });
+
+    // Chunk manager
+    chunkManager = new ChunkManager(worldState, workerPool, 4);
+
+    // Wire render callbacks
+    chunkManager.onMeshReady   = _onMeshReady;
+    chunkManager.onChunkUnload = _onChunkUnload;
+
+    // Spawn the player above sea level
+    me.position = { x: 0, y: 80, z: 0 };
+    camera.position.set(0, 80 + CAMERA_HEIGHT, 0);
+
+    console.log('[world] World load complete — seed:', worldState.seed,
+        '— workers:', workerPool.workerCount);
 });
 
-// Listen for the "WorldJS_quitWorld" event to clean up Three.js resources
-document.addEventListener("WorldJS_quitWorld", () => {
-    // Clean up Three.js resources
-    if (renderer) {
-        renderer.dispose();
-    }
+// ── Quit event ─────────────────────────────────────────────────────────────────
+
+document.addEventListener('WorldJS_quitWorld', () => {
+    _disposeAll();
+    chunkManager = null;
+    workerPool?.clearQueue();
+    renderer?.dispose();
 });
 
-// Listen for the "WorldJS_tick" event to update the world and render the scene
-document.addEventListener("WorldJS_tick", () => {
+// ── Tick event (called every animation frame from main.js) ─────────────────────
 
-    worldTick();
+document.addEventListener('WorldJS_tick', (e) => {
+    if (!chunkManager) return;
 
-    renderer.render(
-        scene,
-        camera
-    );
+    const dt = Math.min(e.data?.dt ?? 0.016, 0.1);   // seconds, clamped
+
+    _updatePlayer(dt);
+    _updateCamera();
+
+    // Derive view direction and movement direction from current camera state
+    const viewDir = _horizontalForward();
+    const moveDir = _movementDir();
+
+    chunkManager.update(me.position, viewDir, moveDir);
+
+    renderer.render(scene, camera);
 });
 
-// Prevent the context menu from appearing on right-click
-window.addEventListener("contextmenu", (e) => e.preventDefault());
+// ── Resize ─────────────────────────────────────────────────────────────────────
 
-// Detect when the window is resized and adjust the camera and renderer accordingly
-window.addEventListener("resize", () => {
+window.addEventListener('resize', () => {
+    if (!camera || !renderer) return;
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
 });
+
+window.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ── Pointer lock (mouse look) ──────────────────────────────────────────────────
+
+document.addEventListener('pointerlockchange', () => {
+    // Nothing extra needed — main.js manages pointer lock state.
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement !== document.getElementById('GameScreen')) return;
+
+    const sensitivity = 0.0018;
+    yaw   -= e.movementX * sensitivity;
+    pitch -= e.movementY * sensitivity;
+    pitch  = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
+});
+
+// ── Keyboard ───────────────────────────────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => { KEYS[e.code] = true;  });
+document.addEventListener('keyup',   (e) => { KEYS[e.code] = false; });
+
+// ── Mesh callbacks ─────────────────────────────────────────────────────────────
+
+function _onMeshReady(cx, cy, cz, geometry) {
+    const key = WorldState.key(cx, cy, cz);
+
+    // Remove existing meshes for this chunk first
+    _removeMeshes(key);
+
+    const worldX = cx * CHUNK_SIZE;
+    const worldY = cy * CHUNK_SIZE;
+    const worldZ = cz * CHUNK_SIZE;
+
+    const entry = { opaque: null, transparent: null };
+
+    // Opaque mesh
+    if (geometry.positions.length > 0) {
+        const geo = _buildGeometry(geometry, false);
+        const mesh = new THREE.Mesh(geo, opaqueMaterial);
+        mesh.position.set(worldX, worldY, worldZ);
+        scene.add(mesh);
+        entry.opaque = mesh;
+    }
+
+    // Transparent mesh
+    if (geometry.transparentPositions.length > 0) {
+        const geo = _buildGeometry(geometry, true);
+        const mesh = new THREE.Mesh(geo, transparentMaterial);
+        mesh.position.set(worldX, worldY, worldZ);
+        scene.add(mesh);
+        entry.transparent = mesh;
+    }
+
+    chunkMeshes.set(key, entry);
+}
+
+function _onChunkUnload(key) {
+    _removeMeshes(key);
+}
+
+// ── Three.js geometry construction ────────────────────────────────────────────
+
+function _buildGeometry(geo, transparent) {
+    const buf = new THREE.BufferGeometry();
+
+    const pos  = transparent ? geo.transparentPositions : geo.positions;
+    const norm = transparent ? geo.transparentNormals   : geo.normals;
+    const col  = transparent ? geo.transparentColors    : geo.colors;
+    const idx  = transparent ? geo.transparentIndices   : geo.indices;
+
+    buf.setAttribute('position', new THREE.BufferAttribute(pos,  3));
+    buf.setAttribute('normal',   new THREE.BufferAttribute(norm, 3));
+    buf.setAttribute('color',    new THREE.BufferAttribute(col,  3));
+    buf.setIndex(new THREE.BufferAttribute(idx, 1));
+
+    return buf;
+}
+
+function _removeMeshes(key) {
+    const entry = chunkMeshes.get(key);
+    if (!entry) return;
+    for (const mesh of [entry.opaque, entry.transparent]) {
+        if (!mesh) continue;
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+    }
+    chunkMeshes.delete(key);
+}
+
+function _disposeAll() {
+    for (const key of [...chunkMeshes.keys()]) _removeMeshes(key);
+}
+
+// ── Player movement ────────────────────────────────────────────────────────────
+
+function _updatePlayer(dt) {
+    const fwd  = _horizontalForward();
+    const right = { x: fwd.z, z: -fwd.x };    // 90° clockwise
+    const speed = (KEYS['ShiftLeft'] || KEYS['ShiftRight']) ? PLAYER_SPEED * 3 : PLAYER_SPEED;
+
+    let dx = 0, dz = 0, dy = 0;
+
+    if (KEYS['KeyW'])     { dx += fwd.x;   dz += fwd.z;   }
+    if (KEYS['KeyS'])     { dx -= fwd.x;   dz -= fwd.z;   }
+    if (KEYS['KeyA'])     { dx -= right.x; dz -= right.z; }
+    if (KEYS['KeyD'])     { dx += right.x; dz += right.z; }
+    if (KEYS['Space'])    dy += 1;
+    if (KEYS['ControlLeft'] || KEYS['KeyQ']) dy -= 1;
+
+    const len = Math.sqrt(dx*dx + dz*dz);
+    if (len > 0) { dx /= len; dz /= len; }
+
+    me.position.x += dx * speed * dt;
+    me.position.y += dy * speed * dt;
+    me.position.z += dz * speed * dt;
+}
+
+function _updateCamera() {
+    camera.position.set(
+        me.position.x,
+        me.position.y + CAMERA_HEIGHT,
+        me.position.z,
+    );
+
+    // Build a quaternion from yaw + pitch
+    const q = new THREE.Quaternion();
+    q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0), yaw));
+    q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1,0,0), pitch));
+    camera.quaternion.copy(q);
+}
+
+// ── Direction helpers ──────────────────────────────────────────────────────────
+
+function _horizontalForward() {
+    return {
+        x: -Math.sin(yaw),
+        z: -Math.cos(yaw),
+    };
+}
+
+function _movementDir() {
+    let dx = 0, dz = 0;
+    const fwd   = _horizontalForward();
+    const right = { x: fwd.z, z: -fwd.x };
+    if (KEYS['KeyW']) { dx += fwd.x;   dz += fwd.z;   }
+    if (KEYS['KeyS']) { dx -= fwd.x;   dz -= fwd.z;   }
+    if (KEYS['KeyA']) { dx -= right.x; dz -= right.z; }
+    if (KEYS['KeyD']) { dx += right.x; dz += right.z; }
+    const len = Math.sqrt(dx*dx + dz*dz);
+    return len > 0 ? { x: dx/len, z: dz/len } : { x: 0, z: 0 };
+}

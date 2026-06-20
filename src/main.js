@@ -12,9 +12,20 @@ const textures = {};
 const loadingTexts = [];
 const KEYS = {};
 
+// Block IDs must match the "id" fields in data/gamepack.json
+const BLOCK_TYPES = {
+    AIR: 0, GRASS: 1, DIRT: 2, STONE: 3, SAND: 4, WATER: 5,
+    WOOD: 6, LEAVES: 7, GRAVEL: 8, COAL_ORE: 9, IRON_ORE: 10,
+    GOLD_ORE: 11, SNOW: 12, ICE: 13, SANDSTONE: 14, CLAY: 15,
+    SNOW_DIRT: 16, GRANITE: 17, DIORITE: 18, BEDROCK: 19,
+};
+
 let titleBG = null;
 let packsLoaded = 0;
-let safeToClose = true  ;
+let safeToClose = true;
+
+// Merged data from all loaded game packs — passed to world.js on game start
+const mergedGamePackData = { blocks: [], biomes: [] };
 
 let paused = false;
 let gameStarted = false;
@@ -158,8 +169,8 @@ function startGame() {
 
     DOM.loadingContainer.classList.remove("hidden");
 
-    // Initiate a custom event that signals to the World.js script that it can begin world generation and asset loading
-    callWorldJS("startWorldLoad");
+    // Signal world.js to begin generation, passing all loaded game pack data
+    callWorldJS("startWorldLoad", { gamepackData: mergedGamePackData });
 
     startLoadingTextRotation();
 
@@ -300,6 +311,7 @@ async function loadGamePack(packName) {
         loadTextures(packName, gamepackData);
         loadLoadingTexts(packName, gamepackData);
         loadTitleBackground(gamepackData);
+        mergeGamePackWorldData(gamepackData);
 
         packsLoaded++;
 
@@ -367,6 +379,23 @@ function loadLoadingTexts(packName, data) {
     }
 }
 
+function mergeGamePackWorldData(data) {
+    if (Array.isArray(data.blocks)) {
+        for (const block of data.blocks) {
+            if (!mergedGamePackData.blocks.find(b => b.id === block.id)) {
+                mergedGamePackData.blocks.push(block);
+            }
+        }
+    }
+    if (Array.isArray(data.biomes)) {
+        for (const biome of data.biomes) {
+            if (!mergedGamePackData.biomes.find(b => b.name === biome.name)) {
+                mergedGamePackData.biomes.push(biome);
+            }
+        }
+    }
+}
+
 function loadTitleBackground(data) {
     if (
         titleBG !== null ||
@@ -426,10 +455,15 @@ function leaveWorld() {
    MAIN LOOP
 ========================================================= */
 
-function gameLoop() {
+let _lastFrameTime = 0;
+
+function gameLoop(timestamp) {
     if (!gameStarted) {
         return;
     }
+
+    const dt = _lastFrameTime ? Math.min((timestamp - _lastFrameTime) / 1000, 0.1) : 0.016;
+    _lastFrameTime = timestamp;
 
     if (!paused) {
         handleHotbarKeys();
@@ -452,7 +486,7 @@ function gameLoop() {
 
     updateUIVisibility();
 
-    worldTick();
+    worldTick(dt);
 
     requestAnimationFrame(gameLoop);
 }
@@ -508,9 +542,8 @@ function closeGame() {
     );
 }
 
-function worldTick() {
-    // Call World.js via a custom event system to keep the main loop decoupled from world logic
-    callWorldJS("tick");
+function worldTick(dt) {
+    callWorldJS("tick", { dt });
 }
 
 function callWorldJS(eventName, data = {}) {
