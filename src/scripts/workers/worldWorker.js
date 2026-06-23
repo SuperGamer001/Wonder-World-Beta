@@ -7,19 +7,21 @@
  *     → Initialises the TerrainGenerator, StructurePlacer, and GreedyMesher.
  *     → Responds with { type: 'ready' }.
  *
- *   generateChunk { taskId, cx, cy, cz }
- *     → Generates terrain, places structures, returns voxel data.
- *     → Responds with { type: 'chunkGenerated', taskId, cx, cy, cz, voxels }
+ *   generateChunk { taskId, cx, cz }
+ *     → Generates terrain for a full 16×640×16 column, places structures,
+ *       returns voxel data.
+ *     → Responds with { type: 'chunkGenerated', taskId, cx, cz, voxels }
  *        (voxels.buffer is transferred, not copied).
  *
- *   meshChunk { taskId, cx, cy, cz, voxels, neighbors }
+ *   meshChunk { taskId, cx, cz, voxels, neighbors, partial }
  *     → Runs greedy meshing on the supplied voxel data.
- *     → neighbors: plain object { "dx,dy,dz": Uint16Array }
- *     → Responds with { type: 'chunkMeshed', taskId, cx, cy, cz, geometry }
- *        (all geometry typed-array buffers are transferred).
- *
- * Note: voxels received for meshChunk are NOT transferred back — the main
- * thread keeps its copy in WorldState.
+ *     → neighbors: plain object { "dx,dz": Uint16Array } — four horizontal keys only
+ *     → partial=false (full split): runs ±Y and ±XZ faces separately.
+ *        Responds with { type: 'chunkMeshed', taskId, cx, cz, yGeo, xzGeo }
+ *     → partial=true (XZ-only): runs only ±X and ±Z faces — used when a horizontal
+ *        neighbour loads and only border faces need updating.
+ *        Responds with { type: 'chunkMeshed', taskId, cx, cz, xzGeo }
+ *        (all geometry typed-array buffers are transferred in both cases).
  */
 
 import { setSeed }           from './noise.js';
@@ -29,21 +31,19 @@ import { StructurePlacer }   from './StructurePlacer.js';
 import { GreedyMesher }      from './GreedyMesher.js';
 import { CHUNK_SIZE }        from '../engine/ChunkData.js';
 
-const N = CHUNK_SIZE;
-
 let generator = null;
 let placer    = null;
 let mesher    = null;
 
-// ── Message handler ──────────────────────────────────────────────────────────
+// ── Message handler ──────────────────────────────────────────────────────────────
 
 self.onmessage = function (e) {
     const { type, ...data } = e.data;
 
     switch (type) {
-        case 'init':       handleInit(data);        break;
+        case 'init':          handleInit(data);     break;
         case 'generateChunk': handleGenerate(data); break;
-        case 'meshChunk':  handleMesh(data);        break;
+        case 'meshChunk':     handleMesh(data);     break;
         default:
             console.warn('[worldWorker] unknown message type:', type);
     }
@@ -55,42 +55,52 @@ function handleInit({ seed, blockRegistry: serialisedReg, biomes }) {
     setSeed(seed);
 
     generator = new TerrainGenerator(seed, reg, biomes);
-    placer    = new StructurePlacer(seed, reg, generator.biomes);
+    placer    = new StructurePlacer(seed, reg, generator.biomes, generator);
     mesher    = new GreedyMesher(reg);
 
     self.postMessage({ type: 'ready' });
 }
 
-function handleGenerate({ taskId, cx, cy, cz }) {
+function handleGenerate({ taskId, cx, cz }) {
     if (!generator) {
         console.error('[worldWorker] generateChunk called before init');
         return;
     }
 
     // ── 1. Terrain + ores ────────────────────────────────────────────────────
-    const voxels = generator.generateChunk(cx, cy, cz);
+    const voxels = generator.generateChunk(cx, cz);
 
     // ── 2. Structures ────────────────────────────────────────────────────────
-    // Re-derive the column-level heights and blends that TerrainGenerator used.
-    // StructurePlacer needs them to find surface level.
-    const { heights, blends } = _buildColumnData(cx, cy, cz);
-    placer.apply(voxels, cx, cy, cz, heights, blends);
+    const { heights, blends } = generator.buildColumnData(cx, cz);
+    placer.apply(voxels, cx, cz, heights, blends);
 
-    // Transfer the buffer so the main thread takes ownership without a copy.
     self.postMessage(
-        { type: 'chunkGenerated', taskId, cx, cy, cz, voxels },
+        { type: 'chunkGenerated', taskId, cx, cz, voxels },
         [voxels.buffer],
     );
 }
 
-function handleMesh({ taskId, cx, cy, cz, voxels, neighbors }) {
+// Face index groups:
+//   Y_FACES  = [2,3]       — ±Y (top/bottom): permanent, never affected by neighbour loads
+//   XZ_FACES = [0,1,4,5]   — ±X and ±Z (sides): rebuilt when a horizontal neighbour changes
+const Y_FACES  = [2, 3];
+const XZ_FACES = [0, 1, 4, 5];
+
+function _geoTransferList(geo) {
+    const list = [geo.positions.buffer, geo.normals.buffer, geo.colors.buffer, geo.indices.buffer];
+    if (geo.transparentPositions.length > 0) {
+        list.push(geo.transparentPositions.buffer, geo.transparentNormals.buffer,
+                  geo.transparentColors.buffer, geo.transparentIndices.buffer);
+    }
+    return list;
+}
+
+function handleMesh({ taskId, cx, cz, voxels, neighbors, partial }) {
     if (!mesher) {
         console.error('[worldWorker] meshChunk called before init');
         return;
     }
 
-    // Reconstruct Uint16Array views over the incoming buffers.
-    // The main thread sends copies (not transfers) so they retain their data.
     const voxelView = new Uint16Array(voxels);
     const neighbourViews = {};
     if (neighbors) {
@@ -99,37 +109,22 @@ function handleMesh({ taskId, cx, cy, cz, voxels, neighbors }) {
         }
     }
 
-    const geo = mesher.mesh(voxelView, neighbourViews);
-
-    // Collect all geometry buffers to transfer
-    const transferList = [
-        geo.positions.buffer,
-        geo.normals.buffer,
-        geo.colors.buffer,
-        geo.indices.buffer,
-    ];
-    if (geo.transparentPositions.length > 0) {
-        transferList.push(
-            geo.transparentPositions.buffer,
-            geo.transparentNormals.buffer,
-            geo.transparentColors.buffer,
-            geo.transparentIndices.buffer,
+    if (partial) {
+        // High-priority dirty re-mesh: only rebuild side faces that border neighbours.
+        // ±Y faces are unchanged by neighbour loads — skip them entirely.
+        const xzGeo = mesher.meshGroup(voxelView, neighbourViews, XZ_FACES);
+        self.postMessage(
+            { type: 'chunkMeshed', taskId, cx, cz, xzGeo },
+            _geoTransferList(xzGeo),
+        );
+    } else {
+        // Full split mesh: produce ±Y (permanent) and ±XZ (updatable) separately so
+        // the render layer can replace just the XZ group on subsequent neighbour loads.
+        const yGeo  = mesher.meshGroup(voxelView, neighbourViews, Y_FACES);
+        const xzGeo = mesher.meshGroup(voxelView, neighbourViews, XZ_FACES);
+        self.postMessage(
+            { type: 'chunkMeshed', taskId, cx, cz, yGeo, xzGeo },
+            [..._geoTransferList(yGeo), ..._geoTransferList(xzGeo)],
         );
     }
-
-    self.postMessage(
-        { type: 'chunkMeshed', taskId, cx, cy, cz, geometry: geo },
-        transferList,
-    );
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Reconstruct per-column height and biome-blend arrays for a chunk.
- * Must mirror the TerrainGenerator logic exactly so structures land on terrain.
- */
-function _buildColumnData(cx, cy, cz) {
-    // Forward to the generator which already has all the noise functions
-    return generator.buildColumnData(cx, cy, cz);
 }

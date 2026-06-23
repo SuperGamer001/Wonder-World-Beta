@@ -8,41 +8,41 @@
  * The world is divided into non-overlapping "structure cells" of CELL_SIZE×CELL_SIZE
  * blocks (X/Z only; Y is determined by terrain height at placement time).
  *
- * When generating chunk (cx, cy, cz):
+ * When generating chunk column (cx, cz):
  *   • Compute which cells overlap the chunk footprint expanded by MAX_STRUCTURE_RADIUS.
  *   • For each overlapping cell, derive a deterministic placement decision from
  *     (worldSeed, cellX, cellZ, structureType).
  *   • If a structure is placed in that cell, apply every block of the structure
- *     that falls within the current chunk's [wx..wx+31, wy..wy+31, wz..wz+31] range.
+ *     that falls within the current chunk column's bounds.
  *
  * This guarantees:
  *   • Every chunk sees the same structure decisions (deterministic).
  *   • Structures that straddle chunk boundaries appear correctly in all chunks.
  *   • No inter-chunk communication is required during generation.
  *
- * Adding new structure types
- * ─────────────────────────
- * Implement a builder function returning an array of {dx, dy, dz, blockId} offsets
- * relative to the structure origin, register it in STRUCTURE_BUILDERS, and add it
- * to the biome's structures config.  The rest is automatic.
+ * Height accuracy
+ * ───────────────
+ * When a structure origin falls outside the current chunk, surface Y is computed
+ * via terrainGen._blendedHeight so structure bases line up perfectly across
+ * chunk boundaries.
  */
 
-import { CHUNK_SIZE, voxelIndex } from '../engine/ChunkData.js';
-import { hashSeed, randFloat, noise2D } from './noise.js';
+import { CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, voxelIndex } from '../engine/ChunkData.js';
+import { hashSeed, noise2D, fbm2D } from './noise.js';
 
-const N                   = CHUNK_SIZE;
-const CELL_SIZE           = 24;    // structure-grid cell size (blocks)
-const MAX_STRUCTURE_RADIUS = 12;   // furthest a structure block can be from its origin
+const N                    = CHUNK_SIZE;         // 16 — XZ size
+const N_Y                  = CHUNK_SIZE_Y;       // 640 — full column height
+const CELL_SIZE            = 24;
+const MAX_STRUCTURE_RADIUS = 12;
+const SEA_LEVEL            = 64;
 
-// How many cells to scan beyond the chunk footprint in each direction
-const CELL_SCAN_PAD = Math.ceil(MAX_STRUCTURE_RADIUS / CELL_SIZE) + 1;
+// Continent / biome noise constants — must match TerrainGenerator exactly.
+const CONTINENT_FREQ   = 0.00008;
+const CONTINENT_OCTAVE = 5;
+const TEMP_FREQ        = 0.00035;
+const HUMI_FREQ        = 0.00030;
 
 // ── Structure definitions ─────────────────────────────────────────────────────
-
-/**
- * Returns an array of voxel offsets { dx, dy, dz, blockId } relative to the
- * structure origin point (ground level at x=0, y=0, z=0 = base of trunk).
- */
 
 function buildOakTree(reg) {
     const WOOD   = reg.getByName('WOOD')?.id   ?? 6;
@@ -50,65 +50,49 @@ function buildOakTree(reg) {
 
     const blocks = [];
 
-    // Trunk: 4-6 blocks tall
     const trunkH = 4;
     for (let dy = 0; dy < trunkH; dy++) {
         blocks.push({ dx: 0, dy, dz: 0, blockId: WOOD });
     }
 
-    // Leaf crown: 3 layers
     const crownY = trunkH - 1;
 
-    // Bottom layer (widest, radius 2)
-    for (let dx = -2; dx <= 2; dx++) {
-        for (let dz = -2; dz <= 2; dz++) {
-            if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue; // clip corners
-            blocks.push({ dx, dy: crownY, dz, blockId: LEAVES });
-        }
-    }
-
-    // Middle layer (radius 2)
     for (let dx = -2; dx <= 2; dx++) {
         for (let dz = -2; dz <= 2; dz++) {
             if (Math.abs(dx) === 2 && Math.abs(dz) === 2) continue;
+            blocks.push({ dx, dy: crownY,     dz, blockId: LEAVES });
             blocks.push({ dx, dy: crownY + 1, dz, blockId: LEAVES });
         }
     }
 
-    // Top layer (radius 1)
     for (let dx = -1; dx <= 1; dx++) {
         for (let dz = -1; dz <= 1; dz++) {
             blocks.push({ dx, dy: crownY + 2, dz, blockId: LEAVES });
         }
     }
 
-    // Apex
     blocks.push({ dx: 0, dy: crownY + 3, dz: 0, blockId: LEAVES });
 
     return blocks;
 }
 
 function buildSmallHouse(reg) {
-    const STONE  = reg.getByName('STONE')?.id  ?? 3;
-    const WOOD   = reg.getByName('WOOD')?.id   ?? 6;
-    const LEAVES = reg.getByName('LEAVES')?.id ?? 7;
-    const DIRT   = reg.getByName('DIRT')?.id   ?? 2;
+    const STONE = reg.getByName('STONE')?.id ?? 3;
+    const WOOD  = reg.getByName('WOOD')?.id  ?? 6;
 
     const blocks = [];
-    const W = 7, H = 5, D = 9; // width, height, depth
+    const W = 7, H = 5, D = 9;
 
-    // Foundation — one layer of stone
     for (let dx = 0; dx < W; dx++)
         for (let dz = 0; dz < D; dz++)
             blocks.push({ dx, dy: -1, dz, blockId: STONE });
 
-    // Walls — stone frame with wood fill
     for (let dy = 0; dy < H - 1; dy++) {
         for (let dx = 0; dx < W; dx++) {
             for (let dz = 0; dz < D; dz++) {
                 const isEdgeX = dx === 0 || dx === W - 1;
                 const isEdgeZ = dz === 0 || dz === D - 1;
-                if (!isEdgeX && !isEdgeZ) continue;  // interior is open
+                if (!isEdgeX && !isEdgeZ) continue;
                 blocks.push({ dx, dy, dz, blockId: isEdgeX || isEdgeZ ? (
                     (dx % (W-1) === 0) || (dz % (D-1) === 0) ? STONE : WOOD
                 ) : WOOD });
@@ -116,7 +100,6 @@ function buildSmallHouse(reg) {
         }
     }
 
-    // Gabled roof — wood planks
     const midX = Math.floor(W / 2);
     for (let dz = 0; dz < D; dz++) {
         for (let layer = 0; layer <= midX; layer++) {
@@ -129,7 +112,6 @@ function buildSmallHouse(reg) {
     return blocks;
 }
 
-// Map of structure type name → builder function(reg) → block array
 const STRUCTURE_BUILDERS = {
     tree:  buildOakTree,
     house: buildSmallHouse,
@@ -139,16 +121,17 @@ const STRUCTURE_BUILDERS = {
 
 export class StructurePlacer {
     /**
-     * @param {number}        seed
-     * @param {BlockRegistry} blockRegistry
-     * @param {object[]}      biomes       — normalised biome defs (with _surfaceId etc.)
+     * @param {number}           seed
+     * @param {BlockRegistry}    blockRegistry
+     * @param {object[]}         biomes         — normalised biome defs
+     * @param {TerrainGenerator} terrainGen     — used for accurate height estimation
      */
-    constructor(seed, blockRegistry, biomes) {
-        this.seed   = seed;
-        this.reg    = blockRegistry;
-        this.biomes = biomes;
+    constructor(seed, blockRegistry, biomes, terrainGen) {
+        this.seed       = seed;
+        this.reg        = blockRegistry;
+        this.biomes     = biomes;
+        this.terrainGen = terrainGen ?? null;
 
-        // Pre-build block arrays for each structure type (avoid rebuilding per chunk)
         this._builtStructures = {};
         for (const [type, builder] of Object.entries(STRUCTURE_BUILDERS)) {
             this._builtStructures[type] = builder(blockRegistry);
@@ -156,20 +139,20 @@ export class StructurePlacer {
     }
 
     /**
-     * Apply all structures whose blocks overlap this chunk.
-     * Modifies `voxels` in-place.
+     * Apply all structures whose blocks overlap this chunk column.
      *
-     * @param {Uint16Array}  voxels
-     * @param {number}       cx, cy, cz   — chunk coordinates
-     * @param {Int16Array}   heights      — terrain height per column [lx*N+lz]
-     * @param {object[]}     blends       — biome blend per column
+     * @param {Uint16Array} voxels   — chunk voxel data (163,840 elements)
+     * @param {number}      cx       — chunk X coordinate
+     * @param {number}      cz       — chunk Z coordinate
+     * @param {Int16Array}  heights  — per-column terrain heights (N×N)
+     * @param {Array}       blends   — per-column biome blends (N×N)
      */
-    apply(voxels, cx, cy, cz, heights, blends) {
+    apply(voxels, cx, cz, heights, blends) {
         const ox = cx * N;
-        const oy = cy * N;
         const oz = cz * N;
+        // The chunk column always starts at WORLD_MIN_Y
+        const oy = WORLD_MIN_Y;
 
-        // Determine cell range that can reach this chunk
         const cellMinX = Math.floor((ox - MAX_STRUCTURE_RADIUS) / CELL_SIZE) - 1;
         const cellMaxX = Math.floor((ox + N + MAX_STRUCTURE_RADIUS) / CELL_SIZE) + 1;
         const cellMinZ = Math.floor((oz - MAX_STRUCTURE_RADIUS) / CELL_SIZE) - 1;
@@ -177,24 +160,20 @@ export class StructurePlacer {
 
         for (let cx2 = cellMinX; cx2 <= cellMaxX; cx2++) {
             for (let cz2 = cellMinZ; cz2 <= cellMaxZ; cz2++) {
-                this._processCell(voxels, cx, cy, cz, cx2, cz2, ox, oy, oz, heights, blends);
+                this._processCell(voxels, cx2, cz2, ox, oy, oz, heights, blends);
             }
         }
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
 
-    _processCell(voxels, cx, cy, cz, cellX, cellZ, ox, oy, oz, heights, blends) {
-        // For each structure type registered in STRUCTURE_BUILDERS
+    _processCell(voxels, cellX, cellZ, ox, oy, oz, heights, blends) {
         for (const type of Object.keys(STRUCTURE_BUILDERS)) {
-            // Unique hash for this cell × type combination
             const cellHash = hashSeed(this.seed, cellX * 73856093, cellZ * 19349663, type.length);
 
-            // Determine structure origin in world space (within the cell)
-            const originX = cellX * CELL_SIZE + (cellHash         % CELL_SIZE);
-            const originZ = cellZ * CELL_SIZE + ((cellHash >> 8)  % CELL_SIZE);
+            const originX = cellX * CELL_SIZE + (cellHash        % CELL_SIZE);
+            const originZ = cellZ * CELL_SIZE + ((cellHash >> 8) % CELL_SIZE);
 
-            // Get terrain height at origin (may be outside this chunk — skip if so)
             const lxO = originX - ox;
             const lzO = originZ - oz;
             let surfaceY;
@@ -202,23 +181,21 @@ export class StructurePlacer {
             if (lxO >= 0 && lxO < N && lzO >= 0 && lzO < N) {
                 surfaceY = heights[lxO * N + lzO];
             } else {
-                // Origin column is in a different chunk — estimate height using noise
-                // (same formula as TerrainGenerator so it matches)
                 surfaceY = this._estimateHeight(originX, originZ);
             }
 
-            const originY = surfaceY; // structure base sits on the surface block
+            const originY = surfaceY;
 
-            // Check if the structure should spawn here using per-biome frequency
-            const blend = this._blendAt(lxO, lzO, blends);
-            const freq  = this._structureFrequency(blend, type);
+            const blend        = this._blendAt(lxO, lzO, blends);
+            const spawnInWater = this._structureFlag(blend, type, 'spawnInWater', true);
+            if (!spawnInWater && surfaceY < SEA_LEVEL) continue;
+
+            const freq = this._structureFrequency(blend, type);
             if (freq <= 0) continue;
 
-            // Probabilistic spawn using the hash as a random float in [0,1)
             const spawnRoll = (cellHash >>> 16) / 0x10000;
             if (spawnRoll > freq * CELL_SIZE * CELL_SIZE) continue;
 
-            // Apply structure blocks that fall within this chunk
             const blockList = this._builtStructures[type];
             if (!blockList) continue;
 
@@ -228,14 +205,15 @@ export class StructurePlacer {
                 const wz = originZ + dz;
 
                 const lx = wx - ox;
-                const ly = wy - oy;
+                const ly = wy - oy;   // oy = WORLD_MIN_Y
                 const lz = wz - oz;
 
-                if (lx < 0 || lx >= N || ly < 0 || ly >= N || lz < 0 || lz >= N) continue;
+                if (lx < 0 || lx >= N || ly < 0 || ly >= N_Y || lz < 0 || lz >= N) continue;
 
-                const idx = voxelIndex(lx, ly, lz);
-                // Overwrite air only (leaves can be overwritten by trunk etc.)
-                if (voxels[idx] === 0 || (blockId === this.reg.getByName('WOOD')?.id && voxels[idx] === this.reg.getByName('LEAVES')?.id)) {
+                const idx      = voxelIndex(lx, ly, lz);
+                const woodId   = this.reg.getByName('WOOD')?.id;
+                const leavesId = this.reg.getByName('LEAVES')?.id;
+                if (voxels[idx] === 0 || (blockId === woodId && voxels[idx] === leavesId)) {
                     voxels[idx] = blockId;
                 }
             }
@@ -260,11 +238,30 @@ export class StructurePlacer {
         return freq;
     }
 
+    _structureFlag(blend, type, flag, defaultVal) {
+        if (!blend) return defaultVal;
+        let bestW = -1, value = defaultVal;
+        for (let i = 0; i < this.biomes.length; i++) {
+            const w = blend.weights[i];
+            if (w > bestW) {
+                const cfg = this.biomes[i].structures?.[type];
+                if (cfg && flag in cfg) {
+                    value = cfg[flag];
+                    bestW = w;
+                }
+            }
+        }
+        return value;
+    }
+
     _estimateHeight(wx, wz) {
-        // Cheap approximation — must use the same noise formula as TerrainGenerator.
-        // This is called only for structure origins outside the current chunk.
-        // 64 is the nominal sea level / plains base height.
-        const h = noise2D(wx * 0.003, wz * 0.003) * 14 + 64;
-        return h | 0;
+        if (this.terrainGen) {
+            const continent = fbm2D(wx + 8000, wz + 8000, CONTINENT_OCTAVE, CONTINENT_FREQ, 0.5, 2.0);
+            const temp      = (noise2D(wx * TEMP_FREQ + 1000, wz * TEMP_FREQ + 1000) + 1) * 0.5;
+            const humi      = (noise2D(wx * HUMI_FREQ + 5000, wz * HUMI_FREQ + 5000) + 1) * 0.5;
+            const blend     = this.terrainGen._biomeBlend(temp, humi, continent);
+            return this.terrainGen._blendedHeight(wx, wz, blend) | 0;
+        }
+        return (noise2D(wx * 0.003, wz * 0.003) * 14 + 64) | 0;
     }
 }

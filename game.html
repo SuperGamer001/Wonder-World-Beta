@@ -20,6 +20,7 @@
 
     <img id="TitleLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 60%; height: auto; margin-top: 8vw;">
 
+    <!-- Shared confirm popup -->
     <div id="confirmPopup" class="popup hidden">
         <div id="confirmTitle" class="popupTitle">Confirm Action</div>
         <div id="confirmMessage" class="popupMessage">Are you sure?</div>
@@ -28,33 +29,82 @@
             <div class="menuButton" id="confirmNo" onclick="document.getElementById('confirmPopup').classList.add('hidden');">No</div>
         </div>
     </div>
-    
-    <div class="loadingContainer">
+
+    <!-- Loading bar (shared between initial load and world load) -->
+    <div class="loadingContainer hidden" id="loadingContainer">
 
         <div id="packName" class="packName hidden">Vanilla Gamepack</div>
 
-        <div class="loadingText">Welcome to Wonder World Beta!</div>
+        <div class="loadingText" id="loadingTextEl">Welcome to Wonder World Beta!</div>
 
         <div id="appLoadingBar" class="loadingBar">
             <div class="progressBar"></div>
         </div>
     </div>
-    
-    
-    <div class="hidden" id="TitleScreen">
-        <div class="menuButton" id="startButton">Start Game</div>
-        <div class="menuButton">Settings</div>
 
-        <!-- The "Leave Game" button only appears in electron apps. In the web version, it is hidden from the user -->
+    <!-- Initial app loading (shown before title) -->
+    <div class="loadingContainer" id="appLoadingContainer">
+        <div class="loadingText">Loading GamePacks...</div>
+        <div class="loadingBar">
+            <div class="progressBar" id="appProgressBar"></div>
+        </div>
+    </div>
+
+    <!-- ── Title Screen ─────────────────────────────────────────────────────── -->
+    <div class="hidden" id="TitleScreen">
+        <div class="menuButton" id="startButton">Play</div>
+        <div class="menuButton">Settings</div>
         <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
     </div>
 
+    <!-- ── World List Screen ────────────────────────────────────────────────── -->
+    <div class="hidden" id="WorldListScreen">
+        <div id="worldListHeader">
+            <div class="menuButton" id="createWorldBtn">+ Create World</div>
+        </div>
+        <div id="worldListContainer">
+            <!-- World cards injected here by JS -->
+        </div>
+        <div class="menuButton" id="worldListBackBtn" style="margin-top:2vw;">Back</div>
+    </div>
+
+    <!-- ── World Detail Modal ───────────────────────────────────────────────── -->
+    <div class="hidden" id="WorldDetailModal">
+        <div class="popup" style="min-width:30vw;">
+            <div class="popupTitle" id="worldDetailName">World Name</div>
+            <div class="popupMessage" id="worldDetailInfo">Seed: 0</div>
+            <div class="menuButton" id="worldPlayBtn">Play World</div>
+            <div class="menuButton" id="worldDuplicateBtn">Duplicate World</div>
+            <div class="menuButton" id="worldDeleteBtn" style="background:#6b1a1a;">Delete World</div>
+            <div class="menuButton" id="worldDetailCloseBtn" style="margin-top:1vw;">Cancel</div>
+        </div>
+    </div>
+
+    <!-- ── Create World Modal ───────────────────────────────────────────────── -->
+    <div class="hidden" id="CreateWorldModal">
+        <div class="popup" style="min-width:30vw; gap:1vw;">
+            <div class="popupTitle">Create New World</div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">World Name</label>
+                <input class="worldFormInput" id="newWorldName" type="text" placeholder="New World" maxlength="40">
+            </div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Seed</label>
+                <input class="worldFormInput" id="newWorldSeed" type="text" placeholder="(random)" maxlength="20">
+            </div>
+            <div class="menuButton" id="createWorldConfirmBtn">Create</div>
+            <div class="menuButton" id="createWorldCancelBtn">Cancel</div>
+        </div>
+    </div>
+
+    <!-- ── Settings Screen ─────────────────────────────────────────────────── -->
     <div class="hidden" id="SettingsScreen">
         <div class="menuButton">Back</div>
         <div class="menuButton">Audio</div>
         <div class="menuButton">Graphics</div>
     </div>
 
+    <!-- ── Game Screen ──────────────────────────────────────────────────────── -->
     <div class="hidden" id="GameScreen">
         <div id="gameUI">
             <div id="playerInfo">
@@ -91,11 +141,6 @@
 
         <canvas id="gameCanvas"></canvas>
     </div>
-
-
-
-
-
 
 </body>
 </html>

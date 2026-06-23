@@ -132,21 +132,22 @@
             "temperature": 0.60,
             "humidity": 0.50,
             "baseHeight": 64,
-            "heightVariation": 12,
-            "heightOctaves": 4,
-            "heightFrequency": 0.003,
+            "heightVariation": 22,
+            "heightOctaves": 5,
+            "heightFrequency": 0.0022,
             "mountainBlend": 0.05,
             "surfaceBlock": "GRASS",
             "subsurfaceBlock": "DIRT",
             "stoneBlock": "STONE",
             "deepBlock": "STONE",
             "structures": {
-                "tree": { "frequency": 0.0035, "minSpacing": 5 }
+                "tree": { "frequency": 0.0035, "minSpacing": 5, "spawnInWater": false },
+                "house": { "frequency": 0.00015, "minSpacing": 48, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -32, "maxY": 96,  "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
-                { "block": "IRON_ORE",  "minY": -96, "maxY": 56,  "frequency": 0.014, "minSize": 3,  "maxSize": 9  },
-                { "block": "GOLD_ORE",  "minY": -128, "maxY": 24, "frequency": 0.006, "minSize": 2,  "maxSize": 6  }
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 48,  "frequency": 0.010, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -96, "maxY": 32,  "frequency": 0.007, "minSize": 3,  "maxSize": 9  },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 8,  "frequency": 0.003, "minSize": 2,  "maxSize": 6  }
             ]
         },
         {
@@ -154,21 +155,22 @@
             "temperature": 0.58,
             "humidity": 0.72,
             "baseHeight": 66,
-            "heightVariation": 14,
-            "heightOctaves": 4,
-            "heightFrequency": 0.003,
+            "heightVariation": 24,
+            "heightOctaves": 5,
+            "heightFrequency": 0.0022,
             "mountainBlend": 0.08,
             "surfaceBlock": "GRASS",
             "subsurfaceBlock": "DIRT",
             "stoneBlock": "STONE",
             "deepBlock": "STONE",
             "structures": {
-                "tree": { "frequency": 0.028, "minSpacing": 3 }
+                "tree": { "frequency": 0.028, "minSpacing": 3, "spawnInWater": false },
+                "house": { "frequency": 0.00010, "minSpacing": 48, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -32, "maxY": 96,  "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
-                { "block": "IRON_ORE",  "minY": -96, "maxY": 56,  "frequency": 0.014, "minSize": 3,  "maxSize": 9  },
-                { "block": "GOLD_ORE",  "minY": -128, "maxY": 24, "frequency": 0.006, "minSize": 2,  "maxSize": 6  }
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 48,  "frequency": 0.010, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -96, "maxY": 32,  "frequency": 0.007, "minSize": 3,  "maxSize": 9  },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 8,  "frequency": 0.003, "minSize": 2,  "maxSize": 6  }
             ]
         },
         {
@@ -176,20 +178,20 @@
             "temperature": 0.90,
             "humidity": 0.10,
             "baseHeight": 62,
-            "heightVariation": 10,
-            "heightOctaves": 3,
-            "heightFrequency": 0.0025,
+            "heightVariation": 14,
+            "heightOctaves": 4,
+            "heightFrequency": 0.0020,
             "mountainBlend": 0.03,
             "surfaceBlock": "SAND",
             "subsurfaceBlock": "SAND",
             "stoneBlock": "SANDSTONE",
             "deepBlock": "STONE",
             "structures": {
-                "tree": { "frequency": 0.0002, "minSpacing": 20 }
+                "tree": { "frequency": 0.0002, "minSpacing": 20, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -32, "maxY": 80,  "frequency": 0.012, "minSize": 3,  "maxSize": 10 },
-                { "block": "GOLD_ORE",  "minY": -128, "maxY": 20, "frequency": 0.008, "minSize": 2,  "maxSize": 7  }
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 40,  "frequency": 0.006, "minSize": 3,  "maxSize": 10 },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 8,  "frequency": 0.004, "minSize": 2,  "maxSize": 7  }
             ]
         },
         {
@@ -206,12 +208,12 @@
             "stoneBlock": "STONE",
             "deepBlock": "GRANITE",
             "structures": {
-                "tree": { "frequency": 0.001, "minSpacing": 8 }
+                "tree": { "frequency": 0.001, "minSpacing": 8, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -32, "maxY": 128, "frequency": 0.022, "minSize": 4,  "maxSize": 14 },
-                { "block": "IRON_ORE",  "minY": -128, "maxY": 80, "frequency": 0.018, "minSize": 3,  "maxSize": 10 },
-                { "block": "GOLD_ORE",  "minY": -128, "maxY": 40, "frequency": 0.009, "minSize": 2,  "maxSize": 7  }
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 64,  "frequency": 0.011, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -128, "maxY": 48, "frequency": 0.009, "minSize": 3,  "maxSize": 10 },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 24, "frequency": 0.005, "minSize": 2,  "maxSize": 7  }
             ]
         },
         {
@@ -228,11 +230,11 @@
             "stoneBlock": "STONE",
             "deepBlock": "STONE",
             "structures": {
-                "tree": { "frequency": 0.000, "minSpacing": 99 }
+                "tree": { "frequency": 0.000, "minSpacing": 99, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -64, "maxY": 48,  "frequency": 0.012, "minSize": 3,  "maxSize": 10 },
-                { "block": "IRON_ORE",  "minY": -128, "maxY": 40, "frequency": 0.010, "minSize": 2,  "maxSize": 7  }
+                { "block": "COAL_ORE",  "minY": -64, "maxY": 24,  "frequency": 0.006, "minSize": 3,  "maxSize": 10 },
+                { "block": "IRON_ORE",  "minY": -128, "maxY": 16, "frequency": 0.005, "minSize": 2,  "maxSize": 7  }
             ]
         },
         {
@@ -240,20 +242,20 @@
             "temperature": 0.10,
             "humidity": 0.30,
             "baseHeight": 64,
-            "heightVariation": 10,
-            "heightOctaves": 4,
-            "heightFrequency": 0.003,
+            "heightVariation": 20,
+            "heightOctaves": 5,
+            "heightFrequency": 0.0022,
             "mountainBlend": 0.06,
             "surfaceBlock": "SNOW",
             "subsurfaceBlock": "SNOW_DIRT",
             "stoneBlock": "STONE",
             "deepBlock": "DIORITE",
             "structures": {
-                "tree": { "frequency": 0.004, "minSpacing": 6 }
+                "tree": { "frequency": 0.004, "minSpacing": 6, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -32, "maxY": 96,  "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
-                { "block": "IRON_ORE",  "minY": -96, "maxY": 56,  "frequency": 0.016, "minSize": 3,  "maxSize": 10 }
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 48,  "frequency": 0.010, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -96, "maxY": 32,  "frequency": 0.008, "minSize": 3,  "maxSize": 10 }
             ]
         },
         {
@@ -270,12 +272,12 @@
             "stoneBlock": "STONE",
             "deepBlock": "GRANITE",
             "structures": {
-                "tree": { "frequency": 0.0005, "minSpacing": 12 }
+                "tree": { "frequency": 0.0005, "minSpacing": 12, "spawnInWater": false }
             },
             "ores": [
-                { "block": "COAL_ORE",  "minY": -32, "maxY": 128, "frequency": 0.020, "minSize": 4,  "maxSize": 14 },
-                { "block": "IRON_ORE",  "minY": -128, "maxY": 80, "frequency": 0.016, "minSize": 3,  "maxSize": 10 },
-                { "block": "GOLD_ORE",  "minY": -128, "maxY": 40, "frequency": 0.009, "minSize": 2,  "maxSize": 7  }
+                { "block": "COAL_ORE",  "minY": -32, "maxY": 64,  "frequency": 0.010, "minSize": 4,  "maxSize": 14 },
+                { "block": "IRON_ORE",  "minY": -128, "maxY": 48, "frequency": 0.008, "minSize": 3,  "maxSize": 10 },
+                { "block": "GOLD_ORE",  "minY": -128, "maxY": 24, "frequency": 0.005, "minSize": 2,  "maxSize": 7  }
             ]
         }
     ]

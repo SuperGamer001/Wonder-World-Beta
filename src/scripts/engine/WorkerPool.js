@@ -77,11 +77,21 @@ export class WorkerPool {
      * @param {object}   job          — message payload (must include `type`)
      * @param {function} callback     — called with response data (minus taskId)
      * @param {Transferable[]} [xfer] — transferable objects in `job`
+     * @param {number}   [priority]   — lower value runs first (default 1)
+     *                                  0 = partial re-mesh (highest)
+     *                                  1 = initial mesh
+     *                                  2 = terrain generation (lowest)
      */
-    dispatch(job, callback, xfer = []) {
+    dispatch(job, callback, xfer = [], priority = 1) {
         const taskId = this._taskId++;
         this._callbacks.set(taskId, callback);
-        this._queue.push({ taskId, job, xfer });
+        // Insert at the correct sorted position so lower-priority-value items run first.
+        // Queue lengths stay small (≤ MAX_DISPATCH * workers), so O(n) splice is fine.
+        const item = { taskId, job, xfer };
+        let i = this._queue.length;
+        while (i > 0 && this._queue[i - 1]._priority > priority) i--;
+        item._priority = priority;
+        this._queue.splice(i, 0, item);
         this._flush();
     }
 
