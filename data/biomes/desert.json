@@ -1,0 +1,39 @@
+{
+  "name": "DESERT",
+  "temperature": 0.9,
+  "humidity": 0.1,
+  "baseHeight": 62,
+  "heightVariation": 14,
+  "heightOctaves": 4,
+  "heightFrequency": 0.002,
+  "mountainBlend": 0.03,
+  "surfaceBlock": "SAND",
+  "subsurfaceBlock": "SAND",
+  "stoneBlock": "SANDSTONE",
+  "deepBlock": "STONE",
+  "structures": {
+    "tree": {
+      "frequency": 0.0002,
+      "minSpacing": 20,
+      "spawnInWater": false
+    }
+  },
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": -32,
+      "maxY": 40,
+      "frequency": 0.006,
+      "minSize": 3,
+      "maxSize": 10
+    },
+    {
+      "block": "GOLD_ORE",
+      "minY": -128,
+      "maxY": 8,
+      "frequency": 0.004,
+      "minSize": 2,
+      "maxSize": 7
+    }
+  ]
+}

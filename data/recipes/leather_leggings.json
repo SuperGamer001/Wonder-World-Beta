@@ -1,0 +1,14 @@
+{
+  "id": "leather_leggings",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "leather_leggings",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "leather",
+      "count": 7
+    }
+  ]
+}

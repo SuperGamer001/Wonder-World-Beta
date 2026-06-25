@@ -1,0 +1,13 @@
+{
+  "id": "stone_spear",
+  "name": "Stone Spear",
+  "type": "weapon",
+  "subtype": "spear",
+  "material": "stone",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 132,
+  "damage": 6.5,
+  "attackChargeSpeed": 0.8,
+  "reach": 4
+}

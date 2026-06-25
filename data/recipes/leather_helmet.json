@@ -1,0 +1,14 @@
+{
+  "id": "leather_helmet",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "leather_helmet",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "leather",
+      "count": 5
+    }
+  ]
+}

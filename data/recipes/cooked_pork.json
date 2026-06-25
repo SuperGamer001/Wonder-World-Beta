@@ -1,0 +1,18 @@
+{
+  "id": "cooked_pork",
+  "station": "oven",
+  "result": {
+    "itemId": "cooked_pork",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "raw_pork",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

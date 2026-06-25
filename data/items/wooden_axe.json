@@ -1,0 +1,13 @@
+{
+  "id": "wooden_axe",
+  "name": "Wooden Axe",
+  "type": "tool",
+  "subtype": "axe",
+  "material": "wood",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 60,
+  "damage": 2.5,
+  "attackChargeSpeed": 0.8,
+  "miningSpeed": 2.0
+}

@@ -1,0 +1,13 @@
+{
+  "id": "wooden_pickaxe",
+  "name": "Wooden Pickaxe",
+  "type": "tool",
+  "subtype": "pickaxe",
+  "material": "wood",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 60,
+  "damage": 1.5,
+  "attackChargeSpeed": 1.2,
+  "miningSpeed": 2.0
+}

@@ -1,0 +1,47 @@
+{
+  "name": "SNOWY_MOUNTAINS",
+  "temperature": 0.05,
+  "humidity": 0.35,
+  "baseHeight": 88,
+  "heightVariation": 80,
+  "heightOctaves": 6,
+  "heightFrequency": 0.004,
+  "mountainBlend": 0.85,
+  "surfaceBlock": "SNOW",
+  "subsurfaceBlock": "STONE",
+  "stoneBlock": "STONE",
+  "deepBlock": "GRANITE",
+  "structures": {
+    "tree": {
+      "frequency": 0.0005,
+      "minSpacing": 12,
+      "spawnInWater": false
+    }
+  },
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": -32,
+      "maxY": 64,
+      "frequency": 0.01,
+      "minSize": 4,
+      "maxSize": 14
+    },
+    {
+      "block": "IRON_ORE",
+      "minY": -128,
+      "maxY": 48,
+      "frequency": 0.008,
+      "minSize": 3,
+      "maxSize": 10
+    },
+    {
+      "block": "GOLD_ORE",
+      "minY": -128,
+      "maxY": 24,
+      "frequency": 0.005,
+      "minSize": 2,
+      "maxSize": 7
+    }
+  ]
+}

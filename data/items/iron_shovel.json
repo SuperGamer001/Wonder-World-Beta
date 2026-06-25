@@ -1,0 +1,12 @@
+{
+  "id": "iron_shovel",
+  "name": "Iron Shovel",
+  "type": "tool",
+  "subtype": "shovel",
+  "material": "iron",
+  "weight": 1,
+  "maxStack": 1,
+  "durability": 251,
+  "damage": 2,
+  "attackChargeSpeed": 1
+}

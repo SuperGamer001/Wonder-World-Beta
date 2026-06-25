@@ -1,0 +1,18 @@
+{
+  "id": "cooked_beef",
+  "station": "oven",
+  "result": {
+    "itemId": "cooked_beef",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "raw_beef",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

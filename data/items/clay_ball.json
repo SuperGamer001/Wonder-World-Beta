@@ -1,0 +1,7 @@
+{
+  "id": "clay_ball",
+  "name": "Clay Ball",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

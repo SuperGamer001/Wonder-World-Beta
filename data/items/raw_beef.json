@@ -1,0 +1,9 @@
+{
+  "id": "raw_beef",
+  "name": "Raw Beef",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 3,
+  "energyRestore": 5
+}

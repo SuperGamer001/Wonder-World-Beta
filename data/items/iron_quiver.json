@@ -1,0 +1,11 @@
+{
+  "id": "iron_quiver",
+  "name": "Iron Quiver",
+  "type": "quiver",
+  "slot": "quiver",
+  "material": "iron",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 500,
+  "maxArrows": 128
+}

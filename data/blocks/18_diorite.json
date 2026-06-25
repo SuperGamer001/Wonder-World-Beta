@@ -1,0 +1,17 @@
+{
+  "id": 18,
+  "name": "DIORITE",
+  "color": [
+    0.75,
+    0.74,
+    0.73
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "diorite",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "raw_iron",
+  "name": "Raw Iron",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

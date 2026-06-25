@@ -1,0 +1,39 @@
+{
+  "name": "SNOWY_PLAINS",
+  "temperature": 0.1,
+  "humidity": 0.3,
+  "baseHeight": 64,
+  "heightVariation": 20,
+  "heightOctaves": 5,
+  "heightFrequency": 0.0022,
+  "mountainBlend": 0.06,
+  "surfaceBlock": "SNOW",
+  "subsurfaceBlock": "SNOW_DIRT",
+  "stoneBlock": "STONE",
+  "deepBlock": "DIORITE",
+  "structures": {
+    "tree": {
+      "frequency": 0.004,
+      "minSpacing": 6,
+      "spawnInWater": false
+    }
+  },
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": -32,
+      "maxY": 48,
+      "frequency": 0.01,
+      "minSize": 4,
+      "maxSize": 14
+    },
+    {
+      "block": "IRON_ORE",
+      "minY": -96,
+      "maxY": 32,
+      "frequency": 0.008,
+      "minSize": 3,
+      "maxSize": 10
+    }
+  ]
+}

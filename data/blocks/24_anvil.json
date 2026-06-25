@@ -1,0 +1,18 @@
+{
+  "id": 24,
+  "name": "ANVIL",
+  "color": [
+    0.35,
+    0.35,
+    0.35
+  ],
+  "interactable": true,
+  "interactType": "anvil",
+  "hardness": 5,
+  "drops": [
+    {
+      "itemId": "anvil",
+      "count": 1
+    }
+  ]
+}

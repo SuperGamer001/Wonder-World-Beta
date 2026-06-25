@@ -1,0 +1,32 @@
+{
+  "id": "chicken",
+  "name": "Chicken",
+  "health": 4,
+  "speed": 3.5,
+  "width": 0.4,
+  "height": 0.7,
+  "color": [
+    0.9,
+    0.85,
+    0.7
+  ],
+  "aquatic": false,
+  "drops": [
+    {
+      "itemId": "raw_chicken",
+      "minCount": 1,
+      "maxCount": 2,
+      "chance": 1
+    }
+  ],
+  "spawnRules": {
+    "biomes": [
+      "PLAINS",
+      "FOREST"
+    ],
+    "minY": 58,
+    "maxY": 200,
+    "minGroupSize": 3,
+    "maxGroupSize": 6
+  }
+}

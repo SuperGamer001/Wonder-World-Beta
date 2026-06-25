@@ -1,0 +1,23 @@
+{
+  "id": 22,
+  "name": "SMELTER",
+  "color": [
+    0.38,
+    0.38,
+    0.38
+  ],
+  "frontColor": [
+    0.2,
+    0.2,
+    0.2
+  ],
+  "interactable": true,
+  "interactType": "smelter",
+  "hardness": 4,
+  "drops": [
+    {
+      "itemId": "smelter",
+      "count": 1
+    }
+  ]
+}

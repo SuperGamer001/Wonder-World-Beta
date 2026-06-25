@@ -1,0 +1,11 @@
+{
+  "id": "iron_chestplate",
+  "name": "Iron Chestplate",
+  "type": "armor",
+  "slot": "chest",
+  "material": "iron",
+  "weight": 5,
+  "maxStack": 1,
+  "durability": 165,
+  "protection": 18
+}

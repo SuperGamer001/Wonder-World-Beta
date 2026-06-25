@@ -1,0 +1,12 @@
+{
+  "id": "iron_axe",
+  "name": "Iron Axe",
+  "type": "tool",
+  "subtype": "axe",
+  "material": "iron",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 251,
+  "damage": 4.5,
+  "attackChargeSpeed": 1
+}

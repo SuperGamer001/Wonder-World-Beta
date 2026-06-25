@@ -1,0 +1,9 @@
+{
+  "id": "bread",
+  "name": "Bread",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 5,
+  "energyRestore": 8
+}

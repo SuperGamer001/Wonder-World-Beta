@@ -1,0 +1,14 @@
+{
+  "id": "leather_boots",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "leather_boots",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "leather",
+      "count": 4
+    }
+  ]
+}

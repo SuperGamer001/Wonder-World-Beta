@@ -1,0 +1,7 @@
+{
+  "id": "leather",
+  "name": "Leather",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

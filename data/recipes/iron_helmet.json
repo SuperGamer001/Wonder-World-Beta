@@ -1,0 +1,14 @@
+{
+  "id": "iron_helmet",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "iron_helmet",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "iron_ingot",
+      "count": 5
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "cooked_chicken",
+  "station": "oven",
+  "result": {
+    "itemId": "cooked_chicken",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "raw_chicken",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

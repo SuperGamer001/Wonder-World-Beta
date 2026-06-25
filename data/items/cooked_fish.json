@@ -1,0 +1,9 @@
+{
+  "id": "cooked_fish",
+  "name": "Cooked Fish",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 5,
+  "energyRestore": 10
+}

@@ -1,0 +1,22 @@
+{
+  "id": 14,
+  "name": "SANDSTONE",
+  "color": [
+    0.78,
+    0.72,
+    0.5
+  ],
+  "topColor": [
+    0.82,
+    0.76,
+    0.54
+  ],
+  "hardness": 0.8,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "sandstone",
+      "count": 1
+    }
+  ]
+}

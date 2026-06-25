@@ -1,0 +1,7 @@
+{
+  "id": "crafting_table",
+  "name": "Crafting Table",
+  "type": "resource",
+  "weight": 3,
+  "maxStack": 1
+}

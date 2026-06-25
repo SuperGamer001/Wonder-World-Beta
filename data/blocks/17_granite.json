@@ -1,0 +1,17 @@
+{
+  "id": 17,
+  "name": "GRANITE",
+  "color": [
+    0.6,
+    0.42,
+    0.38
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "granite",
+      "count": 1
+    }
+  ]
+}

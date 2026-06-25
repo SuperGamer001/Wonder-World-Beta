@@ -1,0 +1,14 @@
+{
+  "id": "stick",
+  "station": "hand",
+  "result": {
+    "itemId": "stick",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 1
+    }
+  ]
+}

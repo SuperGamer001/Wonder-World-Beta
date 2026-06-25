@@ -1,0 +1,14 @@
+{
+  "id": "gold_chestplate",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "gold_chestplate",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "gold_ingot",
+      "count": 8
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "id": "iron_boots",
+  "name": "Iron Boots",
+  "type": "armor",
+  "slot": "feet",
+  "material": "iron",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 165,
+  "protection": 10
+}

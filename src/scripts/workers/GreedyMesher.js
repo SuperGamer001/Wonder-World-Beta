@@ -65,8 +65,14 @@ const FACE_DEFS = [
 ];
 
 export class GreedyMesher {
-    constructor(blockRegistry) {
-        this.reg = blockRegistry;
+    /**
+     * @param {BlockRegistry} blockRegistry
+     * @param {Object} blockFaceMap  { blockId: { top, side, bottom } } — texture layer indices.
+     *   A value of -1 (or missing entry) means use vertex color for that block.
+     */
+    constructor(blockRegistry, blockFaceMap = {}) {
+        this.reg          = blockRegistry;
+        this.blockFaceMap = blockFaceMap;
     }
 
     /**
@@ -77,13 +83,13 @@ export class GreedyMesher {
      * Use [0,1,4,5]   for side (±X, ±Z) faces  — updated when a horizontal neighbour loads.
      */
     meshGroup(voxels, neighbors, faceDefIndices) {
-        const pos   = [], norm  = [], col  = [], idx  = [];
-        const tPos  = [], tNorm = [], tCol = [], tIdx = [];
+        const pos   = [], norm  = [], col  = [], idx  = [], uv  = [], lay  = [];
+        const tPos  = [], tNorm = [], tCol = [], tIdx = [], tuv = [], tlay = [];
 
         for (const i of faceDefIndices) {
             this._sweepFace(FACE_DEFS[i], voxels, neighbors,
-                pos, norm, col, idx,
-                tPos, tNorm, tCol, tIdx);
+                pos, norm, col, idx, uv, lay,
+                tPos, tNorm, tCol, tIdx, tuv, tlay);
         }
 
         return {
@@ -91,10 +97,14 @@ export class GreedyMesher {
             normals:              new Float32Array(norm),
             colors:               new Float32Array(col),
             indices:              new Uint32Array(idx),
+            uvs:                  new Float32Array(uv),
+            layers:               new Float32Array(lay),
             transparentPositions: new Float32Array(tPos),
             transparentNormals:   new Float32Array(tNorm),
             transparentColors:    new Float32Array(tCol),
             transparentIndices:   new Uint32Array(tIdx),
+            transparentUVs:       new Float32Array(tuv),
+            transparentLayers:    new Float32Array(tlay),
         };
     }
 
@@ -124,8 +134,8 @@ export class GreedyMesher {
     }
 
     _sweepFace(fd, voxels, neighbors,
-        pos, norm, col, idx,
-        tPos, tNorm, tCol, tIdx)
+        pos, norm, col, idx, uv, lay,
+        tPos, tNorm, tCol, tIdx, tuv, tlay)
     {
         const { faceAxis, uAxis, vAxis, positive, ni } = fd;
         const [dx, dy, dz] = NORMALS[ni];
@@ -162,13 +172,13 @@ export class GreedyMesher {
             }
 
             const depth = coord[faceAxis];
-            this._greedyMerge(mask,  depth, faceAxis, uAxis, vAxis, nU, nV, positive, ni, brightness, normal, pos,  norm,  col,  idx,  false);
-            this._greedyMerge(maskT, depth, faceAxis, uAxis, vAxis, nU, nV, positive, ni, brightness, normal, tPos, tNorm, tCol, tIdx, true );
+            this._greedyMerge(mask,  depth, faceAxis, uAxis, vAxis, nU, nV, positive, ni, brightness, normal, pos,  norm,  col,  idx,  uv,  lay,  false);
+            this._greedyMerge(maskT, depth, faceAxis, uAxis, vAxis, nU, nV, positive, ni, brightness, normal, tPos, tNorm, tCol, tIdx, tuv, tlay, true );
         }
     }
 
     _greedyMerge(mask, depth, faceAxis, uAxis, vAxis, nU, nV, positive, ni, brightness, normal,
-        posArr, normArr, colArr, idxArr, transparent)
+        posArr, normArr, colArr, idxArr, uvArr, layArr, transparent)
     {
         const done = new Uint8Array(nU * nV);
 
@@ -198,6 +208,20 @@ export class GreedyMesher {
                     for (let vv = v; vv < v + vW; vv++)
                         done[uu * nV + vv] = 1;
 
+                // Determine texture layer for this face (-1 = use vertex color)
+                const faceEntry = this.blockFaceMap[startId];
+                const layer = faceEntry ? this._faceLayer(faceEntry, ni) : -1;
+
+                // Build vertex color: textured faces store brightness; others store full color
+                const block = this.reg.get(startId);
+                let [r, g, b] = this._faceColor(block, ni);
+                if (layer >= 0) {
+                    // Store brightness as uniform grey so the shader can tint the texture
+                    r = brightness; g = brightness; b = brightness;
+                } else {
+                    r *= brightness; g *= brightness; b *= brightness;
+                }
+
                 // Build 4 quad vertices
                 const faceOffset = positive ? depth + 1 : depth;
                 const p = [[0,0,0],[0,0,0],[0,0,0],[0,0,0]];
@@ -206,15 +230,17 @@ export class GreedyMesher {
                 p[2][faceAxis] = faceOffset;  p[2][uAxis] = u + uW; p[2][vAxis] = v + vW;
                 p[3][faceAxis] = faceOffset;  p[3][uAxis] = u;      p[3][vAxis] = v + vW;
 
-                const block = this.reg.get(startId);
-                let [r, g, b] = this._faceColor(block, ni);
-                r *= brightness; g *= brightness; b *= brightness;
+                // UV: tile once per block across both axes
+                // (0,0)→(uW,0)→(uW,vW)→(0,vW) — shader uses fract() for repeating
+                const uvCoords = [[0,0],[uW,0],[uW,vW],[0,vW]];
 
                 const base = (posArr.length / 3) | 0;
                 for (const pt of p) posArr.push(pt[0], pt[1], pt[2]);
                 for (let i = 0; i < 4; i++) {
                     normArr.push(normal[0], normal[1], normal[2]);
                     colArr.push(r, g, b);
+                    uvArr.push(uvCoords[i][0], uvCoords[i][1]);
+                    layArr.push(layer);
                 }
 
                 if (positive) {
@@ -226,10 +252,23 @@ export class GreedyMesher {
         }
     }
 
+    _faceLayer(faceEntry, ni) {
+        // ni: 2=+Y(top), 3=-Y(bottom), others=side
+        if (ni === 2) return faceEntry.top  ?? -1;
+        if (ni === 3) return faceEntry.bottom ?? faceEntry.top ?? -1;
+        return faceEntry.side ?? faceEntry.top ?? -1;
+    }
+
     _faceColor(block, ni) {
-        if (ni === 2 && block.topColor)    return block.topColor;
-        if (ni === 3 && block.bottomColor) return block.bottomColor;
-        if ((ni === 0 || ni === 1 || ni === 4 || ni === 5) && block.sideColor) return block.sideColor;
-        return block.color;
+        // ni: 0=+X(right)  1=-X(left)  2=+Y(top)  3=-Y(bottom)  4=+Z(back)  5=-Z(front)
+        switch (ni) {
+            case 2: return block.topColor    ?? block.color;
+            case 3: return block.bottomColor ?? block.color;
+            case 0: return block.rightColor  ?? block.sideColor ?? block.color;
+            case 1: return block.leftColor   ?? block.sideColor ?? block.color;
+            case 4: return block.backColor   ?? block.sideColor ?? block.color;
+            case 5: return block.frontColor  ?? block.sideColor ?? block.color;
+            default: return block.color;
+        }
     }
 }

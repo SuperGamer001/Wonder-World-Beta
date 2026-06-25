@@ -1,0 +1,14 @@
+{
+  "id": "leather_chestplate",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "leather_chestplate",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "leather",
+      "count": 8
+    }
+  ]
+}

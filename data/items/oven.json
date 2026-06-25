@@ -1,0 +1,7 @@
+{
+  "id": "oven",
+  "name": "Oven",
+  "type": "resource",
+  "weight": 4,
+  "maxStack": 1
+}

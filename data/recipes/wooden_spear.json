@@ -1,0 +1,18 @@
+{
+  "id": "wooden_spear",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "wooden_spear",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 1
+    },
+    {
+      "itemId": "stick",
+      "count": 2
+    }
+  ]
+}

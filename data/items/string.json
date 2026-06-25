@@ -1,0 +1,7 @@
+{
+  "id": "string",
+  "name": "String",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

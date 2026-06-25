@@ -1,0 +1,7 @@
+{
+  "id": "wood_log",
+  "name": "Wood Log",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

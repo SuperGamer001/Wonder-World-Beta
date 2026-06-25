@@ -1,0 +1,14 @@
+{
+  "id": "iron_leggings",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "iron_leggings",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "iron_ingot",
+      "count": 7
+    }
+  ]
+}

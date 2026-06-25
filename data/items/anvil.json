@@ -1,0 +1,7 @@
+{
+  "id": "anvil",
+  "name": "Anvil",
+  "type": "resource",
+  "weight": 5,
+  "maxStack": 1
+}

@@ -1,0 +1,18 @@
+{
+  "id": "gold_spear",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "gold_spear",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "gold_ingot",
+      "count": 1
+    },
+    {
+      "itemId": "stick",
+      "count": 2
+    }
+  ]
+}

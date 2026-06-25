@@ -1,0 +1,7 @@
+{
+  "id": "flint",
+  "name": "Flint",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

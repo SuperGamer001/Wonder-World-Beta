@@ -1,0 +1,7 @@
+{
+  "id": "chest",
+  "name": "Chest",
+  "type": "resource",
+  "weight": 3,
+  "maxStack": 1
+}

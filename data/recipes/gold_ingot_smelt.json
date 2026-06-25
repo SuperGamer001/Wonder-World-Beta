@@ -1,0 +1,18 @@
+{
+  "id": "gold_ingot_smelt",
+  "station": "smelter",
+  "result": {
+    "itemId": "gold_ingot",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "raw_gold",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "id": "wooden_shovel",
+  "name": "Wooden Shovel",
+  "type": "tool",
+  "subtype": "shovel",
+  "material": "wood",
+  "weight": 1,
+  "maxStack": 1,
+  "durability": 60,
+  "damage": 1,
+  "attackChargeSpeed": 1
+}

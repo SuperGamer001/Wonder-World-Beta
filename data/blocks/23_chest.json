@@ -1,0 +1,23 @@
+{
+  "id": 23,
+  "name": "CHEST",
+  "color": [
+    0.55,
+    0.38,
+    0.18
+  ],
+  "topColor": [
+    0.6,
+    0.42,
+    0.22
+  ],
+  "interactable": true,
+  "interactType": "chest",
+  "hardness": 2.5,
+  "drops": [
+    {
+      "itemId": "chest",
+      "count": 1
+    }
+  ]
+}

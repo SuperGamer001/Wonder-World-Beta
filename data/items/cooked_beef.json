@@ -1,0 +1,9 @@
+{
+  "id": "cooked_beef",
+  "name": "Cooked Beef",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 8,
+  "energyRestore": 16
+}

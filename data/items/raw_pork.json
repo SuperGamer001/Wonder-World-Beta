@@ -1,0 +1,9 @@
+{
+  "id": "raw_pork",
+  "name": "Raw Pork",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 3,
+  "energyRestore": 5
+}

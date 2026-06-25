@@ -1,0 +1,18 @@
+{
+  "id": "gold_pickaxe",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "gold_pickaxe",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "gold_ingot",
+      "count": 3
+    },
+    {
+      "itemId": "stick",
+      "count": 2
+    }
+  ]
+}

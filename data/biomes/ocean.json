@@ -1,0 +1,31 @@
+{
+  "name": "OCEAN",
+  "temperature": 0.5,
+  "humidity": 1.0,
+  "baseHeight": 36,
+  "heightVariation": 12,
+  "heightOctaves": 3,
+  "heightFrequency": 0.002,
+  "mountainBlend": 0.02,
+  "surfaceBlock": "GRAVEL",
+  "subsurfaceBlock": "CLAY",
+  "stoneBlock": "STONE",
+  "deepBlock": "STONE",
+  "structures": {
+    "tree": {
+      "frequency": 0,
+      "minSpacing": 99,
+      "spawnInWater": false
+    }
+  },
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": -64,
+      "maxY": 24,
+      "frequency": 0.006,
+      "minSize": 3,
+      "maxSize": 10
+    }
+  ]
+}

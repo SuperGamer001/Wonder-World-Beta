@@ -1,0 +1,31 @@
+{
+  "id": "fish",
+  "name": "Fish",
+  "health": 3,
+  "speed": 4.0,
+  "width": 0.4,
+  "height": 0.3,
+  "color": [
+    0.4,
+    0.6,
+    0.9
+  ],
+  "aquatic": true,
+  "drops": [
+    {
+      "itemId": "raw_fish",
+      "minCount": 1,
+      "maxCount": 1,
+      "chance": 1
+    }
+  ],
+  "spawnRules": {
+    "biomes": [
+      "OCEAN"
+    ],
+    "minY": 0,
+    "maxY": 60,
+    "minGroupSize": 3,
+    "maxGroupSize": 8
+  }
+}

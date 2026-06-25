@@ -1,0 +1,16 @@
+{
+  "id": 15,
+  "name": "CLAY",
+  "color": [
+    0.62,
+    0.58,
+    0.55
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "clay_ball",
+      "count": 4
+    }
+  ]
+}

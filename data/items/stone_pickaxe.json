@@ -1,0 +1,13 @@
+{
+  "id": "stone_pickaxe",
+  "name": "Stone Pickaxe",
+  "type": "tool",
+  "subtype": "pickaxe",
+  "material": "stone",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 132,
+  "damage": 2,
+  "attackChargeSpeed": 1.2,
+  "miningSpeed": 4.0
+}

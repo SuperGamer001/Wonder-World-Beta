@@ -1,0 +1,18 @@
+{
+  "id": "iron_sword",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "iron_sword",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "iron_ingot",
+      "count": 2
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

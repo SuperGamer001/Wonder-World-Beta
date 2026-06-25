@@ -1,0 +1,11 @@
+{
+  "id": "iron_shield",
+  "name": "Iron Shield",
+  "type": "weapon",
+  "subtype": "shield",
+  "material": "iron",
+  "weight": 3,
+  "maxStack": 1,
+  "durability": 251,
+  "blockPercent": 60
+}

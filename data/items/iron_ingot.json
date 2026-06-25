@@ -1,0 +1,7 @@
+{
+  "id": "iron_ingot",
+  "name": "Iron Ingot",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

@@ -1,0 +1,11 @@
+{
+  "id": "leather_chestplate",
+  "name": "Leather Chestplate",
+  "type": "armor",
+  "slot": "chest",
+  "material": "leather",
+  "weight": 3,
+  "maxStack": 1,
+  "durability": 80,
+  "protection": 8
+}

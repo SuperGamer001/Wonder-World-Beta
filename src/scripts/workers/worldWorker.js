@@ -49,14 +49,14 @@ self.onmessage = function (e) {
     }
 };
 
-function handleInit({ seed, blockRegistry: serialisedReg, biomes }) {
+function handleInit({ seed, blockRegistry: serialisedReg, biomes, blockFaceMap }) {
     const reg = BlockRegistry.deserialize(serialisedReg);
 
     setSeed(seed);
 
     generator = new TerrainGenerator(seed, reg, biomes);
     placer    = new StructurePlacer(seed, reg, generator.biomes, generator);
-    mesher    = new GreedyMesher(reg);
+    mesher    = new GreedyMesher(reg, blockFaceMap ?? {});
 
     self.postMessage({ type: 'ready' });
 }
@@ -87,10 +87,16 @@ const Y_FACES  = [2, 3];
 const XZ_FACES = [0, 1, 4, 5];
 
 function _geoTransferList(geo) {
-    const list = [geo.positions.buffer, geo.normals.buffer, geo.colors.buffer, geo.indices.buffer];
+    const list = [
+        geo.positions.buffer, geo.normals.buffer, geo.colors.buffer, geo.indices.buffer,
+        geo.uvs.buffer, geo.layers.buffer,
+    ];
     if (geo.transparentPositions.length > 0) {
-        list.push(geo.transparentPositions.buffer, geo.transparentNormals.buffer,
-                  geo.transparentColors.buffer, geo.transparentIndices.buffer);
+        list.push(
+            geo.transparentPositions.buffer, geo.transparentNormals.buffer,
+            geo.transparentColors.buffer, geo.transparentIndices.buffer,
+            geo.transparentUVs.buffer, geo.transparentLayers.buffer,
+        );
     }
     return list;
 }

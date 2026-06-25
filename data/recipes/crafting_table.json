@@ -1,0 +1,14 @@
+{
+  "id": "crafting_table",
+  "station": "hand",
+  "result": {
+    "itemId": "crafting_table",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 4
+    }
+  ]
+}

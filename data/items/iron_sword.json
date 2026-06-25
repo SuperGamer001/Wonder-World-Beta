@@ -1,0 +1,12 @@
+{
+  "id": "iron_sword",
+  "name": "Iron Sword",
+  "type": "weapon",
+  "subtype": "sword",
+  "material": "iron",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 251,
+  "damage": 6,
+  "attackChargeSpeed": 1.6
+}

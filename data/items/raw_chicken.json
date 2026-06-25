@@ -1,0 +1,9 @@
+{
+  "id": "raw_chicken",
+  "name": "Raw Chicken",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 2,
+  "energyRestore": 4
+}

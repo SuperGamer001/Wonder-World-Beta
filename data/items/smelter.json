@@ -1,0 +1,7 @@
+{
+  "id": "smelter",
+  "name": "Smelter",
+  "type": "resource",
+  "weight": 5,
+  "maxStack": 1
+}

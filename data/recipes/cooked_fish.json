@@ -1,0 +1,18 @@
+{
+  "id": "cooked_fish",
+  "station": "oven",
+  "result": {
+    "itemId": "cooked_fish",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "raw_fish",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

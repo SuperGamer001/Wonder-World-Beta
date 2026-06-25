@@ -1,0 +1,11 @@
+{
+  "id": "leather_boots",
+  "name": "Leather Boots",
+  "type": "armor",
+  "slot": "feet",
+  "material": "leather",
+  "weight": 1,
+  "maxStack": 1,
+  "durability": 80,
+  "protection": 4
+}

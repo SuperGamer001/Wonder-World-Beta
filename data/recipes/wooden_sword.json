@@ -1,0 +1,18 @@
+{
+  "id": "wooden_sword",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "wooden_sword",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 2
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

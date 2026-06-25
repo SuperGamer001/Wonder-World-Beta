@@ -1,0 +1,22 @@
+{
+  "id": "arrow",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "arrow",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "flint",
+      "count": 1
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    },
+    {
+      "itemId": "leather",
+      "count": 1
+    }
+  ]
+}

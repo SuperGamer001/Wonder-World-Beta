@@ -1,0 +1,13 @@
+{
+  "id": "iron_spear",
+  "name": "Iron Spear",
+  "type": "weapon",
+  "subtype": "spear",
+  "material": "iron",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 251,
+  "damage": 8,
+  "attackChargeSpeed": 0.8,
+  "reach": 4
+}

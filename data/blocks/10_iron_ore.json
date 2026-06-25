@@ -1,0 +1,17 @@
+{
+  "id": 10,
+  "name": "IRON_ORE",
+  "color": [
+    0.56,
+    0.46,
+    0.4
+  ],
+  "hardness": 3,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "raw_iron",
+      "count": 1
+    }
+  ]
+}

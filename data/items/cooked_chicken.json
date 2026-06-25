@@ -1,0 +1,9 @@
+{
+  "id": "cooked_chicken",
+  "name": "Cooked Chicken",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 6,
+  "energyRestore": 12
+}

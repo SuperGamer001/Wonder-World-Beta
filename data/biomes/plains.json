@@ -1,0 +1,52 @@
+{
+  "name": "PLAINS",
+  "temperature": 0.6,
+  "humidity": 0.5,
+  "baseHeight": 64,
+  "heightVariation": 22,
+  "heightOctaves": 5,
+  "heightFrequency": 0.0022,
+  "mountainBlend": 0.05,
+  "surfaceBlock": "GRASS",
+  "subsurfaceBlock": "DIRT",
+  "stoneBlock": "STONE",
+  "deepBlock": "STONE",
+  "structures": {
+    "tree": {
+      "frequency": 0.0035,
+      "minSpacing": 5,
+      "spawnInWater": false
+    },
+    "house": {
+      "frequency": 0.00015,
+      "minSpacing": 48,
+      "spawnInWater": false
+    }
+  },
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": -32,
+      "maxY": 48,
+      "frequency": 0.01,
+      "minSize": 4,
+      "maxSize": 14
+    },
+    {
+      "block": "IRON_ORE",
+      "minY": -96,
+      "maxY": 32,
+      "frequency": 0.007,
+      "minSize": 3,
+      "maxSize": 9
+    },
+    {
+      "block": "GOLD_ORE",
+      "minY": -128,
+      "maxY": 8,
+      "frequency": 0.003,
+      "minSize": 2,
+      "maxSize": 6
+    }
+  ]
+}

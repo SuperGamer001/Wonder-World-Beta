@@ -1,0 +1,12 @@
+{
+  "id": "wooden_sword",
+  "name": "Wooden Sword",
+  "type": "weapon",
+  "subtype": "sword",
+  "material": "wood",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 60,
+  "damage": 4,
+  "attackChargeSpeed": 1.6
+}

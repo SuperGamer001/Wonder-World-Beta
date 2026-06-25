@@ -1,0 +1,14 @@
+{
+  "id": "chest_recipe",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "chest",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 8
+    }
+  ]
+}

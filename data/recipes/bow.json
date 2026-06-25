@@ -1,0 +1,18 @@
+{
+  "id": "bow",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "bow",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stick",
+      "count": 3
+    },
+    {
+      "itemId": "string",
+      "count": 3
+    }
+  ]
+}

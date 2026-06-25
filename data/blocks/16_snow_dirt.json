@@ -1,0 +1,21 @@
+{
+  "id": 16,
+  "name": "SNOW_DIRT",
+  "color": [
+    0.5,
+    0.35,
+    0.2
+  ],
+  "topColor": [
+    0.95,
+    0.96,
+    0.97
+  ],
+  "hardness": 0.5,
+  "drops": [
+    {
+      "itemId": "dirt",
+      "count": 1
+    }
+  ]
+}

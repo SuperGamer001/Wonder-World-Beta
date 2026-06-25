@@ -1,0 +1,38 @@
+{
+  "id": "cow",
+  "name": "Cow",
+  "health": 20,
+  "speed": 3.0,
+  "width": 0.9,
+  "height": 1.4,
+  "color": [
+    0.8,
+    0.7,
+    0.6
+  ],
+  "aquatic": false,
+  "drops": [
+    {
+      "itemId": "raw_beef",
+      "minCount": 1,
+      "maxCount": 3,
+      "chance": 1
+    },
+    {
+      "itemId": "leather",
+      "minCount": 0,
+      "maxCount": 2,
+      "chance": 0.7
+    }
+  ],
+  "spawnRules": {
+    "biomes": [
+      "PLAINS",
+      "FOREST"
+    ],
+    "minY": 58,
+    "maxY": 200,
+    "minGroupSize": 2,
+    "maxGroupSize": 4
+  }
+}

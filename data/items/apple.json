@@ -1,0 +1,9 @@
+{
+  "id": "apple",
+  "name": "Apple",
+  "type": "food",
+  "weight": 1,
+  "maxStack": 16,
+  "hungerRestore": 4,
+  "energyRestore": 8
+}

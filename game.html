@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="src/css/game.css">
     <script src="src/main.js" defer></script>
-    <!-- game.html -->
     <script type="importmap">
     {
     "imports": {
@@ -13,7 +12,6 @@
     }
     }
     </script>
-
     <script type="module" src="src/scripts/world.js" defer></script>
 </head>
 <body>
@@ -30,19 +28,16 @@
         </div>
     </div>
 
-    <!-- Loading bar (shared between initial load and world load) -->
+    <!-- Loading bar -->
     <div class="loadingContainer hidden" id="loadingContainer">
-
         <div id="packName" class="packName hidden">Vanilla Gamepack</div>
-
         <div class="loadingText" id="loadingTextEl">Welcome to Wonder World Beta!</div>
-
         <div id="appLoadingBar" class="loadingBar">
             <div class="progressBar"></div>
         </div>
     </div>
 
-    <!-- Initial app loading (shown before title) -->
+    <!-- Initial app loading -->
     <div class="loadingContainer" id="appLoadingContainer">
         <div class="loadingText">Loading GamePacks...</div>
         <div class="loadingBar">
@@ -50,37 +45,53 @@
         </div>
     </div>
 
-    <!-- ── Title Screen ─────────────────────────────────────────────────────── -->
+    <!-- ── Title Screen ────────────────────────────────────────────────────── -->
     <div class="hidden" id="TitleScreen">
         <div class="menuButton" id="startButton">Play</div>
-        <div class="menuButton">Settings</div>
+        <div class="menuButton" id="titleSettingsBtn">Settings</div>
         <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
     </div>
 
-    <!-- ── World List Screen ────────────────────────────────────────────────── -->
+    <!-- ── World List Screen ───────────────────────────────────────────────── -->
     <div class="hidden" id="WorldListScreen">
         <div id="worldListHeader">
             <div class="menuButton" id="createWorldBtn">+ Create World</div>
         </div>
-        <div id="worldListContainer">
-            <!-- World cards injected here by JS -->
-        </div>
+        <div id="worldListContainer"></div>
         <div class="menuButton" id="worldListBackBtn" style="margin-top:2vw;">Back</div>
     </div>
 
-    <!-- ── World Detail Modal ───────────────────────────────────────────────── -->
+    <!-- ── World Detail Modal ──────────────────────────────────────────────── -->
     <div class="hidden" id="WorldDetailModal">
         <div class="popup" style="min-width:30vw;">
             <div class="popupTitle" id="worldDetailName">World Name</div>
             <div class="popupMessage" id="worldDetailInfo">Seed: 0</div>
             <div class="menuButton" id="worldPlayBtn">Play World</div>
+            <div class="menuButton" id="worldSettingsBtn">World Settings</div>
             <div class="menuButton" id="worldDuplicateBtn">Duplicate World</div>
             <div class="menuButton" id="worldDeleteBtn" style="background:#6b1a1a;">Delete World</div>
             <div class="menuButton" id="worldDetailCloseBtn" style="margin-top:1vw;">Cancel</div>
         </div>
     </div>
 
-    <!-- ── Create World Modal ───────────────────────────────────────────────── -->
+    <!-- ── World Settings Modal (game mode etc.) ───────────────────────────── -->
+    <div class="hidden" id="WorldSettingsModal">
+        <div class="popup" style="min-width:28vw; gap:1vw;">
+            <div class="popupTitle">World Settings</div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Game Mode</label>
+                <select class="worldFormInput" id="worldSettingsGameMode">
+                    <option value="SURVIVAL">Survival</option>
+                    <option value="CREATIVE">Creative</option>
+                    <option value="SPECTATOR">Spectator</option>
+                </select>
+            </div>
+            <div class="menuButton" id="worldSettingsSaveBtn">Save</div>
+            <div class="menuButton" id="worldSettingsCancelBtn">Cancel</div>
+        </div>
+    </div>
+
+    <!-- ── Create World Modal ─────────────────────────────────────────────── -->
     <div class="hidden" id="CreateWorldModal">
         <div class="popup" style="min-width:30vw; gap:1vw;">
             <div class="popupTitle">Create New World</div>
@@ -92,50 +103,136 @@
                 <label class="worldFormLabel">Seed</label>
                 <input class="worldFormInput" id="newWorldSeed" type="text" placeholder="(random)" maxlength="20">
             </div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Game Mode</label>
+                <select class="worldFormInput" id="newWorldGameMode">
+                    <option value="SURVIVAL">Survival</option>
+                    <option value="CREATIVE">Creative</option>
+                    <option value="SPECTATOR">Spectator</option>
+                </select>
+            </div>
             <div class="menuButton" id="createWorldConfirmBtn">Create</div>
             <div class="menuButton" id="createWorldCancelBtn">Cancel</div>
         </div>
     </div>
 
-    <!-- ── Settings Screen ─────────────────────────────────────────────────── -->
+    <!-- ── Settings Screen ────────────────────────────────────────────────── -->
     <div class="hidden" id="SettingsScreen">
-        <div class="menuButton">Back</div>
-        <div class="menuButton">Audio</div>
-        <div class="menuButton">Graphics</div>
+        <div class="settingsTabs">
+            <div class="settingsTab active" id="tabPlayer" onclick="switchSettingsTab('player')">Player</div>
+            <div class="settingsTab" id="tabWorld" onclick="switchSettingsTab('world')">World</div>
+        </div>
+        <div class="settingsPanel" id="settingsPanelPlayer">
+            <div class="settingsRow">
+                <span class="settingsLabel">Mouse Sensitivity</span>
+                <input type="range" id="settingSensitivity" min="0.5" max="5" step="0.1" value="1.0" class="settingsSlider">
+                <span class="settingsValue" id="settingSensitivityVal">1.0</span>
+            </div>
+            <div class="settingsRow">
+                <span class="settingsLabel">Render Distance</span>
+                <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="12" class="settingsSlider">
+                <span class="settingsValue" id="settingRenderDistVal">12</span>
+            </div>
+        </div>
+        <div class="settingsPanel hidden" id="settingsPanelWorld">
+            <div class="settingsRow">
+                <span class="settingsLabel">Game Mode</span>
+                <select class="worldFormInput" id="settingGameMode" style="width:10vw;">
+                    <option value="SURVIVAL">Survival</option>
+                    <option value="CREATIVE">Creative</option>
+                    <option value="SPECTATOR">Spectator</option>
+                </select>
+            </div>
+            <div class="menuButton" id="settingGameModeApply" style="margin-top:1vw;">Apply</div>
+        </div>
+        <div class="menuButton" id="settingsBackBtn" style="margin-top:2vw;">Back</div>
     </div>
 
-    <!-- ── Game Screen ──────────────────────────────────────────────────────── -->
+    <!-- ── Game Screen ────────────────────────────────────────────────────── -->
     <div class="hidden" id="GameScreen">
+
+        <!-- Damage vignette overlay -->
+        <div id="damageVignette"></div>
+        <!-- Action lines overlay (flashes on heavy damage) -->
+        <div id="actionLines"></div>
+
         <div id="gameUI">
             <div id="playerInfo">
-                <div id="playerHealth"><img src="./data/textures/UI/Heart.png" width="25vw"> Health: 100 / 100</div>
-                <div id="playerHunger"><img src="./data/textures/UI/Bread.png" width="25vw"> Hunger: 100 / 100</div>
-                <div id="playerEnergy"><img src="./data/textures/UI/Energy1.png" width="25vw"> Energy: 100 / 100</div>
+                <div id="playerHealth"><img src="./data/textures/UI/Heart.png" width="25"> Health: 100 / 100</div>
+                <div id="playerHunger"><img src="./data/textures/UI/Bread.png" width="25"> Hunger: 100 / 100</div>
+                <div id="playerEnergy"><img src="./data/textures/UI/Energy1.png" width="25"> Energy: 100 / 100</div>
                 <div id="playerProtection" class="hidden">Protection: 0%</div>
-                <div id="playerArrows" class="hidden">Arrows: 0/0</div>
+                <div id="playerArrows" class="hidden">Arrows: 0</div>
             </div>
-            <div id="hotbar">
-                <div class="hotbarSlot selected"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
-                <div class="hotbarSlot"><img src=""></div>
 
+            <!-- Attack charge bar -->
+            <div id="attackChargeBar">
+                <div id="attackChargeFill"></div>
+            </div>
+
+            <div id="hotbar">
+                <div class="hotbarSlot selected" data-slot="0"><img src=""></div>
+                <div class="hotbarSlot" data-slot="1"><img src=""></div>
+                <div class="hotbarSlot" data-slot="2"><img src=""></div>
+                <div class="hotbarSlot" data-slot="3"><img src=""></div>
+                <div class="hotbarSlot" data-slot="4"><img src=""></div>
+                <div class="hotbarSlot" data-slot="5"><img src=""></div>
+                <div class="hotbarSlot" data-slot="6"><img src=""></div>
+                <div class="hotbarSlot" data-slot="7"><img src=""></div>
+                <div class="hotbarSlot" data-slot="8"><img src=""></div>
+                <div class="hotbarSlot" data-slot="9"><img src=""></div>
                 <div class="offhand hotbarSlot"><img src=""></div>
             </div>
 
             <div id="crosshair"></div>
         </div>
 
+        <!-- Death screen -->
+        <div id="DeathScreen" class="hidden">
+            <div class="deathTitle">You Died!</div>
+            <div class="deathSub">Your items were dropped at your death location.</div>
+            <div class="menuButton" id="respawnBtn">Respawn</div>
+        </div>
+
+        <!-- Inventory screen (E key) -->
+        <div id="InventoryScreen" class="hidden">
+            <div class="invHeader">
+                <span>Inventory &nbsp;<span id="invWeightLabel" style="font-size:1vw;color:#888;font-weight:normal;"></span></span>
+                <div class="menuButton" id="invCloseBtn" style="width:5vw;height:2.5vw;line-height:2.5vw;font-size:1.1vw;">Close</div>
+            </div>
+            <div class="invBody">
+                <div class="invEquipCol">
+                    <div class="invSectionTitle">Equipment</div>
+                    <div id="invEquip"></div>
+                </div>
+                <div class="invItemsCol">
+                    <div class="invSectionTitle">Items</div>
+                    <div id="invSlots" class="invSlotsGrid"></div>
+                    <div id="invHotbarRow" class="invHotbarSection"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Interactive block UI (crafting table, chest, etc.) -->
+        <div id="InteractivePanel" class="hidden">
+            <div class="interactiveHeader">
+                <span id="interactivePanelTitle">Crafting Table</span>
+                <div class="menuButton" id="interactivePanelClose" style="width:6vw;height:3vw;line-height:3vw;font-size:1.2vw;">Close</div>
+            </div>
+            <div id="craftingContainer">
+                <div id="recipeList"></div>
+                <div id="recipeDetail">
+                    <div id="recipeDetailName"></div>
+                    <div id="recipeDetailIngredients"></div>
+                    <div class="menuButton" id="craftBtn" style="margin-top:1vw;">Craft</div>
+                </div>
+            </div>
+        </div>
+
         <div class="hidden" id="PauseScreen">
             <img id="PauseLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 20%; height: auto; margin-top: -15vw;">
             <div class="menuButton" onclick="resumeGame()">Resume</div>
-            <div class="menuButton">Settings</div>
+            <div class="menuButton" id="pauseSettingsBtn">Settings</div>
             <div class="menuButton" onclick="leaveWorld()">Quit</div>
         </div>
 

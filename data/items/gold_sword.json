@@ -1,0 +1,12 @@
+{
+  "id": "gold_sword",
+  "name": "Gold Sword",
+  "type": "weapon",
+  "subtype": "sword",
+  "material": "gold",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 33,
+  "damage": 7,
+  "attackChargeSpeed": 2.4
+}

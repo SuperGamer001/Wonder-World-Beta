@@ -1,0 +1,7 @@
+{
+  "id": "granite",
+  "name": "Granite",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

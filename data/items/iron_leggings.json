@@ -1,0 +1,11 @@
+{
+  "id": "iron_leggings",
+  "name": "Iron Leggings",
+  "type": "armor",
+  "slot": "legs",
+  "material": "iron",
+  "weight": 4,
+  "maxStack": 1,
+  "durability": 165,
+  "protection": 15
+}

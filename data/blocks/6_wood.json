@@ -1,0 +1,21 @@
+{
+  "id": 6,
+  "name": "WOOD",
+  "color": [
+    0.45,
+    0.3,
+    0.15
+  ],
+  "topColor": [
+    0.5,
+    0.38,
+    0.22
+  ],
+  "hardness": 2,
+  "drops": [
+    {
+      "itemId": "wood_log",
+      "count": 1
+    }
+  ]
+}

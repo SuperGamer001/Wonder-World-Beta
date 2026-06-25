@@ -1,0 +1,18 @@
+{
+  "id": "iron_ingot_smelt",
+  "station": "smelter",
+  "result": {
+    "itemId": "iron_ingot",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "raw_iron",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

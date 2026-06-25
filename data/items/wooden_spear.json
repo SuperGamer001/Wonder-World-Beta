@@ -1,0 +1,13 @@
+{
+  "id": "wooden_spear",
+  "name": "Wooden Spear",
+  "type": "weapon",
+  "subtype": "spear",
+  "material": "wood",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 60,
+  "damage": 5,
+  "attackChargeSpeed": 0.8,
+  "reach": 4
+}

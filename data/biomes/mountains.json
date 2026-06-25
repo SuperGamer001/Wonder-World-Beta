@@ -1,0 +1,47 @@
+{
+  "name": "MOUNTAINS",
+  "temperature": 0.3,
+  "humidity": 0.4,
+  "baseHeight": 90,
+  "heightVariation": 90,
+  "heightOctaves": 6,
+  "heightFrequency": 0.004,
+  "mountainBlend": 0.8,
+  "surfaceBlock": "STONE",
+  "subsurfaceBlock": "STONE",
+  "stoneBlock": "STONE",
+  "deepBlock": "GRANITE",
+  "structures": {
+    "tree": {
+      "frequency": 0.001,
+      "minSpacing": 8,
+      "spawnInWater": false
+    }
+  },
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": -32,
+      "maxY": 64,
+      "frequency": 0.011,
+      "minSize": 4,
+      "maxSize": 14
+    },
+    {
+      "block": "IRON_ORE",
+      "minY": -128,
+      "maxY": 48,
+      "frequency": 0.009,
+      "minSize": 3,
+      "maxSize": 10
+    },
+    {
+      "block": "GOLD_ORE",
+      "minY": -128,
+      "maxY": 24,
+      "frequency": 0.005,
+      "minSize": 2,
+      "maxSize": 7
+    }
+  ]
+}

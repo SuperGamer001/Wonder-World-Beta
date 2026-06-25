@@ -1,0 +1,23 @@
+{
+  "id": 20,
+  "name": "CRAFTING_TABLE",
+  "color": [
+    0.55,
+    0.35,
+    0.18
+  ],
+  "topColor": [
+    0.55,
+    0.35,
+    0.18
+  ],
+  "interactable": true,
+  "interactType": "crafting",
+  "hardness": 2.5,
+  "drops": [
+    {
+      "itemId": "crafting_table",
+      "count": 1
+    }
+  ]
+}

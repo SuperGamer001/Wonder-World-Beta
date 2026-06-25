@@ -1,0 +1,32 @@
+{
+  "id": "pig",
+  "name": "Pig",
+  "health": 10,
+  "speed": 3.5,
+  "width": 0.9,
+  "height": 0.9,
+  "color": [
+    0.95,
+    0.7,
+    0.7
+  ],
+  "aquatic": false,
+  "drops": [
+    {
+      "itemId": "raw_pork",
+      "minCount": 1,
+      "maxCount": 3,
+      "chance": 1
+    }
+  ],
+  "spawnRules": {
+    "biomes": [
+      "PLAINS",
+      "FOREST"
+    ],
+    "minY": 58,
+    "maxY": 200,
+    "minGroupSize": 2,
+    "maxGroupSize": 4
+  }
+}

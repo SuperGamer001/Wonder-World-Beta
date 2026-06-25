@@ -1,0 +1,13 @@
+{
+  "id": "gold_pickaxe",
+  "name": "Gold Pickaxe",
+  "type": "tool",
+  "subtype": "pickaxe",
+  "material": "gold",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 33,
+  "damage": 3,
+  "attackChargeSpeed": 1.4,
+  "miningSpeed": 12.0
+}

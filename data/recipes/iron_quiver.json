@@ -1,0 +1,18 @@
+{
+  "id": "iron_quiver",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "iron_quiver",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "iron_ingot",
+      "count": 6
+    },
+    {
+      "itemId": "leather",
+      "count": 2
+    }
+  ]
+}

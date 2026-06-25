@@ -1,0 +1,12 @@
+{
+  "id": 13,
+  "name": "ICE",
+  "transparent": true,
+  "color": [
+    0.7,
+    0.85,
+    0.9
+  ],
+  "hardness": 0.5,
+  "drops": []
+}

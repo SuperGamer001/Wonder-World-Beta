@@ -1,0 +1,11 @@
+{
+  "id": "gold_chestplate",
+  "name": "Gold Chestplate",
+  "type": "armor",
+  "slot": "chest",
+  "material": "gold",
+  "weight": 5,
+  "maxStack": 1,
+  "durability": 77,
+  "protection": 12
+}

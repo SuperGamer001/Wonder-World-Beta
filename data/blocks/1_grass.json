@@ -1,0 +1,26 @@
+{
+  "id": 1,
+  "name": "GRASS",
+  "color": [
+    0.38,
+    0.32,
+    0.18
+  ],
+  "topColor": [
+    0.32,
+    0.58,
+    0.18
+  ],
+  "sideColor": [
+    0.38,
+    0.32,
+    0.18
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "dirt",
+      "count": 1
+    }
+  ]
+}

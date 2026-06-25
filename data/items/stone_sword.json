@@ -1,0 +1,12 @@
+{
+  "id": "stone_sword",
+  "name": "Stone Sword",
+  "type": "weapon",
+  "subtype": "sword",
+  "material": "stone",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 132,
+  "damage": 5,
+  "attackChargeSpeed": 1.6
+}

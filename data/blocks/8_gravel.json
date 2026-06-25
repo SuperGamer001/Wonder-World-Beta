@@ -1,0 +1,22 @@
+{
+  "id": 8,
+  "name": "GRAVEL",
+  "color": [
+    0.46,
+    0.45,
+    0.43
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "gravel",
+      "count": 1,
+      "chance": 0.9
+    },
+    {
+      "itemId": "flint",
+      "count": 1,
+      "chance": 0.1
+    }
+  ]
+}

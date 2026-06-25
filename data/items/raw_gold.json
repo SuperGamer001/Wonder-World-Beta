@@ -1,0 +1,7 @@
+{
+  "id": "raw_gold",
+  "name": "Raw Gold",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

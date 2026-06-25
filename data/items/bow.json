@@ -1,0 +1,13 @@
+{
+  "id": "bow",
+  "name": "Bow",
+  "type": "weapon",
+  "subtype": "bow",
+  "material": "wood",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 385,
+  "attackChargeSpeed": 0,
+  "minDrawTime": 0.3,
+  "maxDrawTime": 1.5
+}

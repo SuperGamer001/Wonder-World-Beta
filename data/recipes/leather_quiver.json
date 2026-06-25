@@ -1,0 +1,14 @@
+{
+  "id": "leather_quiver",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "leather_quiver",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "leather",
+      "count": 6
+    }
+  ]
+}

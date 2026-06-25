@@ -1,0 +1,17 @@
+{
+  "id": 9,
+  "name": "COAL_ORE",
+  "color": [
+    0.3,
+    0.3,
+    0.3
+  ],
+  "hardness": 3,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

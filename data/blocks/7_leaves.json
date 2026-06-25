@@ -1,0 +1,19 @@
+{
+  "id": 7,
+  "name": "LEAVES",
+  "transparent": true,
+  "noCollision": true,
+  "color": [
+    0.18,
+    0.52,
+    0.14
+  ],
+  "hardness": 0.2,
+  "drops": [
+    {
+      "itemId": "apple",
+      "count": 1,
+      "chance": 0.05
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "gold_spear",
+  "name": "Gold Spear",
+  "type": "weapon",
+  "subtype": "spear",
+  "material": "gold",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 33,
+  "damage": 9,
+  "attackChargeSpeed": 1,
+  "reach": 4
+}

@@ -1,0 +1,11 @@
+{
+  "id": "gold_leggings",
+  "name": "Gold Leggings",
+  "type": "armor",
+  "slot": "legs",
+  "material": "gold",
+  "weight": 4,
+  "maxStack": 1,
+  "durability": 77,
+  "protection": 10
+}

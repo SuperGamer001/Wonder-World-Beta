@@ -1,0 +1,16 @@
+{
+  "id": 2,
+  "name": "DIRT",
+  "color": [
+    0.5,
+    0.35,
+    0.2
+  ],
+  "hardness": 0.5,
+  "drops": [
+    {
+      "itemId": "dirt",
+      "count": 1
+    }
+  ]
+}

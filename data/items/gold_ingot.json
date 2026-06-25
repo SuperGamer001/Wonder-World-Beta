@@ -1,0 +1,7 @@
+{
+  "id": "gold_ingot",
+  "name": "Gold Ingot",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

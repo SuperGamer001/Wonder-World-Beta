@@ -1,0 +1,7 @@
+{
+  "id": "stone",
+  "name": "Stone",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

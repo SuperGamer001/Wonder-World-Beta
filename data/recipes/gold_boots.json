@@ -1,0 +1,14 @@
+{
+  "id": "gold_boots",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "gold_boots",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "gold_ingot",
+      "count": 4
+    }
+  ]
+}

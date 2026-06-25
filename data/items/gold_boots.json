@@ -1,0 +1,11 @@
+{
+  "id": "gold_boots",
+  "name": "Gold Boots",
+  "type": "armor",
+  "slot": "feet",
+  "material": "gold",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 77,
+  "protection": 7
+}

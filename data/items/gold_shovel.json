@@ -1,0 +1,12 @@
+{
+  "id": "gold_shovel",
+  "name": "Gold Shovel",
+  "type": "tool",
+  "subtype": "shovel",
+  "material": "gold",
+  "weight": 1,
+  "maxStack": 1,
+  "durability": 33,
+  "damage": 2.5,
+  "attackChargeSpeed": 1.2
+}

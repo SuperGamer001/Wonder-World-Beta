@@ -1,0 +1,17 @@
+{
+  "id": 3,
+  "name": "STONE",
+  "color": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "stone",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": 0,
+  "name": "AIR",
+  "transparent": true,
+  "noCollision": true,
+  "color": [
+    0,
+    0,
+    0
+  ],
+  "hardness": 0,
+  "drops": null
+}

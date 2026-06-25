@@ -1,0 +1,13 @@
+{
+  "id": "iron_pickaxe",
+  "name": "Iron Pickaxe",
+  "type": "tool",
+  "subtype": "pickaxe",
+  "material": "iron",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 251,
+  "damage": 2.5,
+  "attackChargeSpeed": 1.2,
+  "miningSpeed": 6.0
+}

@@ -1,0 +1,18 @@
+{
+  "id": "stone_axe",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "stone_axe",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stone",
+      "count": 3
+    },
+    {
+      "itemId": "stick",
+      "count": 2
+    }
+  ]
+}

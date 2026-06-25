@@ -1,0 +1,14 @@
+{
+  "id": 5,
+  "name": "WATER",
+  "transparent": true,
+  "liquid": true,
+  "noCollision": true,
+  "color": [
+    0.1,
+    0.4,
+    0.8
+  ],
+  "hardness": 0,
+  "drops": null
+}

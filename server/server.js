@@ -3,11 +3,16 @@
  *
  * REST (HTTP) — world metadata CRUD:
  *   GET  /api/worlds              list worlds
- *   POST /api/worlds              create world
+ *   POST /api/worlds              create world  (body: { name, seed, gameMode })
  *   GET  /api/worlds/:id          get metadata
- *   PUT  /api/worlds/:id/player-pos  update player position
+ *   PUT  /api/worlds/:id/player-state  save full player state
+ *   GET  /api/worlds/:id/player-state  load full player state
+ *   PUT  /api/worlds/:id/settings      update world settings (gameMode etc.)
  *   POST /api/worlds/:id/duplicate
  *   DEL  /api/worlds/:id
+ *   GET  /api/settings            get global player settings
+ *   PUT  /api/settings            update global player settings
+ *   GET  /api/data/manifest       list all data JSON files by category
  *
  * WebSocket — chunk I/O (chunks are 16×640×16 columns, addressed by cx,cz only):
  *   Client→Server text:   { type:'loadChunk', worldId, cx, cz }
@@ -36,10 +41,11 @@ import { promisify }  from 'util';
 import { fileURLToPath } from 'url';
 import crypto         from 'crypto';
 
-const __dirname  = path.dirname(fileURLToPath(import.meta.url));
-const ROOT       = path.join(__dirname, '..');
-const WORLDS_DIR = path.join(ROOT, 'user', 'worlds');
-const PORT        = process.env.PORT ?? 3000;
+const __dirname    = path.dirname(fileURLToPath(import.meta.url));
+const ROOT         = path.join(__dirname, '..');
+const WORLDS_DIR   = path.join(ROOT, 'user', 'worlds');
+const SETTINGS_PATH = path.join(ROOT, 'user', 'settings.json');
+const PORT         = process.env.PORT ?? 3000;
 const REGION_BITS = 3;                 // 2^3 = 8 chunk columns per axis per region
 const CHUNK_VOLUME = 163840;           // 16 × 640 × 16 voxels per chunk column
 
@@ -50,9 +56,10 @@ fs.mkdirSync(WORLDS_DIR, { recursive: true });
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function worldDir(id)      { return path.join(WORLDS_DIR, id); }
-function worldMetaPath(id) { return path.join(worldDir(id), 'world.json'); }
-function regionsDir(id)    { return path.join(worldDir(id), 'regions'); }
+function worldDir(id)         { return path.join(WORLDS_DIR, id); }
+function worldMetaPath(id)    { return path.join(worldDir(id), 'world.json'); }
+function playerStatePath(id)  { return path.join(worldDir(id), 'player.json'); }
+function regionsDir(id)       { return path.join(worldDir(id), 'regions'); }
 
 function regionPath(id, rx, rz) {
     return path.join(regionsDir(id), `${rx},${rz}.wwr`);
@@ -153,13 +160,14 @@ app.get('/api/worlds', (_req, res) => res.json(listWorlds()));
 
 // Create world
 app.post('/api/worlds', (req, res) => {
-    const { name = 'New World', seed } = req.body ?? {};
+    const { name = 'New World', seed, gameMode = 'SURVIVAL' } = req.body ?? {};
     const id  = crypto.randomUUID();
     const now = Date.now();
     const meta = {
         id, name: String(name).trim() || 'New World',
         seed: seed != null ? Number(seed) : (Math.random() * 2147483647 | 0),
         created: now, lastPlayed: now,
+        gameMode: ['SURVIVAL','CREATIVE','SPECTATOR'].includes(gameMode) ? gameMode : 'SURVIVAL',
         playerPos: { x: 0, y: 100, z: 0 },
     };
     fs.mkdirSync(worldDir(id), { recursive: true });
@@ -193,7 +201,7 @@ app.post('/api/worlds/:id/duplicate', (req, res) => {
     res.status(201).json(meta);
 });
 
-// Update player position
+// Legacy player position (kept for backwards compat)
 app.put('/api/worlds/:id/player-pos', (req, res) => {
     const meta = readMeta(req.params.id);
     if (!meta) return res.status(404).json({ error: 'Not found' });
@@ -202,6 +210,67 @@ app.put('/api/worlds/:id/player-pos', (req, res) => {
     meta.lastPlayed = Date.now();
     writeMeta(req.params.id, meta);
     res.json({ ok: true });
+});
+
+// Save full player state
+app.put('/api/worlds/:id/player-state', (req, res) => {
+    const meta = readMeta(req.params.id);
+    if (!meta) return res.status(404).json({ error: 'Not found' });
+    const state = req.body ?? {};
+    if (state.position) meta.playerPos = state.position;
+    meta.lastPlayed = Date.now();
+    writeMeta(req.params.id, meta);
+    fs.writeFileSync(playerStatePath(req.params.id), JSON.stringify(state, null, 2));
+    res.json({ ok: true });
+});
+
+// Load full player state
+app.get('/api/worlds/:id/player-state', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    try {
+        const raw = fs.readFileSync(playerStatePath(req.params.id), 'utf8');
+        res.json(JSON.parse(raw));
+    } catch { res.json(null); }
+});
+
+// Update world settings (game mode etc.)
+app.put('/api/worlds/:id/settings', (req, res) => {
+    const meta = readMeta(req.params.id);
+    if (!meta) return res.status(404).json({ error: 'Not found' });
+    const { gameMode } = req.body ?? {};
+    if (gameMode && ['SURVIVAL','CREATIVE','SPECTATOR'].includes(gameMode)) meta.gameMode = gameMode;
+    writeMeta(req.params.id, meta);
+    res.json({ ok: true });
+});
+
+// Global player settings
+function readSettings() {
+    try { return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')); }
+    catch { return {}; }
+}
+
+app.get('/api/settings', (_req, res) => res.json(readSettings()));
+
+app.put('/api/settings', (req, res) => {
+    const cur = readSettings();
+    const merged = { ...cur, ...(req.body ?? {}) };
+    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2));
+    res.json({ ok: true });
+});
+
+// Data manifest — lists all JSON files in data/blocks/, items/, biomes/, entities/, recipes/
+app.get('/api/data/manifest', (_req, res) => {
+    const dataDir = path.join(ROOT, 'data');
+    const cats = ['blocks', 'items', 'biomes', 'entities', 'recipes'];
+    const manifest = {};
+    for (const cat of cats) {
+        const dir = path.join(dataDir, cat);
+        manifest[cat] = fs.existsSync(dir)
+            ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => `data/${cat}/${f}`)
+            : [];
+    }
+    res.json(manifest);
 });
 
 // ── HTTP + WebSocket server ───────────────────────────────────────────────────

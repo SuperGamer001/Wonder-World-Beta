@@ -389,8 +389,8 @@ img.logo.game {
     border-color: #88cc88;
 }
 
-/* ── Inverted color crosshair in the center of the screen ─────────────────── */
-/* Inverted color crosshair in the center of the screen */
+/* ── Crosshair ────────────────────────────────────────────────────────────── */
+
 #crosshair {
     position: absolute;
     top: 50%;
@@ -401,4 +401,421 @@ img.logo.game {
     background-color: transparent;
     border: 0.2vw solid #ffffff;
     border-radius: 50%;
+}
+
+/* ── Damage overlays ──────────────────────────────────────────────────────── */
+
+#damageVignette {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 500;
+    opacity: 0;
+    background: radial-gradient(ellipse at center, transparent 45%, rgba(180,0,0,0.85) 100%);
+    transition: opacity 0.05s linear;
+}
+
+#actionLines {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 501;
+    opacity: 0;
+}
+
+#actionLines.flash {
+    animation: actionFlash 0.25s ease-out forwards;
+}
+
+@keyframes actionFlash {
+    0%   { opacity: 1; background: repeating-conic-gradient(rgba(255,0,0,0.18) 0deg 6deg, transparent 6deg 18deg) center/cover; }
+    100% { opacity: 0; }
+}
+
+/* ── Attack charge bar ────────────────────────────────────────────────────── */
+
+#attackChargeBar {
+    position: absolute;
+    bottom: 4.5vw;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 12vw;
+    height: 0.5vw;
+    background: rgba(0,0,0,0.5);
+    border-radius: 0.25vw;
+    overflow: hidden;
+    z-index: 100;
+}
+
+#attackChargeFill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, #cc4400, #ffaa00);
+    border-radius: 0.25vw;
+    transition: width 0.05s linear;
+}
+
+/* ── Death screen ─────────────────────────────────────────────────────────── */
+
+#DeathScreen {
+    position: absolute;
+    inset: 0;
+    background: rgba(60, 0, 0, 0.82);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 600;
+}
+
+.deathTitle {
+    font-size: 5vw;
+    color: #ff4444;
+    font-weight: bold;
+    margin-bottom: 1vw;
+    text-shadow: 0 0 2vw #ff0000;
+}
+
+.deathSub {
+    font-size: 1.4vw;
+    color: #ccaaaa;
+    margin-bottom: 3vw;
+}
+
+/* ── Interactive block panel (crafting, chests, etc.) ─────────────────────── */
+
+#InteractivePanel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 60vw;
+    max-height: 80vh;
+    background: rgba(10, 10, 10, 0.96);
+    border: 0.15vw solid #444;
+    border-radius: 1vw;
+    display: flex;
+    flex-direction: column;
+    z-index: 550;
+    overflow: hidden;
+    padding: 1.5vw;
+    gap: 1vw;
+}
+
+.interactiveHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 0.1vw solid #333;
+    padding-bottom: 0.8vw;
+    font-size: 1.8vw;
+    color: #fff;
+}
+
+#craftingContainer {
+    display: flex;
+    gap: 1.5vw;
+    flex: 1;
+    overflow: hidden;
+}
+
+#recipeList {
+    width: 40%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4vw;
+}
+
+.recipeListItem {
+    padding: 0.6vw 1vw;
+    background: rgba(50,50,50,0.8);
+    border-radius: 0.4vw;
+    color: #ddd;
+    font-size: 1.1vw;
+    cursor: pointer;
+    border: 0.1vw solid transparent;
+}
+
+.recipeListItem:hover  { background: rgba(80,80,80,0.8); }
+.recipeListItem.active { border-color: #88cc88; color: #fff; }
+.recipeListItem.locked { color: #666; cursor: default; }
+
+#recipeDetail {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.6vw;
+}
+
+#recipeDetailName {
+    font-size: 1.6vw;
+    color: #fff;
+    font-weight: bold;
+}
+
+#recipeDetailIngredients {
+    font-size: 1.1vw;
+    color: #bbb;
+    line-height: 1.8;
+    flex: 1;
+}
+
+/* ── Settings screen ──────────────────────────────────────────────────────── */
+
+#SettingsScreen {
+    position: fixed;
+    inset: 0;
+    z-index: 9500;
+    background: rgba(0, 0, 0, 0.88);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow-y: auto;
+    padding: 2vw 0;
+}
+
+.settingsTabs {
+    display: flex;
+    gap: 0.5vw;
+    margin-bottom: 1.5vw;
+}
+
+.settingsTab {
+    padding: 0.6vw 2vw;
+    background: #2a2a2a;
+    color: #aaa;
+    border-radius: 0.4vw 0.4vw 0 0;
+    cursor: pointer;
+    font-size: 1.2vw;
+    border-bottom: 0.2vw solid transparent;
+}
+
+.settingsTab.active {
+    background: #444;
+    color: #fff;
+    border-bottom-color: #88cc88;
+}
+
+.settingsPanel {
+    display: flex;
+    flex-direction: column;
+    gap: 1vw;
+    width: 40vw;
+    background: rgba(0,0,0,0.7);
+    border-radius: 0 0.5vw 0.5vw 0.5vw;
+    padding: 1.5vw 2vw;
+}
+
+.settingsRow {
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    color: #ddd;
+    font-size: 1.1vw;
+}
+
+.settingsLabel { flex: 1; }
+
+.settingsSlider {
+    width: 12vw;
+    accent-color: #88cc88;
+}
+
+.settingsValue {
+    width: 3vw;
+    text-align: right;
+    color: #88cc88;
+    font-size: 1.1vw;
+}
+
+/* ── Inventory Screen ─────────────────────────────────────────────────────── */
+
+#InventoryScreen {
+    position: absolute;
+    inset: 0;
+    z-index: 560;
+    background: rgba(5, 5, 10, 0.93);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1.5vw;
+    user-select: none;
+}
+
+.invHeader {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 72vw;
+    font-size: 1.8vw;
+    color: #fff;
+    margin-bottom: 0.8vw;
+    border-bottom: 0.1vw solid #333;
+    padding-bottom: 0.5vw;
+}
+
+.invBody {
+    display: flex;
+    gap: 1.5vw;
+    width: 72vw;
+    max-height: 80vh;
+    overflow: hidden;
+}
+
+.invEquipCol {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3vw;
+    min-width: 11vw;
+}
+
+.invItemsCol {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5vw;
+    overflow: hidden;
+}
+
+.invSectionTitle {
+    color: #aaa;
+    font-size: 0.9vw;
+    text-transform: uppercase;
+    letter-spacing: 0.08vw;
+    margin-bottom: 0.2vw;
+}
+
+/* ── Grid slots (inventory + hotbar) ── */
+
+.invSlotsGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25vw;
+    overflow-y: auto;
+    max-height: 42vh;
+    align-content: flex-start;
+}
+
+.invHotbarSection {
+    border-top: 0.1vw solid #333;
+    padding-top: 0.5vw;
+    margin-top: 0.2vw;
+}
+
+.invGridSlot {
+    position: relative;
+    width: 3.6vw;
+    height: 3.6vw;
+    background: rgba(35,35,35,0.9);
+    border: 0.12vw solid #555;
+    border-radius: 0.2vw;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-sizing: border-box;
+    transition: border-color 0.08s;
+    overflow: visible;
+}
+
+.invGridSlot:hover {
+    border-color: #aaa;
+    background: rgba(60,60,60,0.9);
+}
+
+.invGridSlot.inv-can-drop {
+    border-color: #88a;
+}
+
+.invGridSlot.inv-held {
+    border-color: #f80;
+    background: rgba(80,50,10,0.7);
+}
+
+.invGridSlot img {
+    width: 2.6vw;
+    height: 2.6vw;
+    object-fit: contain;
+    image-rendering: pixelated;
+    pointer-events: none;
+}
+
+.invGridCount {
+    position: absolute;
+    bottom: 0.1vw;
+    right: 0.2vw;
+    font-size: 0.75vw;
+    color: #fff;
+    text-shadow: 0 0 2px #000, 1px 1px 0 #000;
+    pointer-events: none;
+    line-height: 1;
+}
+
+.invGridKeybind {
+    position: absolute;
+    top: 0.1vw;
+    left: 0.2vw;
+    font-size: 0.65vw;
+    color: #888;
+    pointer-events: none;
+    line-height: 1;
+}
+
+/* Equipment slots (taller, labelled) */
+.invGridSlot[data-slot-type="equip"] {
+    width: 10.5vw;
+    height: 2.8vw;
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 0.4vw;
+    padding: 0 0.5vw;
+    background: rgba(25,25,45,0.9);
+    border-color: #446;
+}
+
+.invGridSlot[data-slot-type="equip"] img {
+    width: 2vw;
+    height: 2vw;
+}
+
+.invGridSlot[data-slot-type="equip"]::before {
+    content: attr(data-slot-index);
+    font-size: 0.8vw;
+    color: #666;
+    min-width: 3.5vw;
+    text-transform: capitalize;
+}
+
+/* Cursor item (follows mouse) */
+#invCursorItem {
+    position: fixed;
+    pointer-events: none;
+    z-index: 900;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    position: fixed;
+}
+
+/* ── World Settings Modal ─────────────────────────────────────────────────── */
+
+#WorldSettingsModal {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(0,0,0,0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9000;
+}
+
+#WorldSettingsModal .popup {
+    position: static;
+    transform: none;
+    gap: 0.8vw;
+    padding: 2.5vw 3vw;
 }

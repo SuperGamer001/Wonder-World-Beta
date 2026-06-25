@@ -1,0 +1,17 @@
+{
+  "id": 11,
+  "name": "GOLD_ORE",
+  "color": [
+    0.7,
+    0.62,
+    0.2
+  ],
+  "hardness": 3,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "raw_gold",
+      "count": 1
+    }
+  ]
+}

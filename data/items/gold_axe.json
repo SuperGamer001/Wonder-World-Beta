@@ -1,0 +1,12 @@
+{
+  "id": "gold_axe",
+  "name": "Gold Axe",
+  "type": "tool",
+  "subtype": "axe",
+  "material": "gold",
+  "weight": 2,
+  "maxStack": 1,
+  "durability": 33,
+  "damage": 5,
+  "attackChargeSpeed": 1.2
+}
