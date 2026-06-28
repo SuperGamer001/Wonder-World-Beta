@@ -19,6 +19,9 @@ const BLOCK_TYPES = {
     GOLD_ORE: 11, SNOW: 12, ICE: 13, SANDSTONE: 14, CLAY: 15,
     SNOW_DIRT: 16, GRANITE: 17, DIORITE: 18, BEDROCK: 19,
     CRAFTING_TABLE: 20, OVEN: 21, SMELTER: 22, CHEST: 23, ANVIL: 24,
+    WOODEN_PLANKS: 25, STONE_BRICKS: 26, BRICKS: 27, GLASS: 28,
+    GOLD_BLOCK: 29, IRON_BLOCK: 30, COAL_BLOCK: 31, WOOL_BLOCK: 32,
+    POLISHED_GRANITE: 33, POLISHED_DIORITE: 34, MOSSY_STONE: 35,
 };
 
 let titleBG = null;
@@ -66,7 +69,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     bindEvents();
 
     await loadAllGamePacks();
+    _buildBlockColorIcons();
     applyLoadedAssets();
+    applyPlayerSettings(getSettings());   // apply accessibility/HUD prefs from the start
 
     DOM.appLoadingContainer.classList.add("hidden");
     DOM.titleScreen.classList.remove("hidden");
@@ -146,18 +151,34 @@ function cacheDOM() {
 
     DOM.inventoryScreen   = document.querySelector("#InventoryScreen");
     DOM.invCloseBtn       = document.querySelector("#invCloseBtn");
+    DOM.invCraftBtn       = document.querySelector("#invCraftBtn");
     DOM.invSlots          = document.querySelector("#invSlots");
     DOM.invHotbarRow      = document.querySelector("#invHotbarRow");
     DOM.invEquip          = document.querySelector("#invEquip");
     DOM.invWeightLabel    = document.querySelector("#invWeightLabel");
+
+    DOM.creativeInvPanel  = document.querySelector("#CreativeInventoryPanel");
+    DOM.creativeInvGrid   = document.querySelector("#creativeInvGrid");
+    DOM.creativeInvClose  = document.querySelector("#creativeInvClose");
+    DOM.creativeInvFilter = document.querySelector("#creativeInvFilter");
 }
 
 function bindEvents() {
     DOM.startButton.addEventListener("click", showWorldList);
     DOM.createWorldBtn.addEventListener("click", showCreateWorldModal);
+
+    // Click the game to re-acquire the pointer if we're playing but somehow
+    // unlocked (e.g. a re-lock was momentarily blocked after closing a menu).
+    DOM.gameScreen?.addEventListener('mousedown', () => {
+        if (gameStarted && !_menuOpen && !paused &&
+            document.pointerLockElement !== DOM.gameScreen) {
+            DOM.gameScreen.requestPointerLock();
+        }
+    });
     DOM.worldListBackBtn.addEventListener("click", () => {
         DOM.worldListScreen.classList.add("hidden");
         DOM.titleScreen.classList.remove("hidden");
+        DOM.titleLogo?.classList.remove("hidden");
     });
 
     DOM.worldDetailCloseBtn.addEventListener("click", () => DOM.worldDetailModal.classList.add("hidden"));
@@ -194,6 +215,10 @@ function bindEvents() {
     DOM.pauseSettingsBtn?.addEventListener("click", () => openSettings('pause'));
     DOM.settingsBackBtn.addEventListener("click", closeSettings);
 
+    document.getElementById('titleHowToBtn')?.addEventListener('click', () => openHowToPlay('title'));
+    document.getElementById('pauseHowToBtn')?.addEventListener('click', () => openHowToPlay('pause'));
+    document.getElementById('howToBackBtn')?.addEventListener('click', closeHowToPlay);
+
     DOM.settingGameModeApply?.addEventListener("click", applyInGameModeChange);
 
     DOM.respawnBtn?.addEventListener("click", () => {
@@ -203,13 +228,17 @@ function bindEvents() {
 
     DOM.interactivePanelClose?.addEventListener("click", closeInteractivePanel);
 
-    // Settings sliders — live preview
-    document.getElementById('settingSensitivity')?.addEventListener('input', e => {
-        document.getElementById('settingSensitivityVal').textContent = parseFloat(e.target.value).toFixed(1);
-    });
-    document.getElementById('settingRenderDist')?.addEventListener('input', e => {
-        document.getElementById('settingRenderDistVal').textContent = e.target.value;
-    });
+    // Settings — every control commits + applies live.
+    const settingIds = [
+        'settingSensitivity', 'settingInvertY', 'settingFov', 'settingRenderDist',
+        'settingBrightness', 'settingShowCoords', 'settingCrosshair', 'settingShowFps',
+        'settingColorblind', 'settingHighContrast', 'settingReduceMotion', 'settingLargeText',
+    ];
+    for (const id of settingIds) {
+        document.getElementById(id)?.addEventListener('input', commitSettingsFromForm);
+        document.getElementById(id)?.addEventListener('change', commitSettingsFromForm);
+    }
+    document.getElementById('settingsResetBtn')?.addEventListener('click', resetSettings);
 
     // World events from world.js
     window.addEventListener('ww_playerDied', () => {
@@ -226,7 +255,10 @@ function bindEvents() {
         updateHotbarSelection(e.detail.slot);
     });
 
-    window.addEventListener('ww_itemPickup', () => { refreshHotbarUI(); });
+    window.addEventListener('ww_itemPickup', () => {
+        refreshHotbarUI();
+        if (!DOM.inventoryScreen?.classList.contains('hidden')) _renderInventory();
+    });
 
     window.addEventListener('ww_toggleInventory', () => {
         if (DOM.inventoryScreen?.classList.contains('hidden')) openInventory();
@@ -235,8 +267,35 @@ function bindEvents() {
 
     DOM.invCloseBtn?.addEventListener('click', closeInventory);
 
+    DOM.invCraftBtn?.addEventListener('click', () => {
+        closeInventory(true);  // suppress pointer lock — the next panel takes over
+        if (activeWorld?.gameMode === 'CREATIVE') openCreativeInventory();
+        else openHandCraft();
+    });
+
+    DOM.creativeInvClose?.addEventListener('click', closeCreativeInventory);
+
+    DOM.creativeInvFilter?.addEventListener('input', () => {
+        _populateCreativeGrid(DOM.creativeInvFilter.value.trim().toLowerCase());
+    });
+
     window.addEventListener('ww_openInteractive', (e) => {
         openInteractivePanel(e.detail);
+    });
+
+    window.addEventListener('ww_toggleCraftMenu', (e) => {
+        const mode = e.detail?.gameMode ?? activeWorld?.gameMode ?? 'SURVIVAL';
+        if (mode === 'CREATIVE') {
+            if (DOM.creativeInvPanel?.classList.contains('hidden')) openCreativeInventory();
+            else closeCreativeInventory();
+        } else {
+            openHandCraft();
+        }
+    });
+
+    window.addEventListener('ww_gameModeChange', (e) => {
+        if (activeWorld) activeWorld.gameMode = e.detail.gameMode;
+        _updateInvCraftBtn();
     });
 }
 
@@ -244,9 +303,78 @@ function bindEvents() {
    EVENT LISTENERS
 ========================================================= */
 
-window.addEventListener("blur", () => { paused = true; });
+window.addEventListener("blur", () => { if (gameStarted && !_menuOpen) paused = true; });
 window.addEventListener("keydown", (e) => { KEYS[e.code] = true; });
 window.addEventListener("keyup",   (e) => { KEYS[e.code] = false; });
+
+// ── Pause / menu / pointer-lock coordination ──────────────────────────────────
+// Pause is driven by pointer lock, not by polling. Losing the lock with no menu
+// open means the player pressed Esc to leave gameplay → pause. Regaining the
+// lock → resume. A menu being open suppresses the pause (it released the lock
+// intentionally).
+document.addEventListener('pointerlockchange', () => {
+    if (!gameStarted) return;
+    const locked = document.pointerLockElement === DOM.gameScreen;
+    if (locked)            paused = false;
+    else if (!_menuOpen)   paused = true;
+});
+
+// Re-acquiring pointer lock can fail if requested during the browser's brief
+// post-Esc cooldown. Retry with backoff until it sticks (or we no longer want
+// it), and also retry whenever a pointerlockerror fires.
+let _lockRetryTimer = null;
+function requestGameLock() {
+    clearTimeout(_lockRetryTimer);
+    let attempts = 0;
+    const tryLock = () => {
+        if (!gameStarted || _menuOpen) return;                           // no longer wanted
+        if (document.pointerLockElement === DOM.gameScreen) return;      // already locked
+        DOM.gameScreen?.requestPointerLock();
+        if (++attempts < 15) _lockRetryTimer = setTimeout(tryLock, 250);
+    };
+    tryLock();
+}
+document.addEventListener('pointerlockerror', () => {
+    if (gameStarted && !_menuOpen && !paused) {
+        clearTimeout(_lockRetryTimer);
+        _lockRetryTimer = setTimeout(requestGameLock, 300);
+    }
+});
+
+// Escape: close an open menu (without opening pause); otherwise toggle pause.
+// While the pointer is locked the browser swallows this keydown and exits lock
+// itself — that case is handled by the pointerlockchange listener above.
+window.addEventListener('keydown', (e) => {
+    if (e.code !== 'Escape' || !gameStarted) return;
+    const howTo = document.getElementById('HowToPlayScreen');
+    if (howTo && !howTo.classList.contains('hidden')) { e.preventDefault(); closeHowToPlay(); return; }
+    if (DOM.settingsScreen && !DOM.settingsScreen.classList.contains('hidden')) {
+        e.preventDefault(); closeSettings(); return;
+    }
+    if (_menuOpen)   { e.preventDefault(); closeAnyMenu(); return; }
+    if (paused)      { resumeGame(); }
+});
+
+// ── "Saving World..." indicator ───────────────────────────────────────────────
+// Ref-counted so overlapping saves (autosave + unload, etc.) keep the sign up
+// until the last one finishes. Driven by ww_saving events from world.js.
+let _savingCount = 0;
+window.addEventListener('ww_saving', (e) => {
+    if (e.detail?.active) _savingCount++;
+    else                  _savingCount = Math.max(0, _savingCount - 1);
+    const el = document.getElementById('savingIndicator');
+    if (el) el.classList.toggle('hidden', _savingCount === 0);
+});
+
+// Close whichever in-game menu is currently open and return to play.
+function closeAnyMenu() {
+    if (DOM.inventoryScreen && !DOM.inventoryScreen.classList.contains('hidden'))   { closeInventory();        return; }
+    if (DOM.creativeInvPanel && !DOM.creativeInvPanel.classList.contains('hidden')) { closeCreativeInventory(); return; }
+    if (DOM.interactivePanel && !DOM.interactivePanel.classList.contains('hidden')) { closeInteractivePanel();  return; }
+    // Fallback — never leave the game stuck in a phantom "menu open" state.
+    _menuOpen = false;
+    requestGameLock();
+}
 
 window.addEventListener("beforeunload", (event) => {
     if (!safeToClose) {
@@ -260,71 +388,173 @@ window.addEventListener("beforeunload", (event) => {
    SETTINGS
 ========================================================= */
 
+// ── Player settings model ─────────────────────────────────────────────────────
+// Player settings are cosmetic / quality-of-life only — they never change game
+// mechanics (those live in per-world settings).
+
+const DEFAULT_SETTINGS = {
+    sensitivity: 1.0,
+    invertY: false,
+    fov: 75,
+    renderDistance: 12,
+    brightness: 1.0,
+    showCoords: true,
+    crosshair: true,
+    showFps: false,
+    colorblind: 'none',
+    highContrast: false,
+    reduceMotion: false,
+    largeText: false,
+};
+
+function getSettings() {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('ww_settings') ?? '{}'); } catch { /* corrupt */ }
+    return { ...DEFAULT_SETTINGS, ...saved };
+}
+
+function saveSettings(s) {
+    localStorage.setItem('ww_settings', JSON.stringify(s));
+}
+
+// Apply settings to the page (accessibility/HUD) and forward the gameplay-facing
+// ones (sensitivity, FOV, render distance) to the engine.
+function applyPlayerSettings(s) {
+    const cb = {
+        none:        'none',
+        protanopia:  'saturate(1.25) hue-rotate(-18deg)',
+        deuteranopia:'saturate(1.25) hue-rotate(18deg)',
+        tritanopia:  'saturate(1.3) hue-rotate(40deg)',
+    }[s.colorblind] ?? 'none';
+    const filter = `brightness(${s.brightness})` + (cb !== 'none' ? ` ${cb}` : '');
+    document.body.style.filter = filter === 'brightness(1)' ? '' : filter;
+
+    document.body.classList.toggle('a11y-contrast',  !!s.highContrast);
+    document.body.classList.toggle('a11y-reduce',    !!s.reduceMotion);
+    document.body.classList.toggle('a11y-large-text',!!s.largeText);
+
+    document.getElementById('playerCoords')?.classList.toggle('forceHidden', !s.showCoords);
+    document.getElementById('crosshair')?.classList.toggle('forceHidden', !s.crosshair);
+    const fpsEl = document.getElementById('fpsCounter');
+    if (fpsEl) fpsEl.classList.toggle('hidden', !s.showFps);
+    _fpsEnabled = !!s.showFps;
+
+    callWorldJS('applySettings', {
+        sensitivity:    s.sensitivity,
+        invertY:        s.invertY,
+        fov:            s.fov,
+        renderDistance: s.renderDistance,
+    });
+}
+
 function openSettings(origin) {
     _settingsOrigin = origin;
 
-    const worldPanel  = document.getElementById('settingsPanelWorld');
-    const tabWorld    = document.getElementById('tabWorld');
-    const inGame      = origin === 'pause';
+    const tabWorld = document.getElementById('tabWorld');
+    const inGame   = origin === 'pause';
 
-    // World settings tab only makes sense while in a game
+    // World tab only makes sense while in a game.
     if (tabWorld) tabWorld.style.display = inGame ? '' : 'none';
-    if (worldPanel) {
-        if (!inGame) {
-            worldPanel.classList.add('hidden');
-            document.getElementById('settingsPanelPlayer')?.classList.remove('hidden');
-            document.getElementById('tabPlayer')?.classList.add('active');
-            tabWorld?.classList.remove('active');
-        } else if (activeWorld) {
-            DOM.settingGameMode.value = activeWorld.gameMode ?? 'SURVIVAL';
-        }
+    switchSettingsTab('player');
+    if (inGame && activeWorld) {
+        if (DOM.settingGameMode)  DOM.settingGameMode.value  = activeWorld.gameMode  ?? 'SURVIVAL';
+        const diffEl = document.getElementById('settingDifficulty');
+        if (diffEl) diffEl.value = activeWorld.difficulty ?? 'NORMAL';
     }
 
-    loadPlayerSettings();
+    populateSettingsForm();
 
-    if (origin === 'title') {
-        DOM.titleScreen.classList.add("hidden");
-    } else {
-        DOM.pauseScreen.classList.add("hidden");
-    }
+    if (origin === 'title') DOM.titleScreen.classList.add("hidden");
+    else                    DOM.pauseScreen.classList.add("hidden");
     DOM.settingsScreen.classList.remove("hidden");
 }
 
 function closeSettings() {
     DOM.settingsScreen.classList.add("hidden");
-    savePlayerSettings();
-    if (_settingsOrigin === 'pause') {
-        DOM.pauseScreen.classList.remove("hidden");
-    } else {
-        DOM.titleScreen.classList.remove("hidden");
-    }
+    if (_settingsOrigin === 'pause') DOM.pauseScreen.classList.remove("hidden");
+    else                             DOM.titleScreen.classList.remove("hidden");
 }
 
-function loadPlayerSettings() {
-    const sens   = parseFloat(localStorage.getItem('ww_sensitivity') ?? '1.0');
-    const rDist  = parseInt(localStorage.getItem('ww_renderDist') ?? '12');
-    const sensEl = document.getElementById('settingSensitivity');
-    const distEl = document.getElementById('settingRenderDist');
-    if (sensEl) { sensEl.value = sens; document.getElementById('settingSensitivityVal').textContent = sens.toFixed(1); }
-    if (distEl) { distEl.value = rDist; document.getElementById('settingRenderDistVal').textContent = rDist; }
+// ── How To Play ───────────────────────────────────────────────────────────────
+let _howToOrigin = 'title';
+function openHowToPlay(origin) {
+    _howToOrigin = origin;
+    if (origin === 'title') DOM.titleScreen.classList.add("hidden");
+    else                    DOM.pauseScreen.classList.add("hidden");
+    document.getElementById('HowToPlayScreen')?.classList.remove("hidden");
+}
+function closeHowToPlay() {
+    document.getElementById('HowToPlayScreen')?.classList.add("hidden");
+    if (_howToOrigin === 'pause') DOM.pauseScreen.classList.remove("hidden");
+    else                          DOM.titleScreen.classList.remove("hidden");
 }
 
-function savePlayerSettings() {
-    const sens  = parseFloat(document.getElementById('settingSensitivity')?.value ?? '1');
-    const rDist = parseInt(document.getElementById('settingRenderDist')?.value ?? '12');
-    localStorage.setItem('ww_sensitivity', sens);
-    localStorage.setItem('ww_renderDist', rDist);
+// Push current settings values into the form controls.
+function populateSettingsForm() {
+    const s = getSettings();
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+    const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    set('settingSensitivity', s.sensitivity); chk('settingInvertY', s.invertY);
+    set('settingFov', s.fov);                 set('settingRenderDist', s.renderDistance);
+    set('settingBrightness', s.brightness);
+    chk('settingShowCoords', s.showCoords);   chk('settingCrosshair', s.crosshair);
+    chk('settingShowFps', s.showFps);
+    set('settingColorblind', s.colorblind);
+    chk('settingHighContrast', s.highContrast);
+    chk('settingReduceMotion', s.reduceMotion);
+    chk('settingLargeText', s.largeText);
+    _updateSettingLabels();
+}
+
+function _updateSettingLabels() {
+    const v = id => document.getElementById(id)?.value;
+    const t = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+    t('settingSensitivityVal', parseFloat(v('settingSensitivity')).toFixed(1));
+    t('settingFovVal', v('settingFov'));
+    t('settingRenderDistVal', v('settingRenderDist'));
+    t('settingBrightnessVal', `${Math.round(parseFloat(v('settingBrightness')) * 100)}%`);
+}
+
+// Read the form, persist, and apply live (called on every input change).
+function commitSettingsFromForm() {
+    const num = id => parseFloat(document.getElementById(id)?.value);
+    const on  = id => !!document.getElementById(id)?.checked;
+    const s = {
+        sensitivity:    num('settingSensitivity'),
+        invertY:        on('settingInvertY'),
+        fov:            num('settingFov'),
+        renderDistance: Math.round(num('settingRenderDist')),
+        brightness:     num('settingBrightness'),
+        showCoords:     on('settingShowCoords'),
+        crosshair:      on('settingCrosshair'),
+        showFps:        on('settingShowFps'),
+        colorblind:     document.getElementById('settingColorblind')?.value ?? 'none',
+        highContrast:   on('settingHighContrast'),
+        reduceMotion:   on('settingReduceMotion'),
+        largeText:      on('settingLargeText'),
+    };
+    saveSettings(s);
+    _updateSettingLabels();
+    applyPlayerSettings(s);
+}
+
+function resetSettings() {
+    saveSettings({ ...DEFAULT_SETTINGS });
+    populateSettingsForm();
+    applyPlayerSettings(getSettings());
 }
 
 async function applyInGameModeChange() {
-    const mode = DOM.settingGameMode?.value ?? 'SURVIVAL';
     if (!activeWorld) return;
-    activeWorld.gameMode = mode;
+    const mode = DOM.settingGameMode?.value ?? 'SURVIVAL';
+    const difficulty = document.getElementById('settingDifficulty')?.value ?? 'NORMAL';
+    activeWorld.gameMode   = mode;
+    activeWorld.difficulty = difficulty;
     try {
         await fetch(`${SERVER_URL}/api/worlds/${activeWorld.id}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameMode: mode }),
+            body: JSON.stringify({ gameMode: mode, difficulty }),
         });
     } catch { /* offline */ }
     callWorldJS("setGameMode", { gameMode: mode });
@@ -345,6 +575,8 @@ window.switchSettingsTab = function(tab) {
 function openWorldSettingsModal() {
     if (!activeWorld) return;
     DOM.worldSettingsGameMode.value = activeWorld.gameMode ?? 'SURVIVAL';
+    const diffEl = document.getElementById('worldSettingsDifficulty');
+    if (diffEl) diffEl.value = activeWorld.difficulty ?? 'NORMAL';
     DOM.worldDetailModal.classList.add("hidden");
     DOM.worldSettingsModal.classList.remove("hidden");
 }
@@ -352,12 +584,14 @@ function openWorldSettingsModal() {
 async function saveWorldSettings() {
     if (!activeWorld) return;
     const mode = DOM.worldSettingsGameMode.value;
-    activeWorld.gameMode = mode;
+    const difficulty = document.getElementById('worldSettingsDifficulty')?.value ?? 'NORMAL';
+    activeWorld.gameMode   = mode;
+    activeWorld.difficulty = difficulty;
     try {
         await fetch(`${SERVER_URL}/api/worlds/${activeWorld.id}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameMode: mode }),
+            body: JSON.stringify({ gameMode: mode, difficulty }),
         });
     } catch { /* offline */ }
     DOM.worldSettingsModal.classList.add("hidden");
@@ -370,6 +604,7 @@ async function saveWorldSettings() {
 
 async function showWorldList() {
     DOM.titleScreen.classList.add("hidden");
+    DOM.titleLogo?.classList.add("hidden");   // hide the big logo behind the world list
     DOM.worldListScreen.classList.remove("hidden");
     DOM.worldListContainer.innerHTML = '<div style="color:#aaa;font-size:1.2vw;text-align:center;padding:2vw;">Loading worlds...</div>';
 
@@ -394,10 +629,15 @@ function renderWorldList(worlds) {
         card.className = 'worldCard';
         const lastPlayed = world.lastPlayed ? new Date(world.lastPlayed).toLocaleDateString() : 'Never';
         const mode = world.gameMode ? ` &nbsp;|&nbsp; ${world.gameMode.charAt(0) + world.gameMode.slice(1).toLowerCase()}` : '';
+        // Cache-busted thumbnail; hidden if the world has no screenshot yet.
+        const thumb = `${SERVER_URL}/user/worlds/${world.id}/screenshot.jpg?t=${world.lastPlayed ?? 0}`;
         card.innerHTML = `
-            <div class="worldCardInfo">
-                <div class="worldCardName">${escapeHtml(world.name)}</div>
-                <div class="worldCardMeta">Seed: ${world.seed}${mode} &nbsp;|&nbsp; Last played: ${lastPlayed}</div>
+            <div class="worldCardLeft">
+                <img class="worldCardThumb" src="${thumb}" alt="" onerror="this.classList.add('noThumb')">
+                <div class="worldCardInfo">
+                    <div class="worldCardName">${escapeHtml(world.name)}</div>
+                    <div class="worldCardMeta">Seed: ${world.seed}${mode} &nbsp;|&nbsp; Last played: ${lastPlayed}</div>
+                </div>
             </div>
             <div class="worldCardPlay">▶ Play</div>
         `;
@@ -425,16 +665,17 @@ function showCreateWorldModal() {
 }
 
 async function createWorld() {
-    const name     = DOM.newWorldName.value.trim() || 'New World';
-    const seedRaw  = DOM.newWorldSeed.value.trim();
-    const seed     = seedRaw !== '' ? (parseInt(seedRaw, 10) || hashString(seedRaw)) : undefined;
-    const gameMode = DOM.newWorldGameMode.value || 'SURVIVAL';
+    const name       = DOM.newWorldName.value.trim() || 'New World';
+    const seedRaw    = DOM.newWorldSeed.value.trim();
+    const seed       = seedRaw !== '' ? (parseInt(seedRaw, 10) || hashString(seedRaw)) : undefined;
+    const gameMode   = DOM.newWorldGameMode.value || 'SURVIVAL';
+    const difficulty = document.getElementById('newWorldDifficulty')?.value || 'NORMAL';
 
     try {
         const res = await fetch(`${SERVER_URL}/api/worlds`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, seed, gameMode }),
+            body: JSON.stringify({ name, seed, gameMode, difficulty }),
         });
         if (!res.ok) throw new Error('Server error');
         const newWorld = await res.json();
@@ -453,6 +694,13 @@ async function createWorld() {
 function startWorld(world) {
     activeWorld = world;
     gameStarted = true;
+    paused      = false;
+    _menuOpen   = false;
+    // Reset the frame clock so the first gameLoop() of this world starts fresh.
+    // Otherwise the leftover timestamp from a previous world makes the first dt
+    // compute as NaN (undefined - oldTimestamp), which corrupts player physics
+    // into NaN positions and stalls chunk generation until a page refresh.
+    _lastFrameTime = 0;
 
     DOM.worldListScreen.classList.add("hidden");
     DOM.titleScreen.classList.add("hidden");
@@ -473,17 +721,37 @@ function startWorld(world) {
     });
 
     startLoadingTextRotation();
-    setTimeout(() => finishGameStartup(), 2000);
+
+    // Start ticking now so terrain generates/meshes *behind* the loading screen.
+    // We reveal the world from ww_loadProgress once enough chunks have rendered;
+    // the fallback timer guarantees we never hang on the loading screen.
+    _loadingActive = true;
+    clearTimeout(_loadFallbackTimer);
+    _loadFallbackTimer = setTimeout(finishGameStartup, 30000);
+    startLoop();
 }
 
+// Called repeatedly from world.js (ww_loadProgress) while the loading screen is up.
+window.addEventListener('ww_loadProgress', (e) => {
+    if (!_loadingActive) return;
+    const progress = e.detail?.progress ?? 0;
+    if (DOM.loadingBar) DOM.loadingBar.style.width = `${Math.round(progress * 100)}%`;
+    if (e.detail?.ready) finishGameStartup();
+});
+
 function finishGameStartup() {
+    if (!_loadingActive) return;   // guard against the fallback + ready both firing
+    _loadingActive = false;
+    clearTimeout(_loadFallbackTimer);
+
+    if (DOM.loadingBar) DOM.loadingBar.style.width = "100%";
     stopLoadingTextRotation();
     DOM.loadingContainer.classList.add("hidden");
     DOM.gameScreen.classList.remove("hidden");
     DOM.titleLogo.classList.add("hidden");
-    setTimeout(() => DOM.gameScreen.requestPointerLock(), 10);
+    setTimeout(requestGameLock, 10);
     initializeHotbar();
-    gameLoop();
+    // gameLoop is already running (started in startWorld via startLoop()).
 }
 
 /* =========================================================
@@ -531,6 +799,7 @@ const ITEM_TEXTURES = {
     snow:         'data/textures/blocks/snow.png',
     snow_dirt:    'data/textures/blocks/SnowDirt.png',
     water_bucket: 'data/textures/blocks/Water.png',
+    water:        'data/textures/blocks/Water.png',
     coal:         'data/textures/blocks/Coal_Ore.png',
     raw_iron:     'data/textures/blocks/Iron_Ore.png',
     raw_gold:     'data/textures/blocks/Gold_Ore.png',
@@ -538,9 +807,31 @@ const ITEM_TEXTURES = {
 
 function itemTextureSrc(itemId) {
     if (!itemId) return '';
+    if (_blockColorIcons[itemId]) return _blockColorIcons[itemId];
     return ITEM_TEXTURES[itemId] ?? `data/textures/items/${itemId}.png`;
 }
 window._itemTextureSrc = itemTextureSrc;
+
+// Colored blocks (ids ≥ 25) have no PNG — generate a swatch icon from their colour
+// so they show up in the hotbar / inventory / creative grid.
+const _blockColorIcons = {};
+function _buildBlockColorIcons() {
+    for (const def of (mergedGamePackData.blocks ?? [])) {
+        if ((def.id ?? 0) < 25 || !def.color) continue;
+        _blockColorIcons[def.name.toLowerCase()] = _makeColorSwatch(def.color);
+    }
+}
+function _makeColorSwatch([r, g, b]) {
+    const c = document.createElement('canvas');
+    c.width = c.height = 16;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = `rgb(${(r*255)|0},${(g*255)|0},${(b*255)|0})`;
+    ctx.fillRect(0, 0, 16, 16);
+    ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(1, 1, 14, 14);
+    return c.toDataURL();
+}
 
 function refreshHotbarUI() {
     const inv = window.me.inventory;
@@ -553,8 +844,38 @@ function refreshHotbarUI() {
             img.src   = slot ? itemTextureSrc(slot.itemId) : '';
             img.style.display = slot ? 'block' : 'none';
         }
+        _setSlotCount(el, slot);
         el.title = slot ? `${slot.itemId} ×${slot.count}` : '';
     });
+    // Offhand slot
+    const offEl = document.querySelector('.hotbarSlot.offhand');
+    if (offEl) {
+        const offImg = offEl.querySelector('img');
+        const offItem = inv.offhand;
+        if (offImg) {
+            offImg.src = offItem ? itemTextureSrc(offItem.itemId) : '';
+            offImg.style.display = offItem ? 'block' : 'none';
+        }
+        _setSlotCount(offEl, offItem);
+        offEl.title = offItem ? offItem.itemId.replace(/_/g, ' ') : '';
+    }
+}
+
+// Show the stack count in a hotbar slot (hidden for empty slots or single items).
+function _setSlotCount(el, slot) {
+    let countEl = el.querySelector('.hotbarCount');
+    if (!countEl) {
+        countEl = document.createElement('span');
+        countEl.className = 'hotbarCount';
+        el.appendChild(countEl);
+    }
+    const n = slot?.count ?? 0;
+    if (n > 1) {
+        countEl.textContent = String(n);
+        countEl.style.display = 'block';
+    } else {
+        countEl.style.display = 'none';
+    }
 }
 
 /* =========================================================
@@ -569,21 +890,21 @@ function openInteractivePanel({ interactType, x, y, z }) {
     _selectedRecipeId = null;
 
     DOM.interactivePanelTitle.textContent = {
-        crafting: 'Crafting Table', oven: 'Oven',
+        hand: 'Hand Crafting', crafting: 'Crafting Table', oven: 'Oven',
         smelter: 'Smelter', chest: 'Chest', anvil: 'Anvil',
     }[interactType] ?? interactType;
 
     populateRecipeList(interactType);
     DOM.interactivePanel.classList.remove("hidden");
+    _menuOpen = true;   // set before releasing the pointer so pointerlockchange won't pause
     if (document.pointerLockElement) document.exitPointerLock();
-    _menuOpen = true;
 }
 
 function closeInteractivePanel() {
     DOM.interactivePanel.classList.add("hidden");
     _activeStation = null;
     _menuOpen = false;
-    DOM.gameScreen.requestPointerLock();
+    requestGameLock();
 }
 
 /* =========================================================
@@ -592,14 +913,15 @@ function closeInteractivePanel() {
 
 function openInventory() {
     if (!DOM.inventoryScreen) return;
+    _menuOpen = true;   // set before releasing the pointer so pointerlockchange won't pause
     if (document.pointerLockElement) document.exitPointerLock();
     _invCursor = null;
+    _updateInvCraftBtn();
     _renderInventory();
     DOM.inventoryScreen.classList.remove('hidden');
-    _menuOpen = true;
 }
 
-function closeInventory() {
+function closeInventory(suppressLock = false) {
     // Return any held cursor item to inventory before closing
     if (_invCursor) {
         const inv = window.me?.inventory;
@@ -610,7 +932,112 @@ function closeInventory() {
     DOM.inventoryScreen?.classList.add('hidden');
     _menuOpen = false;
     refreshHotbarUI();
-    DOM.gameScreen?.requestPointerLock();
+    if (!suppressLock) requestGameLock();
+}
+
+// ── Inventory craft button label ─────────────────────────────────────────────
+
+function _updateInvCraftBtn() {
+    if (!DOM.invCraftBtn) return;
+    const mode = activeWorld?.gameMode ?? 'SURVIVAL';
+    if (mode === 'SPECTATOR') {
+        DOM.invCraftBtn.style.display = 'none';
+        return;
+    }
+    DOM.invCraftBtn.style.display = '';
+    const isCreative = mode === 'CREATIVE';
+    DOM.invCraftBtn.textContent = isCreative ? 'Creative Inventory' : 'Open Craft';
+    DOM.invCraftBtn.style.width = isCreative ? '14vw' : '11vw';
+}
+
+// ── Hand crafting (Survival) ─────────────────────────────────────────────────
+
+function openHandCraft() {
+    openInteractivePanel({ interactType: 'hand', x: 0, y: 0, z: 0 });
+}
+
+// ── Creative inventory ────────────────────────────────────────────────────────
+
+function openCreativeInventory() {
+    if (!DOM.creativeInvPanel) return;
+    if (DOM.creativeInvFilter) DOM.creativeInvFilter.value = '';
+    _populateCreativeGrid('');
+    DOM.creativeInvPanel.classList.remove('hidden');
+    _menuOpen = true;   // set before releasing the pointer so pointerlockchange won't pause
+    if (document.pointerLockElement) document.exitPointerLock();
+}
+
+function closeCreativeInventory() {
+    DOM.creativeInvPanel?.classList.add('hidden');
+    _menuOpen = false;
+    requestGameLock();
+}
+
+// Creative inventory entries: every item, plus a placeable entry for any block
+// that has no (non-food) item representing it — so grass, snow, ice, leaves,
+// bedrock, water, etc. can still be placed. Block entries use the block's
+// lowercased name as their id, which the placement resolver maps back to it.
+function _creativeEntries() {
+    const items  = mergedGamePackData.items  ?? [];
+    const blocks = mergedGamePackData.blocks ?? [];
+    const byNameLower = new Map(blocks.map(b => [b.name.toLowerCase(), b]));
+
+    const covered = new Set();   // block ids already reachable via a non-food item
+    for (const it of items) {
+        if (it.type === 'food') continue;
+        let blk = byNameLower.get(it.id);
+        if (!blk) blk = blocks.find(b => (b.drops || []).some(d => (d.itemId ?? d.item) === it.id));
+        if (blk) covered.add(blk.id);
+    }
+
+    const blockEntries = blocks
+        .filter(b => b.id !== 0 && !covered.has(b.id))
+        .map(b => ({ id: b.name.toLowerCase(), name: _titleCaseName(b.name) }));
+
+    return [...items, ...blockEntries];
+}
+
+function _titleCaseName(s) {
+    return String(s).toLowerCase().split('_')
+        .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+function _populateCreativeGrid(filter) {
+    if (!DOM.creativeInvGrid) return;
+    DOM.creativeInvGrid.innerHTML = '';
+
+    const allItems = _creativeEntries();
+    const shown = filter
+        ? allItems.filter(it => it.id.toLowerCase().includes(filter) || (it.name ?? '').toLowerCase().includes(filter))
+        : allItems;
+
+    for (const itemDef of shown) {
+        const el = document.createElement('div');
+        el.className = 'invGridSlot';
+        el.title = itemDef.id.replace(/_/g, ' ');
+
+        const img = document.createElement('img');
+        img.src = itemTextureSrc(itemDef.id);
+        img.alt = '';
+        el.appendChild(img);
+
+        const lbl = document.createElement('span');
+        lbl.className = 'invGridKeybind';
+        lbl.textContent = (itemDef.name ?? itemDef.id).replace(/_/g, ' ').slice(0, 8);
+        lbl.style.cssText = 'font-size:0.55vw;bottom:0;top:auto;left:0;right:0;text-align:center;overflow:hidden;white-space:nowrap;';
+        el.appendChild(lbl);
+
+        el.addEventListener('click', () => {
+            const inv = window.me?.inventory;
+            if (!inv) return;
+            // Stack onto an existing stack of the same item first (addItem fills
+            // matching stacks, then empty hotbar slots, then general inventory).
+            inv.addItem(itemDef.id, 1);
+            refreshHotbarUI();
+        });
+
+        DOM.creativeInvGrid.appendChild(el);
+    }
 }
 
 // ── Inventory interaction state ──────────────────────────────────────────────
@@ -678,8 +1105,8 @@ function _renderInventory() {
         for (let i = 0; i < inv.slots.length; i++) {
             DOM.invSlots.appendChild(_makeSlotEl({ type: 'general', index: i }, inv.slots[i], ''));
         }
-        // Empty placeholder slots (always show at least 10 blank slots)
-        const shown = Math.max(inv.slots.length, 10);
+        // Always show at least 10 slots, plus one trailing empty slot for new items
+        const shown = Math.max(inv.slots.length + 1, 10);
         for (let i = inv.slots.length; i < shown; i++) {
             DOM.invSlots.appendChild(_makeSlotEl({ type: 'general', index: i }, null, ''));
         }
@@ -706,7 +1133,6 @@ function _makeSlotEl(slotRef, item, keybind) {
             cnt.textContent = item.count;
             el.appendChild(cnt);
         }
-        el.title = item.itemId.replace(/_/g, ' ') + (item.count > 1 ? ` ×${item.count}` : '');
     }
 
     if (keybind) {
@@ -717,6 +1143,9 @@ function _makeSlotEl(slotRef, item, keybind) {
     }
 
     el.addEventListener('click', (e) => { e.stopPropagation(); _onSlotClick(slotRef, item); });
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); _onSlotRightClick(slotRef, item); });
+    el.addEventListener('mouseenter', () => _showInvTooltip(el, slotRef, item));
+    el.addEventListener('mouseleave', _hideInvTooltip);
     return el;
 }
 
@@ -765,6 +1194,122 @@ function _onSlotClick(slotRef, item) {
         _renderInventory();
         if (_invCursor) _showCursorItem(); else _hideCursorItem();
     }
+}
+
+function _onSlotRightClick(slotRef, item) {
+    const inv = window.me?.inventory;
+    if (!inv) return;
+
+    // Quiver slot: deposit arrows from cursor, or take arrows empty-handed
+    if (slotRef.type === 'equip' && slotRef.index === 'quiver' && item) {
+        const itemDef = mergedGamePackData.items?.find(it => it.id === item.itemId);
+        const maxArrows = itemDef?.maxArrows ?? 64;
+        if (_invCursor?.itemId === 'arrow') {
+            const space = maxArrows - (inv.quiverArrows ?? 0);
+            if (space > 0) {
+                const add = Math.min(space, _invCursor.count);
+                inv.quiverArrows = (inv.quiverArrows ?? 0) + add;
+                _invCursor.count -= add;
+                if (_invCursor.count <= 0) { _invCursor = null; _hideCursorItem(); }
+                else _showCursorItem();
+                refreshHotbarUI();
+                _renderInventory();
+            }
+            return;
+        }
+        if (!_invCursor) {
+            const arrows = inv.quiverArrows ?? 0;
+            if (arrows <= 0) return;
+            const arrowDef = mergedGamePackData.items?.find(it => it.id === 'arrow');
+            const maxStack = arrowDef?.maxStack ?? 64;
+            const take = Math.min(arrows, maxStack);
+            inv.quiverArrows -= take;
+            _invCursor = { type: 'cursor', index: -1, itemId: 'arrow', count: take };
+            refreshHotbarUI();
+            _renderInventory();
+            _showCursorItem();
+            return;
+        }
+        return;
+    }
+
+    // With cursor held + empty target slot: place one item
+    if (_invCursor && !item) {
+        const maxStack = inv._maxStack?.(_invCursor.itemId) ?? 64;
+        const existing = _getSlot(inv, slotRef);
+        if (!existing) {
+            _setSlot(inv, slotRef, { itemId: _invCursor.itemId, count: 1 });
+            _invCursor.count -= 1;
+            if (_invCursor.count <= 0) { _invCursor = null; _hideCursorItem(); }
+            else _showCursorItem();
+            refreshHotbarUI();
+            _renderInventory();
+        } else if (existing.itemId === _invCursor.itemId && existing.count < maxStack) {
+            existing.count += 1;
+            _invCursor.count -= 1;
+            if (_invCursor.count <= 0) { _invCursor = null; _hideCursorItem(); }
+            else _showCursorItem();
+            refreshHotbarUI();
+            _renderInventory();
+        }
+        return;
+    }
+
+    // No cursor + occupied slot: take half (round up)
+    if (!_invCursor && item) {
+        const take = Math.ceil(item.count / 2);
+        const remain = item.count - take;
+        _setSlot(inv, slotRef, remain > 0 ? { itemId: item.itemId, count: remain } : null);
+        _invCursor = { type: 'cursor', index: -1, itemId: item.itemId, count: take };
+        refreshHotbarUI();
+        _renderInventory();
+        _showCursorItem();
+        return;
+    }
+}
+
+// ── Inventory tooltip ─────────────────────────────────────────────────────────
+
+let _tooltipEl = null;
+
+function _showInvTooltip(anchorEl, slotRef, item) {
+    if (!item) return;
+    if (!_tooltipEl) {
+        _tooltipEl = document.createElement('div');
+        _tooltipEl.id = 'invTooltip';
+        document.body.appendChild(_tooltipEl);
+    }
+
+    const itemDef = mergedGamePackData.items?.find(it => it.id === item.itemId);
+    const displayName = (itemDef?.name ?? item.itemId).replace(/_/g, ' ');
+    let text = displayName;
+
+    // Quiver: show arrow count
+    if (itemDef?.type === 'quiver' && slotRef.type === 'equip' && slotRef.index === 'quiver') {
+        const inv = window.me?.inventory;
+        const arrows = inv?.quiverArrows ?? 0;
+        const max = itemDef.maxArrows ?? 64;
+        text += `\nArrows: ${arrows} / ${max}`;
+    }
+
+    _tooltipEl.textContent = text;  // textContent handles newlines in CSS white-space:pre
+    _tooltipEl.style.display = 'block';
+
+    const rect = anchorEl.getBoundingClientRect();
+    _tooltipEl.style.left = (rect.right + 8) + 'px';
+    _tooltipEl.style.top  = rect.top + 'px';
+
+    // Keep inside viewport
+    requestAnimationFrame(() => {
+        if (!_tooltipEl) return;
+        const tr = _tooltipEl.getBoundingClientRect();
+        if (tr.right > window.innerWidth) _tooltipEl.style.left = (rect.left - tr.width - 8) + 'px';
+        if (tr.bottom > window.innerHeight) _tooltipEl.style.top = (window.innerHeight - tr.height - 4) + 'px';
+    });
+}
+
+function _hideInvTooltip() {
+    if (_tooltipEl) _tooltipEl.style.display = 'none';
 }
 
 function _getSlot(inv, ref) {
@@ -835,32 +1380,64 @@ document.addEventListener('click', (e) => {
     _renderInventory();
 });
 
-function populateRecipeList(station) {
+const STATION_ALIASES = { crafting: 'crafting_table' };
+
+function populateRecipeList(rawStation) {
     const inv  = window.me.inventory;
     DOM.recipeList.innerHTML = '';
     DOM.recipeDetailName.textContent = '';
-    DOM.recipeDetail.textContent = '';
+    DOM.recipeDetail.innerHTML = '';
     DOM.craftBtn.style.opacity = '0.4';
     DOM.craftBtn.onclick = null;
 
+    // A block's interactType ("crafting") doesn't always equal the recipe station
+    // name ("crafting_table") — normalize so the table actually lists its recipes.
+    const station = STATION_ALIASES[rawStation] ?? rawStation;
     const recipes = mergedGamePackData.recipes.filter(r => r.station === station);
     for (const recipe of recipes) {
         const canCraft = inv ? inv.hasIngredients(_ingredientMap(recipe)) : false;
-        const item = document.createElement('div');
-        item.className = 'recipeListItem' + (canCraft ? '' : ' locked');
-        item.textContent = recipe.result.itemId.replace(/_/g, ' ');
-        item.addEventListener('click', () => selectRecipe(recipe, canCraft));
-        DOM.recipeList.appendChild(item);
+        const itemEl = document.createElement('div');
+        itemEl.className = 'recipeListItem' + (canCraft ? '' : ' locked');
+
+        const icon = document.createElement('img');
+        icon.src = itemTextureSrc(recipe.result.itemId);
+        icon.style.cssText = 'width:1.6vw;height:1.6vw;image-rendering:pixelated;vertical-align:middle;margin-right:0.4vw;';
+        itemEl.appendChild(icon);
+
+        const lbl = document.createElement('span');
+        lbl.textContent = recipe.result.itemId.replace(/_/g, ' ');
+        itemEl.appendChild(lbl);
+
+        itemEl.addEventListener('click', () => selectRecipe(recipe, canCraft));
+        DOM.recipeList.appendChild(itemEl);
     }
 }
 
 function selectRecipe(recipe, canCraft) {
     _selectedRecipeId = recipe.id;
     document.querySelectorAll('.recipeListItem').forEach(el => {
-        el.classList.toggle('active', el.textContent === recipe.result.itemId.replace(/_/g, ' '));
+        const span = el.querySelector('span');
+        el.classList.toggle('active', span?.textContent === recipe.result.itemId.replace(/_/g, ' '));
     });
-    DOM.recipeDetailName.textContent = recipe.result.itemId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-    DOM.recipeDetail.innerHTML = recipe.ingredients.map(i => `${i.count}× ${i.itemId.replace(/_/g, ' ')}`).join('<br>');
+
+    // Result header with icon
+    const resultName = recipe.result.itemId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+    DOM.recipeDetailName.innerHTML =
+        `<img src="${itemTextureSrc(recipe.result.itemId)}" style="width:2vw;height:2vw;image-rendering:pixelated;vertical-align:middle;margin-right:0.4vw;">${resultName}` +
+        (recipe.result.count > 1 ? ` <span style="color:#aaa;font-size:1.1vw;">×${recipe.result.count}</span>` : '');
+
+    // Ingredient list with icons
+    const inv = window.me.inventory;
+    DOM.recipeDetail.innerHTML = recipe.ingredients.map(i => {
+        const have = inv ? (inv.countItem?.(i.itemId) ?? 0) : 0;
+        const ok   = have >= i.count;
+        const col  = ok ? '#88cc88' : '#cc6666';
+        return `<div style="display:flex;align-items:center;gap:0.4vw;margin-bottom:0.25vw;">` +
+               `<img src="${itemTextureSrc(i.itemId)}" style="width:1.6vw;height:1.6vw;image-rendering:pixelated;">` +
+               `<span style="color:${col};">${i.count}× ${i.itemId.replace(/_/g, ' ')} <span style="color:#777;font-size:0.85vw;">(${have})</span></span>` +
+               `</div>`;
+    }).join('');
+
     DOM.craftBtn.style.opacity = canCraft ? '1' : '0.4';
     DOM.craftBtn.onclick = canCraft ? () => executeCraft(recipe) : null;
 }
@@ -875,6 +1452,7 @@ function executeCraft(recipe) {
     if (overflow > 0) callWorldJS("dropItem", { itemId: recipe.result.itemId, count: overflow });
     populateRecipeList(_activeStation);
     refreshHotbarUI();
+    if (!DOM.inventoryScreen?.classList.contains('hidden')) _renderInventory();
 }
 
 function _ingredientMap(recipe) {
@@ -1027,14 +1605,18 @@ function loadTitleBackground(data) {
 ========================================================= */
 
 function resumeGame() {
-    DOM.gameScreen.requestPointerLock();
-    paused = false;
+    // Don't clear `paused` here — let pointerlockchange do it once the lock is
+    // actually re-acquired. requestGameLock retries through the post-Esc cooldown,
+    // and the pause screen stays up until the lock truly sticks (no limbo state).
+    requestGameLock();
 }
 
 async function leaveWorld() {
     gameStarted = false;
     paused = false;
     activeWorld = null;
+    _loadingActive = false;            // cancel any in-progress load reveal
+    clearTimeout(_loadFallbackTimer);
     stopLoadingTextRotation();
     if (document.pointerLockElement) document.exitPointerLock();
     callWorldJS("quitWorld");
@@ -1042,6 +1624,9 @@ async function leaveWorld() {
     DOM.pauseScreen.classList.add("hidden");
     DOM.deathScreen?.classList.add("hidden");
     DOM.interactivePanel?.classList.add("hidden");
+    DOM.inventoryScreen?.classList.add("hidden");
+    DOM.creativeInvPanel?.classList.add("hidden");
+    _menuOpen = false;
     DOM.loadingContainer.classList.add("hidden");
     DOM.titleLogo.classList.remove("hidden");
     DOM.logo.classList.remove("Loading");
@@ -1054,22 +1639,46 @@ async function leaveWorld() {
 ========================================================= */
 
 let _lastFrameTime = 0;
+let _fpsEnabled = false;
+let _fpsAccum = 0, _fpsFrames = 0, _fpsTimer = 0;
+let _loadingActive = false;
+let _loadFallbackTimer = null;
+let _loopActive = false;   // prevents two animation loops running after a world switch
+
+function startLoop() {
+    if (_loopActive) return;
+    _loopActive = true;
+    requestAnimationFrame(gameLoop);
+}
 
 function gameLoop(timestamp) {
-    if (!gameStarted) return;
-    const dt = _lastFrameTime ? Math.min((timestamp - _lastFrameTime) / 1000, 0.1) : 0.016;
-    _lastFrameTime = timestamp;
+    if (!gameStarted) { _loopActive = false; return; }
+    // `timestamp` is undefined on the first (manual) call and when _lastFrameTime
+    // was reset; in both cases fall back to a nominal frame so dt is never NaN.
+    const dt = (_lastFrameTime && timestamp)
+        ? Math.min((timestamp - _lastFrameTime) / 1000, 0.1)
+        : 0.016;
+    _lastFrameTime = timestamp ?? 0;
 
-    if (!paused) {
-        handleHotbarKeys();
-        if (!_menuOpen && document.pointerLockElement !== DOM.gameScreen) paused = true;
-    } else {
-        if (document.pointerLockElement === DOM.gameScreen) paused = false;
-    }
+    if (_fpsEnabled) _updateFps(dt);
+
+    // Pause/resume is handled by the pointerlockchange + Escape listeners — the
+    // loop only reads the state. Hotbar number keys only while actively playing.
+    if (!paused && !_menuOpen) handleHotbarKeys();
 
     updateUIVisibility();
     worldTick(dt);
     requestAnimationFrame(gameLoop);
+}
+
+function _updateFps(dt) {
+    _fpsAccum += dt; _fpsFrames++; _fpsTimer += dt;
+    if (_fpsTimer >= 0.5) {
+        const fps = Math.round(_fpsFrames / _fpsAccum);
+        const el = document.getElementById('fpsCounter');
+        if (el) el.textContent = `FPS: ${fps}`;
+        _fpsAccum = 0; _fpsFrames = 0; _fpsTimer = 0;
+    }
 }
 
 function handleHotbarKeys() {
@@ -1081,8 +1690,9 @@ function handleHotbarKeys() {
 }
 
 function updateUIVisibility() {
+    const isSpectator = activeWorld?.gameMode === 'SPECTATOR';
     DOM.pauseScreen.classList.toggle("hidden", !paused || _menuOpen);
-    DOM.gameUI.classList.toggle("hidden", paused && !_menuOpen);
+    DOM.gameUI.classList.toggle("hidden", (paused && !_menuOpen) || isSpectator);
 }
 
 /* =========================================================

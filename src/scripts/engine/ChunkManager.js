@@ -21,7 +21,7 @@
  *   onChunkUnload(key)                — dispose Three.js mesh
  */
 
-import { ChunkData, CHUNK_SIZE } from './ChunkData.js';
+import { ChunkData, CHUNK_SIZE, CHUNK_SIZE_Y } from './ChunkData.js';
 import { WorldState }            from './WorldState.js';
 
 const MAX_DISPATCH = 32;  // max new jobs queued per update() call
@@ -64,12 +64,25 @@ export class ChunkManager {
         // Server-backed world persistence. Set worldId and worldClient to enable.
         this.worldId     = null;
         this.worldClient = null;
+
+        // Generation gate. While false, update() dispatches nothing. world.js flips
+        // this true only once persistence setup has finished (worldClient attached,
+        // or confirmed unavailable). This prevents a startup race where the render
+        // loop ticks during the connect()/fetchManifest() awaits — before
+        // worldClient is attached — and generates fresh terrain over the spawn-area
+        // chunks instead of loading the player's saved edits from disk.
+        this.ready = false;
     }
 
     /** Send all currently loaded chunks to the server in one WebSocket batch. */
     saveAll() {
         if (this.worldId && this.worldClient?.connected) {
             this.worldClient.saveChunks(this.worldId, this.world);
+            // Clear pending changes for every chunk that was just saved so we
+            // don't replay them unnecessarily on the next reload.
+            for (const key of this.world.chunks.keys()) {
+                this.world.pendingChanges.delete(key);
+            }
         }
     }
 
@@ -81,6 +94,10 @@ export class ChunkManager {
      * @param {{ x, y, z }} playerPos   — world-space position
      */
     update(playerPos) {
+        // Hold off all generation/meshing until persistence setup is complete, so
+        // saved chunks are loaded from disk rather than regenerated as fresh terrain.
+        if (!this.ready) return;
+
         const pcx = WorldState.worldToChunk(playerPos.x | 0);
         const pcz = WorldState.worldToChunk(playerPos.z | 0);
 
@@ -162,7 +179,9 @@ export class ChunkManager {
                     this._cancelledChunks.delete(key);
                     return;
                 }
-                this.world.setChunk(cx, cz, ChunkData.deserialize(cx, cz, saved));
+                const chunk = ChunkData.deserialize(cx, cz, saved);
+                this._applyPendingChanges(chunk, cx, cz);
+                this.world.setChunk(cx, cz, chunk);
                 this._requestMesh(cx, cz);
                 this._remeshNeighbors(cx, cz);
                 return;
@@ -183,6 +202,7 @@ export class ChunkManager {
                 const chunk = new ChunkData(cx, cz);
                 chunk.loadVoxels(new Uint16Array(voxels));
                 chunk.generated = true;
+                this._applyPendingChanges(chunk, cx, cz);
 
                 this.world.setChunk(cx, cz, chunk);
 
@@ -285,10 +305,37 @@ export class ChunkManager {
     _unload(key) {
         if (this._pendingGen.has(key)) this._cancelledChunks.add(key);
 
+        // Persist dirty chunks before dropping them from memory so player edits
+        // are not lost when a chunk scrolls out of the render distance before
+        // the next auto-save fires.
+        const chunk = this.world.chunks.get(key);
+        const changes = this.world.pendingChanges.get(key);
+        if (chunk?.generated && changes?.size > 0 && this.worldId && this.worldClient?.connected) {
+            this.worldClient.saveChunks(this.worldId, { chunks: new Map([[key, chunk]]) });
+            if (this.worldClient._savedChunks) this.worldClient._savedChunks.add(key);
+            this.world.pendingChanges.delete(key);
+        }
+
         this._pendingGen.delete(key);
         this._pendingMesh.delete(key);
         this._pendingMeshXZ.delete(key);
         this.onChunkUnload?.(key);
         this.world.removeChunkByKey(key);
+    }
+
+    // Replay any block edits that were made to this chunk while it was unloaded
+    // (or before the first save). Converts the flat voxelIndex back to local coords.
+    _applyPendingChanges(chunk, cx, cz) {
+        const key     = WorldState.key(cx, cz);
+        const changes = this.world.pendingChanges.get(key);
+        if (!changes || changes.size === 0) return;
+        for (const [idx, blockId] of changes) {
+            const lx = idx % CHUNK_SIZE;
+            const rem = (idx - lx) / CHUNK_SIZE;
+            const ly = rem % CHUNK_SIZE_Y;
+            const lz = (rem - ly) / CHUNK_SIZE_Y;
+            chunk.setVoxel(lx, ly, lz, blockId);
+        }
+        chunk.dirty = true;
     }
 }

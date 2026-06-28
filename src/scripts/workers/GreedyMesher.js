@@ -230,9 +230,13 @@ export class GreedyMesher {
                 p[2][faceAxis] = faceOffset;  p[2][uAxis] = u + uW; p[2][vAxis] = v + vW;
                 p[3][faceAxis] = faceOffset;  p[3][uAxis] = u;      p[3][vAxis] = v + vW;
 
-                // UV: tile once per block across both axes
-                // (0,0)→(uW,0)→(uW,vW)→(0,vW) — shader uses fract() for repeating
-                const uvCoords = [[0,0],[uW,0],[uW,vW],[0,vW]];
+                // UV: tile once per block across both axes — shader uses fract() for repeating.
+                // For ±X faces (faceAxis=0): uAxis=Y (vertical), vAxis=Z (horizontal).
+                // Swap so UV.x maps to Z (horizontal on face) and UV.y maps to Y (vertical).
+                // For all other faces the standard layout is correct.
+                const uvCoords = faceAxis === 0
+                    ? [[0,0],[0,uW],[vW,uW],[vW,0]]
+                    : [[0,0],[uW,0],[uW,vW],[0,vW]];
 
                 const base = (posArr.length / 3) | 0;
                 for (const pt of p) posArr.push(pt[0], pt[1], pt[2]);

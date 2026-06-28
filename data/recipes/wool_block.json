@@ -1,0 +1,14 @@
+{
+  "id": "wool_block",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "wool_block",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wool",
+      "count": 4
+    }
+  ]
+}

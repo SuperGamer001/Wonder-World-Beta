@@ -1,0 +1,7 @@
+{
+  "id": "iron_block",
+  "name": "Iron Block",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

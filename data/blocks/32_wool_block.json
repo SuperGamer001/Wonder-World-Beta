@@ -1,0 +1,16 @@
+{
+  "id": 32,
+  "name": "WOOL_BLOCK",
+  "color": [
+    0.95,
+    0.95,
+    0.95
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "wool_block",
+      "count": 1
+    }
+  ]
+}

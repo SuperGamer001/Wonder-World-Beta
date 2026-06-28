@@ -32,39 +32,80 @@ export class WorldClient {
         this._pending         = new Map(); // "cx,cz" → resolve(chunkEntry|null)
         this._savedChunks     = null;      // Set<string> after manifest fetch
         this._manifestResolve = null;
+        this._worldId         = null;      // remembered so we can re-sync on reconnect
+        this._closed          = false;     // true once close() is called — stops reconnects
+        this._reconnectTimer  = null;
     }
 
     /** Returns a Promise that resolves once the connection is open. */
     connect() {
+        this._closed = false;
         return new Promise((resolve, reject) => {
-            const ws = new WebSocket(this._url);
-            ws.binaryType = 'arraybuffer';
-
-            ws.onopen = () => {
-                this._ws    = ws;
-                this._ready = true;
-                resolve();
-            };
-
-            ws.onerror = () => {
-                if (!this._ready) reject(new Error('WebSocket connection failed'));
-            };
-
-            ws.onclose = () => {
-                this._ready = false;
-            };
-
-            ws.onmessage = (event) => {
-                if (event.data instanceof ArrayBuffer) {
-                    this._handleBinary(event.data);
-                } else if (typeof event.data === 'string') {
-                    this._handleText(JSON.parse(event.data));
-                }
-            };
+            this._open(resolve, () => reject(new Error('WebSocket connection failed')));
         });
     }
 
+    // Open (or re-open) the socket. resolve/reject are only used for the first connect().
+    _open(resolve, reject) {
+        const ws = new WebSocket(this._url);
+        ws.binaryType = 'arraybuffer';
+
+        ws.onopen = () => {
+            this._ws    = ws;
+            this._ready = true;
+            resolve?.();
+            resolve = reject = null;
+        };
+
+        ws.onerror = () => {
+            if (!this._ready) reject?.();
+        };
+
+        ws.onclose = () => {
+            this._ready = false;
+            // Any in-flight loadChunk promises will never resolve via the socket —
+            // fail them so generation can fall through instead of hanging forever.
+            for (const r of this._pending.values()) r(null);
+            this._pending.clear();
+            if (!this._closed) this._scheduleReconnect();
+        };
+
+        ws.onmessage = (event) => {
+            if (event.data instanceof ArrayBuffer) {
+                this._handleBinary(event.data);
+            } else if (typeof event.data === 'string') {
+                this._handleText(JSON.parse(event.data));
+            }
+        };
+    }
+
+    // Reconnect with a short fixed backoff. On success, re-fetch the manifest so
+    // saving/loading resume seamlessly (e.g. after the dev server restarts).
+    _scheduleReconnect() {
+        if (this._closed || this._reconnectTimer) return;
+        this._reconnectTimer = setTimeout(() => {
+            this._reconnectTimer = null;
+            if (this._closed) return;
+            this._open(
+                () => { if (this._worldId != null) this.fetchManifest(this._worldId); },
+                () => { /* onclose will schedule the next retry */ },
+            );
+        }, 1500);
+    }
+
+    /** Stop reconnecting and close the socket (called when leaving a world). */
+    close() {
+        this._closed = true;
+        clearTimeout(this._reconnectTimer);
+        this._reconnectTimer = null;
+        try { this._ws?.close(); } catch { /* already closing */ }
+        this._ready = false;
+    }
+
     get connected() { return this._ready; }
+
+    /** Bytes still queued in the WebSocket send buffer (0 once fully flushed). */
+    get bufferedAmount() { return this._ws?.bufferedAmount ?? 0; }
 
     // ── Chunk I/O ─────────────────────────────────────────────────────────────
 
@@ -73,6 +114,7 @@ export class WorldClient {
      * Must be called once after connect() before any loadChunk calls.
      */
     fetchManifest(worldId) {
+        this._worldId = worldId;   // remember for reconnects
         if (!this._ready) return Promise.resolve();
         return new Promise((resolve) => {
             this._manifestResolve = resolve;

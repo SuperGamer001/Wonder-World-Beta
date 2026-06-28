@@ -1,0 +1,18 @@
+{
+  "id": "mossy_stone",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "mossy_stone",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stone",
+      "count": 1
+    },
+    {
+      "itemId": "clay_ball",
+      "count": 1
+    }
+  ]
+}

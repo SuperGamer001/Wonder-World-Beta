@@ -1,0 +1,7 @@
+{
+  "id": "wooden_planks",
+  "name": "Wooden Planks",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

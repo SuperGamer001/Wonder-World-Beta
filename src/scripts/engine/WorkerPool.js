@@ -101,6 +101,22 @@ export class WorkerPool {
         this._queue.length = 0;
     }
 
+    /**
+     * Terminate every worker and drop all state. After this the pool is dead and
+     * must not be reused. Call when leaving a world so a fresh world doesn't leak
+     * a second set of workers still running with the previous world's seed.
+     */
+    terminate() {
+        this.clearQueue();
+        for (const entry of this._workers) {
+            entry.worker.onmessage = null;
+            entry.worker.onerror   = null;
+            entry.worker.terminate();
+        }
+        this._workers.length = 0;
+        this._callbacks.clear();
+    }
+
     // ── Internal ─────────────────────────────────────────────────────────────
 
     _flush() {

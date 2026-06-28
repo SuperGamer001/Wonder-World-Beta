@@ -1,0 +1,17 @@
+{
+  "id": 34,
+  "name": "POLISHED_DIORITE",
+  "color": [
+    0.88,
+    0.88,
+    0.9
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "polished_diorite",
+      "count": 1
+    }
+  ]
+}

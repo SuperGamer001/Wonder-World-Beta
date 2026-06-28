@@ -1,0 +1,17 @@
+{
+  "id": 33,
+  "name": "POLISHED_GRANITE",
+  "color": [
+    0.78,
+    0.5,
+    0.45
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "polished_granite",
+      "count": 1
+    }
+  ]
+}

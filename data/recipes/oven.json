@@ -1,0 +1,14 @@
+{
+  "id": "oven",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "oven",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stone",
+      "count": 8
+    }
+  ]
+}

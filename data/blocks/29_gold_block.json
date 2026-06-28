@@ -1,0 +1,17 @@
+{
+  "id": 29,
+  "name": "GOLD_BLOCK",
+  "color": [
+    0.96,
+    0.79,
+    0.22
+  ],
+  "hardness": 4,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "gold_block",
+      "count": 1
+    }
+  ]
+}

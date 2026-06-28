@@ -125,6 +125,7 @@ img.logo.game {
     flex-direction: column;
     justify-content: center;
     align-items: center;
+    z-index: 700;   /* above the suffocation overlay (540) */
 }
 
 .menuButton {
@@ -276,26 +277,62 @@ img.logo.game {
 /* ── World List Screen ────────────────────────────────────────────────────── */
 
 #WorldListScreen {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#worldListPanel {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    width: 100%;
-    max-height: 90vh;
-    overflow-y: auto;
+    width: 64%;
+    max-width: 70vw;
+    height: 80vh;
+    background: rgba(20, 20, 22, 0.92);
+    border: 0.15vw solid #555;
+    border-radius: 0.8vw;
+    overflow: hidden;
+    box-shadow: 0 0.5vw 2vw rgba(0,0,0,0.6);
 }
 
 #worldListHeader {
-    width: 70%;
     display: flex;
-    justify-content: flex-end;
-    margin-bottom: 1vw;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1vw 1.5vw;
+    border-bottom: 0.12vw solid #444;
+    background: rgba(0,0,0,0.3);
+}
+
+#worldListTitle {
+    color: #ffffff;
+    font-size: 1.8vw;
+    font-weight: bold;
+}
+
+.worldListHeaderBtns {
+    display: flex;
+    gap: 0.6vw;
+}
+
+.worldListHeaderBtns .menuButton {
+    width: auto;
+    height: auto;
+    line-height: normal;
+    margin: 0;
+    padding: 0.6vw 1.2vw;
+    font-size: 1.1vw;
 }
 
 #worldListContainer {
     display: flex;
     flex-direction: column;
     gap: 0.8vw;
-    width: 70%;
+    padding: 1.2vw;
+    overflow-y: auto;
+    flex: 1;
 }
 
 .worldCard {
@@ -305,35 +342,61 @@ img.logo.game {
     background-color: rgba(40, 40, 40, 0.9);
     border: 0.15vw solid #555;
     border-radius: 0.5vw;
-    padding: 1vw 1.5vw;
+    padding: 0.8vw 1.2vw;
     cursor: pointer;
-    transition: background-color 0.15s;
+    transition: background-color 0.15s, border-color 0.15s;
 }
 
 .worldCard:hover {
     background-color: rgba(80, 80, 80, 0.9);
+    border-color: #88cc88;
+}
+
+.worldCardLeft {
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    min-width: 0;
+}
+
+.worldCardThumb {
+    width: 9vw;
+    height: 5vw;
+    object-fit: cover;
+    border-radius: 0.4vw;
+    background: #111;
+    border: 0.1vw solid #333;
+    flex-shrink: 0;
+    image-rendering: auto;
+}
+
+.worldCardThumb.noThumb {
+    visibility: hidden;       /* keep layout stable when a world has no screenshot */
 }
 
 .worldCardName {
     color: #ffffff;
-    font-size: 1.6vw;
+    font-size: 1.5vw;
     font-weight: bold;
 }
 
 .worldCardMeta {
     color: #aaaaaa;
-    font-size: 1vw;
+    font-size: 0.95vw;
     margin-top: 0.3vw;
 }
 
 .worldCardInfo {
     display: flex;
     flex-direction: column;
+    min-width: 0;
 }
 
 .worldCardPlay {
     font-size: 1.2vw;
     color: #88cc88;
+    flex-shrink: 0;
+    margin-left: 1vw;
 }
 
 /* ── World Detail Modal ───────────────────────────────────────────────────── */
@@ -427,6 +490,17 @@ img.logo.game {
     animation: actionFlash 0.25s ease-out forwards;
 }
 
+#suffocateOverlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 140;                       /* above the HUD, below every menu (550+) */
+    opacity: 1;                         /* fully opaque block fill */
+    background-repeat: repeat;
+    background-size: 178vmin 178vmin; /* tiled block texture */
+    image-rendering: pixelated;
+}
+
 @keyframes actionFlash {
     0%   { opacity: 1; background: repeating-conic-gradient(rgba(255,0,0,0.18) 0deg 6deg, transparent 6deg 18deg) center/cover; }
     100% { opacity: 0; }
@@ -455,6 +529,105 @@ img.logo.game {
     transition: width 0.05s linear;
 }
 
+/* ── Mining progress bar ──────────────────────────────────────────────────── */
+
+#mineProgressBar {
+    position: absolute;
+    top: calc(50% + 2vw);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 10vw;
+    height: 0.55vw;
+    background: rgba(0,0,0,0.55);
+    border-radius: 0.3vw;
+    overflow: hidden;
+    z-index: 100;
+}
+
+#mineProgressFill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, #888, #fff);
+    border-radius: 0.3vw;
+    transition: width 0.05s linear;
+}
+
+/* ── Eating progress bar ──────────────────────────────────────────────────── */
+
+#eatProgressBar {
+    position: absolute;
+    top: calc(50% + 2.8vw);
+    left: 50%;
+    transform: translateX(-50%);
+    width: 10vw;
+    height: 0.55vw;
+    background: rgba(0,0,0,0.55);
+    border-radius: 0.3vw;
+    overflow: hidden;
+    z-index: 100;
+}
+
+#eatProgressFill {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(to right, #e07000, #ffe050);
+    border-radius: 0.3vw;
+    transition: width 0.05s linear;
+}
+
+/* ── Hotbar stack count ───────────────────────────────────────────────────── */
+
+.hotbarSlot { position: relative; }
+
+.hotbarCount {
+    position: absolute;
+    right: 0.15vw;
+    bottom: 0.05vw;
+    font-size: 1vw;
+    font-weight: bold;
+    color: #fff;
+    line-height: 1;
+    pointer-events: none;
+    text-shadow: 0.08vw 0.08vw 0 #000, -0.08vw 0.08vw 0 #000,
+                 0.08vw -0.08vw 0 #000, -0.08vw -0.08vw 0 #000;
+}
+
+/* ── Player coordinates (top-right) ───────────────────────────────────────── */
+
+#playerCoords {
+    position: absolute;
+    top: 1vw;
+    right: 1.2vw;
+    font-family: monospace;
+    font-size: 1.1vw;
+    color: #fff;
+    text-shadow: 0.1vw 0.1vw 0.2vw #000;
+    z-index: 120;
+    pointer-events: none;
+}
+
+/* ── "Saving World..." indicator (below coords, all screens) ──────────────── */
+
+#savingIndicator {
+    position: fixed;
+    top: 3vw;
+    right: 1.2vw;
+    font-size: 1.1vw;
+    color: #ffe28a;
+    background: rgba(0, 0, 0, 0.45);
+    padding: 0.3vw 0.8vw;
+    border-radius: 0.3vw;
+    text-shadow: 0.05vw 0.05vw 0.1vw #000;
+    z-index: 2000;
+    pointer-events: none;
+    animation: savingPulse 1s ease-in-out infinite;
+}
+
+@keyframes savingPulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.55; }
+}
+
 /* ── Death screen ─────────────────────────────────────────────────────────── */
 
 #DeathScreen {
@@ -480,6 +653,35 @@ img.logo.game {
     font-size: 1.4vw;
     color: #ccaaaa;
     margin-bottom: 3vw;
+}
+
+/* ── Creative Inventory panel ────────────────────────────────────────────── */
+
+#CreativeInventoryPanel {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 62vw;
+    max-height: 80vh;
+    background: rgba(10, 10, 10, 0.96);
+    border: 0.15vw solid #444;
+    border-radius: 1vw;
+    display: flex;
+    flex-direction: column;
+    z-index: 550;
+    overflow: hidden;
+    padding: 1.5vw;
+    gap: 0.8vw;
+}
+
+#creativeInvGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3vw;
+    overflow-y: auto;
+    max-height: 56vh;
+    padding-right: 0.4vw;
 }
 
 /* ── Interactive block panel (crafting, chests, etc.) ─────────────────────── */
@@ -531,6 +733,8 @@ img.logo.game {
     padding: 0.6vw 1vw;
     background: rgba(50,50,50,0.8);
     border-radius: 0.4vw;
+    display: flex;
+    align-items: center;
     color: #ddd;
     font-size: 1.1vw;
     cursor: pointer;
@@ -567,28 +771,53 @@ img.logo.game {
     position: fixed;
     inset: 0;
     z-index: 9500;
-    background: rgba(0, 0, 0, 0.88);
+    background: rgba(0, 0, 0, 0.85);
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    overflow-y: auto;
-    padding: 2vw 0;
+}
+
+#settingsPanelBox {
+    display: flex;
+    flex-direction: column;
+    width: 50vw;
+    height: 82vh;
+    background: rgba(20, 20, 22, 0.96);
+    border: 0.15vw solid #555;
+    border-radius: 0.8vw;
+    overflow: hidden;
+    box-shadow: 0 0.5vw 2vw rgba(0,0,0,0.6);
+}
+
+.settingsHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1vw 1.5vw;
+    border-bottom: 0.12vw solid #444;
+    color: #fff;
+    font-size: 1.7vw;
+    font-weight: bold;
+}
+
+.settingsHeader .menuButton {
+    width: auto; height: auto; line-height: normal; margin: 0;
+    padding: 0.5vw 1.2vw; font-size: 1.1vw;
 }
 
 .settingsTabs {
     display: flex;
-    gap: 0.5vw;
-    margin-bottom: 1.5vw;
+    gap: 0.4vw;
+    padding: 0.8vw 1.5vw 0;
 }
 
 .settingsTab {
-    padding: 0.6vw 2vw;
+    padding: 0.5vw 1.6vw;
     background: #2a2a2a;
     color: #aaa;
     border-radius: 0.4vw 0.4vw 0 0;
     cursor: pointer;
-    font-size: 1.2vw;
+    font-size: 1.15vw;
     border-bottom: 0.2vw solid transparent;
 }
 
@@ -598,15 +827,27 @@ img.logo.game {
     border-bottom-color: #88cc88;
 }
 
+.settingsScroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.2vw 1.5vw;
+}
+
 .settingsPanel {
     display: flex;
     flex-direction: column;
-    gap: 1vw;
-    width: 40vw;
-    background: rgba(0,0,0,0.7);
-    border-radius: 0 0.5vw 0.5vw 0.5vw;
-    padding: 1.5vw 2vw;
+    gap: 0.7vw;
 }
+
+.settingsSectionTitle {
+    color: #88cc88;
+    font-size: 1.25vw;
+    font-weight: bold;
+    margin-top: 0.8vw;
+    padding-bottom: 0.3vw;
+    border-bottom: 0.1vw solid #383838;
+}
+.settingsSectionTitle:first-child { margin-top: 0; }
 
 .settingsRow {
     display: flex;
@@ -614,21 +855,153 @@ img.logo.game {
     gap: 1vw;
     color: #ddd;
     font-size: 1.1vw;
+    padding: 0.2vw 0.3vw;
 }
 
 .settingsLabel { flex: 1; }
 
 .settingsSlider {
-    width: 12vw;
+    width: 14vw;
     accent-color: #88cc88;
 }
 
 .settingsValue {
-    width: 3vw;
+    width: 4vw;
     text-align: right;
     color: #88cc88;
     font-size: 1.1vw;
 }
+
+.settingsSelect {
+    background: #2a2a2a;
+    color: #fff;
+    border: 0.1vw solid #555;
+    border-radius: 0.3vw;
+    padding: 0.4vw 0.6vw;
+    font-size: 1vw;
+    min-width: 12vw;
+}
+
+/* Toggle switch */
+.settingsToggle { position: relative; display: inline-block; width: 3.4vw; height: 1.7vw; cursor: pointer; }
+.settingsToggle input { opacity: 0; width: 0; height: 0; }
+.settingsToggle .track {
+    position: absolute; inset: 0; background: #555; border-radius: 1vw;
+    transition: background 0.15s;
+}
+.settingsToggle .track::before {
+    content: ""; position: absolute; height: 1.3vw; width: 1.3vw; left: 0.2vw; top: 0.2vw;
+    background: #ddd; border-radius: 50%; transition: transform 0.15s;
+}
+.settingsToggle input:checked + .track { background: #2f8000; }
+.settingsToggle input:checked + .track::before { transform: translateX(1.7vw); }
+
+/* HUD elements force-hidden by settings (overrides their normal display) */
+#playerCoords.forceHidden, #crosshair.forceHidden { display: none !important; }
+
+#fpsCounter {
+    position: absolute;
+    top: 1vw;
+    left: 1.2vw;
+    font-family: monospace;
+    font-size: 1.1vw;
+    color: #9f9;
+    text-shadow: 0.1vw 0.1vw 0.2vw #000;
+    z-index: 120;
+    pointer-events: none;
+}
+
+/* ── Accessibility ────────────────────────────────────────────────────────── */
+body.a11y-reduce *, body.a11y-reduce *::before, body.a11y-reduce *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+}
+body.a11y-large-text .settingsRow,
+body.a11y-large-text .worldCardName,
+body.a11y-large-text #playerInfo,
+body.a11y-large-text .menuButton { font-size: 1.25em; }
+body.a11y-contrast .worldCard,
+body.a11y-contrast .settingsSelect,
+body.a11y-contrast #worldListPanel,
+body.a11y-contrast #settingsPanelBox { border-color: #fff !important; }
+body.a11y-contrast .worldCardMeta,
+body.a11y-contrast .settingsRow { color: #fff !important; }
+body.a11y-contrast #playerInfo,
+body.a11y-contrast #playerCoords,
+body.a11y-contrast #fpsCounter { background: #000; }
+
+/* ── How To Play ──────────────────────────────────────────────────────────── */
+
+#HowToPlayScreen {
+    position: fixed;
+    inset: 0;
+    z-index: 9500;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#howToBox {
+    display: flex;
+    flex-direction: column;
+    width: 52vw;
+    height: 82vh;
+    background: rgba(20, 20, 22, 0.96);
+    border: 0.15vw solid #555;
+    border-radius: 0.8vw;
+    overflow: hidden;
+    box-shadow: 0 0.5vw 2vw rgba(0,0,0,0.6);
+}
+
+.howToHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1vw 1.5vw;
+    border-bottom: 0.12vw solid #444;
+    color: #fff;
+    font-size: 1.7vw;
+    font-weight: bold;
+}
+.howToHeader .menuButton {
+    width: auto; height: auto; line-height: normal; margin: 0;
+    padding: 0.5vw 1.2vw; font-size: 1.1vw;
+}
+
+.howToScroll {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1.2vw 1.8vw;
+    color: #ddd;
+    font-size: 1.1vw;
+    line-height: 1.5;
+}
+
+.howToGoal {
+    background: rgba(47, 128, 0, 0.18);
+    border: 0.1vw solid #2f8000;
+    border-radius: 0.5vw;
+    padding: 1vw 1.2vw;
+    font-size: 1.2vw;
+    line-height: 1.5;
+    color: #eaffea;
+}
+
+.howToSectionTitle {
+    color: #88cc88;
+    font-size: 1.35vw;
+    font-weight: bold;
+    margin: 1.2vw 0 0.4vw;
+}
+
+.howToList {
+    margin: 0;
+    padding-left: 1.6vw;
+}
+.howToList li { margin: 0.35vw 0; }
+.howToList b { color: #fff; }
 
 /* ── Inventory Screen ─────────────────────────────────────────────────────── */
 
@@ -787,6 +1160,23 @@ img.logo.game {
     color: #666;
     min-width: 3.5vw;
     text-transform: capitalize;
+}
+
+/* Inventory tooltip */
+#invTooltip {
+    position: fixed;
+    display: none;
+    pointer-events: none;
+    z-index: 910;
+    background: rgba(15, 15, 20, 0.96);
+    border: 0.1vw solid #555;
+    border-radius: 0.4vw;
+    padding: 0.4vw 0.7vw;
+    color: #eee;
+    font-size: 1vw;
+    white-space: pre;
+    line-height: 1.5;
+    max-width: 20vw;
 }
 
 /* Cursor item (follows mouse) */

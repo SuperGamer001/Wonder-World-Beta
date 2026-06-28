@@ -1,0 +1,14 @@
+{
+  "id": "polished_diorite",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "polished_diorite",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "diorite",
+      "count": 4
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": 30,
+  "name": "IRON_BLOCK",
+  "color": [
+    0.83,
+    0.83,
+    0.86
+  ],
+  "hardness": 4,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "iron_block",
+      "count": 1
+    }
+  ]
+}

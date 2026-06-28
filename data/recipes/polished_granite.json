@@ -1,0 +1,14 @@
+{
+  "id": "polished_granite",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "polished_granite",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "granite",
+      "count": 4
+    }
+  ]
+}

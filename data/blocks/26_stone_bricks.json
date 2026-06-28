@@ -1,0 +1,17 @@
+{
+  "id": 26,
+  "name": "STONE_BRICKS",
+  "color": [
+    0.5,
+    0.5,
+    0.52
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "stone_bricks",
+      "count": 1
+    }
+  ]
+}

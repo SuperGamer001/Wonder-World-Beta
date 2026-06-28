@@ -1,0 +1,42 @@
+{
+  "position": {
+    "x": 360.2903016779711,
+    "y": 65.00452209920014,
+    "z": 9.944239895168913
+  },
+  "rotation": {
+    "yaw": -11.620800000000003,
+    "pitch": -0.050400000000003845
+  },
+  "health": 100,
+  "hunger": 100,
+  "energy": 100,
+  "inventory": {
+    "maxWeight": 100,
+    "hotbar": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "offhand": null,
+    "equipment": {
+      "head": null,
+      "chest": null,
+      "legs": null,
+      "feet": null,
+      "ears": null,
+      "hands": null,
+      "arms": null,
+      "quiver": null
+    },
+    "slots": [],
+    "quiverArrows": 0
+  }
+}

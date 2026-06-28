@@ -1,0 +1,18 @@
+{
+  "id": "glass",
+  "station": "smelter",
+  "result": {
+    "itemId": "glass",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "sand",
+      "count": 1
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

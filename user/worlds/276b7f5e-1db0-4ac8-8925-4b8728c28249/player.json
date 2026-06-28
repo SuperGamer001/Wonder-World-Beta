@@ -1,0 +1,51 @@
+{
+  "position": {
+    "x": 171.5494239261535,
+    "y": 74.62731054560052,
+    "z": 214.37393669215473
+  },
+  "rotation": {
+    "yaw": -14.031000000000011,
+    "pitch": -1.1413963267948952
+  },
+  "health": 100,
+  "hunger": 98.89802500000098,
+  "energy": 99.33881500000307,
+  "inventory": {
+    "maxWeight": 100,
+    "hotbar": [
+      {
+        "itemId": "wood_log",
+        "count": 3
+      },
+      {
+        "itemId": "dirt",
+        "count": 2
+      },
+      {
+        "itemId": "bricks",
+        "count": 1
+      },
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ],
+    "offhand": null,
+    "equipment": {
+      "head": null,
+      "chest": null,
+      "legs": null,
+      "feet": null,
+      "ears": null,
+      "hands": null,
+      "arms": null,
+      "quiver": null
+    },
+    "slots": [],
+    "quiverArrows": 0
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "OCEAN",
   "temperature": 0.5,
-  "humidity": 1.0,
+  "humidity": 1,
   "baseHeight": 36,
   "heightVariation": 12,
   "heightOctaves": 3,
@@ -21,8 +21,8 @@
   "ores": [
     {
       "block": "COAL_ORE",
-      "minY": -64,
-      "maxY": 24,
+      "minY": -90,
+      "maxY": 279,
       "frequency": 0.006,
       "minSize": 3,
       "maxSize": 10

@@ -21,24 +21,24 @@
   "ores": [
     {
       "block": "COAL_ORE",
-      "minY": -32,
-      "maxY": 64,
+      "minY": -90,
+      "maxY": 279,
       "frequency": 0.011,
       "minSize": 4,
       "maxSize": 14
     },
     {
       "block": "IRON_ORE",
-      "minY": -128,
-      "maxY": 48,
+      "minY": -460,
+      "maxY": 200,
       "frequency": 0.009,
       "minSize": 3,
       "maxSize": 10
     },
     {
       "block": "GOLD_ORE",
-      "minY": -128,
-      "maxY": 24,
+      "minY": -460,
+      "maxY": -340,
       "frequency": 0.005,
       "minSize": 2,
       "maxSize": 7

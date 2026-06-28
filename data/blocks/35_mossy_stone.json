@@ -1,0 +1,17 @@
+{
+  "id": 35,
+  "name": "MOSSY_STONE",
+  "color": [
+    0.42,
+    0.5,
+    0.4
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "mossy_stone",
+      "count": 1
+    }
+  ]
+}

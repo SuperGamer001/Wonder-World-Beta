@@ -1,0 +1,17 @@
+{
+  "id": 28,
+  "name": "GLASS",
+  "color": [
+    0.82,
+    0.91,
+    0.96
+  ],
+  "hardness": 0.4,
+  "transparent": true,
+  "drops": [
+    {
+      "itemId": "glass",
+      "count": 1
+    }
+  ]
+}

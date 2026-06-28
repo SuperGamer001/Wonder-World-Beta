@@ -48,17 +48,23 @@
     <!-- ── Title Screen ────────────────────────────────────────────────────── -->
     <div class="hidden" id="TitleScreen">
         <div class="menuButton" id="startButton">Play</div>
+        <div class="menuButton" id="titleHowToBtn">How To Play</div>
         <div class="menuButton" id="titleSettingsBtn">Settings</div>
         <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
     </div>
 
     <!-- ── World List Screen ───────────────────────────────────────────────── -->
     <div class="hidden" id="WorldListScreen">
-        <div id="worldListHeader">
-            <div class="menuButton" id="createWorldBtn">+ Create World</div>
+        <div id="worldListPanel">
+            <div id="worldListHeader">
+                <span id="worldListTitle">Your Worlds</span>
+                <div class="worldListHeaderBtns">
+                    <div class="menuButton" id="createWorldBtn">+ Create World</div>
+                    <div class="menuButton" id="worldListBackBtn">Close</div>
+                </div>
+            </div>
+            <div id="worldListContainer"></div>
         </div>
-        <div id="worldListContainer"></div>
-        <div class="menuButton" id="worldListBackBtn" style="margin-top:2vw;">Back</div>
     </div>
 
     <!-- ── World Detail Modal ──────────────────────────────────────────────── -->
@@ -86,6 +92,15 @@
                     <option value="SPECTATOR">Spectator</option>
                 </select>
             </div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Difficulty</label>
+                <select class="worldFormInput" id="worldSettingsDifficulty">
+                    <option value="PEACEFUL">Peaceful</option>
+                    <option value="EASY">Easy</option>
+                    <option value="NORMAL">Normal</option>
+                    <option value="HARD">Hard</option>
+                </select>
+            </div>
             <div class="menuButton" id="worldSettingsSaveBtn">Save</div>
             <div class="menuButton" id="worldSettingsCancelBtn">Cancel</div>
         </div>
@@ -111,6 +126,15 @@
                     <option value="SPECTATOR">Spectator</option>
                 </select>
             </div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Difficulty</label>
+                <select class="worldFormInput" id="newWorldDifficulty">
+                    <option value="PEACEFUL">Peaceful</option>
+                    <option value="EASY">Easy</option>
+                    <option value="NORMAL" selected>Normal</option>
+                    <option value="HARD">Hard</option>
+                </select>
+            </div>
             <div class="menuButton" id="createWorldConfirmBtn">Create</div>
             <div class="menuButton" id="createWorldCancelBtn">Cancel</div>
         </div>
@@ -118,34 +142,168 @@
 
     <!-- ── Settings Screen ────────────────────────────────────────────────── -->
     <div class="hidden" id="SettingsScreen">
-        <div class="settingsTabs">
-            <div class="settingsTab active" id="tabPlayer" onclick="switchSettingsTab('player')">Player</div>
-            <div class="settingsTab" id="tabWorld" onclick="switchSettingsTab('world')">World</div>
-        </div>
-        <div class="settingsPanel" id="settingsPanelPlayer">
-            <div class="settingsRow">
-                <span class="settingsLabel">Mouse Sensitivity</span>
-                <input type="range" id="settingSensitivity" min="0.5" max="5" step="0.1" value="1.0" class="settingsSlider">
-                <span class="settingsValue" id="settingSensitivityVal">1.0</span>
+        <div id="settingsPanelBox">
+            <div class="settingsHeader">
+                <span>Settings</span>
+                <div class="menuButton" id="settingsBackBtn">Back</div>
             </div>
-            <div class="settingsRow">
-                <span class="settingsLabel">Render Distance</span>
-                <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="12" class="settingsSlider">
-                <span class="settingsValue" id="settingRenderDistVal">12</span>
+            <div class="settingsTabs">
+                <div class="settingsTab active" id="tabPlayer" onclick="switchSettingsTab('player')">Player</div>
+                <div class="settingsTab" id="tabWorld" onclick="switchSettingsTab('world')">World</div>
+            </div>
+
+            <div class="settingsScroll">
+                <div class="settingsPanel" id="settingsPanelPlayer">
+                    <div class="settingsSectionTitle">Controls</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Mouse Sensitivity</span>
+                        <input type="range" id="settingSensitivity" min="0.2" max="4" step="0.1" value="1.0" class="settingsSlider">
+                        <span class="settingsValue" id="settingSensitivityVal">1.0</span>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Invert Y Axis</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingInvertY"><span class="track"></span></label>
+                    </div>
+
+                    <div class="settingsSectionTitle">Video</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Field of View</span>
+                        <input type="range" id="settingFov" min="50" max="110" step="1" value="75" class="settingsSlider">
+                        <span class="settingsValue" id="settingFovVal">75</span>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Render Distance</span>
+                        <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="12" class="settingsSlider">
+                        <span class="settingsValue" id="settingRenderDistVal">12</span>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Brightness</span>
+                        <input type="range" id="settingBrightness" min="0.6" max="1.6" step="0.05" value="1.0" class="settingsSlider">
+                        <span class="settingsValue" id="settingBrightnessVal">100%</span>
+                    </div>
+
+                    <div class="settingsSectionTitle">HUD</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Show Coordinates</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingShowCoords" checked><span class="track"></span></label>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Show Crosshair</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingCrosshair" checked><span class="track"></span></label>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Show FPS</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingShowFps"><span class="track"></span></label>
+                    </div>
+
+                    <div class="settingsSectionTitle">Accessibility</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Colorblind Mode</span>
+                        <select class="settingsSelect" id="settingColorblind">
+                            <option value="none">None</option>
+                            <option value="protanopia">Protanopia (red-weak)</option>
+                            <option value="deuteranopia">Deuteranopia (green-weak)</option>
+                            <option value="tritanopia">Tritanopia (blue-weak)</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">High Contrast UI</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingHighContrast"><span class="track"></span></label>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Reduce Motion</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingReduceMotion"><span class="track"></span></label>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Large Text</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingLargeText"><span class="track"></span></label>
+                    </div>
+                    <div class="settingsRow">
+                        <div class="menuButton" id="settingsResetBtn" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Reset to Defaults</div>
+                    </div>
+                </div>
+
+                <div class="settingsPanel hidden" id="settingsPanelWorld">
+                    <div class="settingsSectionTitle">This World</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Game Mode</span>
+                        <select class="settingsSelect" id="settingGameMode">
+                            <option value="SURVIVAL">Survival</option>
+                            <option value="CREATIVE">Creative</option>
+                            <option value="SPECTATOR">Spectator</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Difficulty</span>
+                        <select class="settingsSelect" id="settingDifficulty">
+                            <option value="PEACEFUL">Peaceful</option>
+                            <option value="EASY">Easy</option>
+                            <option value="NORMAL">Normal</option>
+                            <option value="HARD">Hard</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <div class="menuButton" id="settingGameModeApply" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Apply to World</div>
+                    </div>
+                </div>
             </div>
         </div>
-        <div class="settingsPanel hidden" id="settingsPanelWorld">
-            <div class="settingsRow">
-                <span class="settingsLabel">Game Mode</span>
-                <select class="worldFormInput" id="settingGameMode" style="width:10vw;">
-                    <option value="SURVIVAL">Survival</option>
-                    <option value="CREATIVE">Creative</option>
-                    <option value="SPECTATOR">Spectator</option>
-                </select>
+    </div>
+
+    <!-- ── How To Play ────────────────────────────────────────────────────── -->
+    <div class="hidden" id="HowToPlayScreen">
+        <div id="howToBox">
+            <div class="howToHeader">
+                <span>How To Play</span>
+                <div class="menuButton" id="howToBackBtn">Back</div>
             </div>
-            <div class="menuButton" id="settingGameModeApply" style="margin-top:1vw;">Apply</div>
+            <div class="howToScroll">
+                <div class="howToGoal">
+                    <strong>Wonder World: BETA</strong><br>
+                    Your goal for now: dig deep, find <strong>Gold</strong>, craft a full set of
+                    <strong>Gold Armor</strong> (helmet, chestplate, leggings, boots), and make it
+                    back to the <strong>surface</strong> alive.
+                </div>
+
+                <div class="howToSectionTitle">Movement</div>
+                <ul class="howToList">
+                    <li><b>W A S D</b> — move</li>
+                    <li><b>Mouse</b> — look around</li>
+                    <li><b>Space</b> — jump / swim up</li>
+                    <li><b>Shift</b> — sprint</li>
+                    <li><b>Ctrl</b> or <b>Q</b> — sneak / descend</li>
+                </ul>
+
+                <div class="howToSectionTitle">Interacting</div>
+                <ul class="howToList">
+                    <li><b>Left-click</b> — mine blocks &amp; attack</li>
+                    <li><b>Right-click</b> — use the held item: place a block, eat food, draw a bow, or open a station (crafting table, oven, smelter, chest)</li>
+                    <li>Stuck with your head in a block? Just <b>mine</b> — it digs out the block at your head first</li>
+                </ul>
+
+                <div class="howToSectionTitle">Inventory &amp; Crafting</div>
+                <ul class="howToList">
+                    <li><b>E</b> — open inventory &nbsp;·&nbsp; <b>C</b> — crafting / creative menu</li>
+                    <li><b>1–0</b> — select a hotbar slot</li>
+                    <li><b>Crafting Table</b> — tools, armor &amp; blocks &nbsp;·&nbsp; <b>Oven</b> — cook food &nbsp;·&nbsp; <b>Smelter</b> — ingots &amp; glass</li>
+                    <li>Mine ore, smelt it into ingots, then craft armor and tools</li>
+                </ul>
+
+                <div class="howToSectionTitle">Survival</div>
+                <ul class="howToList">
+                    <li>Keep an eye on <b>Health</b>, <b>Hunger</b> and <b>Energy</b></li>
+                    <li>Hold <b>Right-click</b> with food to eat (watch the eat bar)</li>
+                    <li>Don't suffocate inside blocks, and beware fall damage in deep caves</li>
+                    <li>Gold is found near the very bottom of the world — pack food before you dig</li>
+                </ul>
+
+                <div class="howToSectionTitle">Menus</div>
+                <ul class="howToList">
+                    <li><b>Esc</b> — close a menu, or pause the game</li>
+                    <li>The game only responds to movement while the mouse is locked (click the screen to lock)</li>
+                </ul>
+            </div>
         </div>
-        <div class="menuButton" id="settingsBackBtn" style="margin-top:2vw;">Back</div>
     </div>
 
     <!-- ── Game Screen ────────────────────────────────────────────────────── -->
@@ -155,6 +313,8 @@
         <div id="damageVignette"></div>
         <!-- Action lines overlay (flashes on heavy damage) -->
         <div id="actionLines"></div>
+        <!-- Suffocation overlay (head inside opaque block) -->
+        <div id="suffocateOverlay" class="hidden"></div>
 
         <div id="gameUI">
             <div id="playerInfo">
@@ -164,6 +324,11 @@
                 <div id="playerProtection" class="hidden">Protection: 0%</div>
                 <div id="playerArrows" class="hidden">Arrows: 0</div>
             </div>
+
+            <!-- Player coordinates — top-right -->
+            <div id="playerCoords"></div>
+            <!-- FPS counter (toggle in settings) -->
+            <div id="fpsCounter" class="hidden">FPS: 0</div>
 
             <!-- Attack charge bar -->
             <div id="attackChargeBar">
@@ -185,6 +350,16 @@
             </div>
 
             <div id="crosshair"></div>
+
+            <!-- Mining progress bar — shown while breaking a block -->
+            <div id="mineProgressBar" style="display:none;">
+                <div id="mineProgressFill"></div>
+            </div>
+
+            <!-- Eating progress bar — shown while consuming food -->
+            <div id="eatProgressBar" style="display:none;">
+                <div id="eatProgressFill"></div>
+            </div>
         </div>
 
         <!-- Death screen -->
@@ -198,7 +373,10 @@
         <div id="InventoryScreen" class="hidden">
             <div class="invHeader">
                 <span>Inventory &nbsp;<span id="invWeightLabel" style="font-size:1vw;color:#888;font-weight:normal;"></span></span>
-                <div class="menuButton" id="invCloseBtn" style="width:5vw;height:2.5vw;line-height:2.5vw;font-size:1.1vw;">Close</div>
+                <div style="display:flex;gap:0.5vw;align-items:center;">
+                    <div class="menuButton" id="invCraftBtn" style="width:11vw;height:2.5vw;line-height:2.5vw;font-size:1vw;">Open Craft</div>
+                    <div class="menuButton" id="invCloseBtn" style="width:5vw;height:2.5vw;line-height:2.5vw;font-size:1.1vw;">Close</div>
+                </div>
             </div>
             <div class="invBody">
                 <div class="invEquipCol">
@@ -229,15 +407,31 @@
             </div>
         </div>
 
+        <!-- Creative Inventory (C key in Creative mode) -->
+        <div id="CreativeInventoryPanel" class="hidden">
+            <div class="interactiveHeader">
+                <span>Creative Inventory</span>
+                <div class="menuButton" id="creativeInvClose" style="width:6vw;height:3vw;line-height:3vw;font-size:1.2vw;">Close</div>
+            </div>
+            <div id="creativeInvSearch" style="margin-bottom:0.8vw;">
+                <input id="creativeInvFilter" type="text" placeholder="Search items..." style="width:20vw;padding:0.4vw 0.6vw;background:#1a1a1a;color:#eee;border:1px solid #444;border-radius:4px;font-size:1vw;">
+            </div>
+            <div id="creativeInvGrid"></div>
+        </div>
+
         <div class="hidden" id="PauseScreen">
             <img id="PauseLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 20%; height: auto; margin-top: -15vw;">
             <div class="menuButton" onclick="resumeGame()">Resume</div>
+            <div class="menuButton" id="pauseHowToBtn">How To Play</div>
             <div class="menuButton" id="pauseSettingsBtn">Settings</div>
             <div class="menuButton" onclick="leaveWorld()">Quit</div>
         </div>
 
         <canvas id="gameCanvas"></canvas>
     </div>
+
+    <!-- "Saving World..." sign — body-level so it shows on every screen -->
+    <div id="savingIndicator" class="hidden">Saving World...</div>
 
 </body>
 </html>

@@ -1,0 +1,14 @@
+{
+  "id": "smelter",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "smelter",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stone_bricks",
+      "count": 8
+    }
+  ]
+}

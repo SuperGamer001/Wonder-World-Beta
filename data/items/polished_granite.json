@@ -1,0 +1,7 @@
+{
+  "id": "polished_granite",
+  "name": "Polished Granite",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

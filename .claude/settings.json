@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node _racetest.mjs)",
+      "Bash(rm -f _racetest.mjs)",
+      "Bash(timeout 30 node _racetest.mjs)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(timeout 40 node _racetest.mjs)"
+    ]
+  }
+}

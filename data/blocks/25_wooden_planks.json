@@ -1,0 +1,16 @@
+{
+  "id": 25,
+  "name": "WOODEN_PLANKS",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "drops": [
+    {
+      "itemId": "wooden_planks",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "id": "stone_bricks",
+  "name": "Stone Bricks",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

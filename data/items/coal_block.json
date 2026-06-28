@@ -1,0 +1,7 @@
+{
+  "id": "coal_block",
+  "name": "Coal Block",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64
+}

@@ -1,0 +1,17 @@
+{
+  "id": 31,
+  "name": "COAL_BLOCK",
+  "color": [
+    0.12,
+    0.12,
+    0.13
+  ],
+  "hardness": 3,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "coal_block",
+      "count": 1
+    }
+  ]
+}

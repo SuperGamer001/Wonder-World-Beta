@@ -5,7 +5,7 @@
  * input object each frame.  Has no Three.js dependency.
  */
 
-import { WORLD_MIN_Y } from './ChunkData.js';
+import { WORLD_MIN_Y, CHUNK_SHIFT } from './ChunkData.js';
 
 const PLAYER_WIDTH  = 0.6;
 const PLAYER_HEIGHT = 1.8;
@@ -203,8 +203,10 @@ export class PlayerPhysics {
         const z0 = z - PLAYER_HALF_W, z1 = z + PLAYER_HALF_W - 0.001;
 
         for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
-            for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
-                for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
+            for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
+                // Unloaded chunk → treat as solid wall to prevent walking into void
+                if (!this.world.getChunk(bx >> CHUNK_SHIFT, bz >> CHUNK_SHIFT)?.generated) return true;
+                for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
                     const id = this.world.getBlock(bx, by, bz);
                     if (id > 0 && !this.reg.isNoCollision(id)) return true;
                 }

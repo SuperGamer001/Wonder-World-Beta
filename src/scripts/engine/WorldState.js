@@ -1,9 +1,13 @@
-import { ChunkData, CHUNK_SIZE, CHUNK_SHIFT, CHUNK_MASK, CHUNK_SIZE_Y, WORLD_MIN_Y } from './ChunkData.js';
+import { ChunkData, CHUNK_SIZE, CHUNK_SHIFT, CHUNK_MASK, CHUNK_SIZE_Y, WORLD_MIN_Y, voxelIndex } from './ChunkData.js';
 
 export class WorldState {
     constructor() {
         this.chunks = new Map(); // "cx,cz" -> ChunkData
         this.seed   = (Math.random() * 0x7FFFFFFF) | 0;
+        // Block edits keyed by chunk: Map<"cx,cz", Map<voxelIndex, blockId>>.
+        // Survives chunk unload so edits can be replayed when a chunk regenerates.
+        // Cleared per-chunk when that chunk is saved to the server.
+        this.pendingChanges = new Map();
     }
 
     // ── Chunk access ────────────────────────────────────────────────────────────
@@ -40,9 +44,20 @@ export class WorldState {
     setBlock(wx, wy, wz, id) {
         const ly = wy - WORLD_MIN_Y;
         if (ly < 0 || ly >= CHUNK_SIZE_Y) return false;
-        const chunk = this.getChunk(wx >> CHUNK_SHIFT, wz >> CHUNK_SHIFT);
+        const cx  = wx >> CHUNK_SHIFT;
+        const cz  = wz >> CHUNK_SHIFT;
+        const lx  = wx & CHUNK_MASK;
+        const lz  = wz & CHUNK_MASK;
+        const key = WorldState.key(cx, cz);
+
+        // Record change in persistent memory so it can be replayed if the chunk
+        // unloads before the next auto-save.
+        if (!this.pendingChanges.has(key)) this.pendingChanges.set(key, new Map());
+        this.pendingChanges.get(key).set(voxelIndex(lx, ly, lz), id);
+
+        const chunk = this.getChunk(cx, cz);
         if (!chunk) return false;
-        chunk.setVoxel(wx & CHUNK_MASK, ly, wz & CHUNK_MASK, id);
+        chunk.setVoxel(lx, ly, lz, id);
         return true;
     }
 

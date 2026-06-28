@@ -282,7 +282,12 @@ export class TerrainGenerator {
             const wx = ox + lx;
             for (let lz = 0; lz < N; lz++) {
                 const wz       = oz + lz;
-                const maxCaveY = heights[lx * N + lz] - 1;
+                const surfaceY = heights[lx * N + lz];
+                // On land, carve all the way up through the surface block so caves
+                // that reach the top break open into sinkholes / cave mouths.
+                // Underwater, keep the surface capped so we don't punch air pockets
+                // beneath the ocean floor.
+                const maxCaveY = surfaceY > SEA_LEVEL ? surfaceY : surfaceY - 1;
 
                 for (let ly = 0; ly < N_Y; ly++) {
                     const wy = WORLD_MIN_Y + ly;

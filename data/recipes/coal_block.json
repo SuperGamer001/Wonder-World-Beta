@@ -1,0 +1,14 @@
+{
+  "id": "coal_block",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "coal_block",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "coal",
+      "count": 9
+    }
+  ]
+}

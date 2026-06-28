@@ -22,7 +22,7 @@ import { WorldState }                        from './engine/WorldState.js';
 import { WorkerPool }                        from './engine/WorkerPool.js';
 import { ChunkManager }                      from './engine/ChunkManager.js';
 import { WorldClient }                       from './engine/WorldClient.js';
-import { CHUNK_SIZE, WORLD_MIN_Y, CHUNK_SHIFT } from './engine/ChunkData.js';
+import { CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, CHUNK_SHIFT } from './engine/ChunkData.js';
 import { PlayerPhysics }                     from './engine/PlayerPhysics.js';
 import { Inventory }                         from './engine/Inventory.js';
 import { raycast }                           from './engine/Raycast.js';
@@ -35,6 +35,8 @@ const SERVER_URL   = 'http://localhost:3000';
 const AUTO_SAVE_MS = 5 * 60 * 1000;
 const CAMERA_HEIGHT = 1.6;
 const INTERACT_REACH = 4.5;
+const SEA_LEVEL    = 64;                              // matches TerrainGenerator
+const WORLD_MAX_Y  = WORLD_MIN_Y + CHUNK_SIZE_Y - 1;  // top of the world
 
 // ── Three.js singletons ───────────────────────────────────────────────────────
 
@@ -216,7 +218,16 @@ async function _buildBlockTextureArray() {
             const img = await _loadImage(BLOCK_TEX_LAYERS[i]);
             ctx.clearRect(0, 0, SIZE, SIZE);
             ctx.drawImage(img, 0, 0, SIZE, SIZE);
-            data.set(ctx.getImageData(0, 0, SIZE, SIZE).data, i * SIZE * SIZE * 4);
+            const imgData = ctx.getImageData(0, 0, SIZE, SIZE).data;
+            // DataArrayTexture is uploaded via texImage3D which does NOT auto-flip Y.
+            // Canvas data has row 0 at the top; OpenGL expects row 0 at the bottom.
+            // Flip here so UV V=0 samples the bottom of the image (standard convention).
+            const layerBase = i * SIZE * SIZE * 4;
+            for (let row = 0; row < SIZE; row++) {
+                const srcStart = (SIZE - 1 - row) * SIZE * 4;
+                const dstStart = layerBase + row * SIZE * 4;
+                for (let col = 0; col < SIZE * 4; col++) data[dstStart + col] = imgData[srcStart + col];
+            }
         } catch {
             console.warn('[world] Missing block texture:', BLOCK_TEX_LAYERS[i]);
         }
@@ -263,9 +274,23 @@ let _breakProgress = 0;   // 0..1
 
 let _gameMode    = 'CREATIVE';
 let _hotbarSlot  = 0;
-let _isDead      = false;
-let _damageFade  = 0;     // 0..1, drives vignette
-let _attackCharge = 0;   // 0..1
+let _isDead        = false;
+let _damageFade    = 0;     // 0..1, drives vignette
+let _attackCharge  = 0;   // 0..1
+let _suffocateTimer = 0;   // seconds inside an opaque block
+let _eatTimer      = 0;   // 0..EAT_TIME while eating food
+let _creativeMineCD = 0;  // seconds remaining before next creative break
+
+// Ground-spawn state. While _spawnPending the player hovers (physics frozen)
+// until terrain around the spawn column has generated and a dry, open surface
+// is found, then the player is dropped onto it.
+let _spawnPending = false;
+let _spawnXZ      = { x: 0, z: 0 };
+let _spawnStart   = 0;
+let _worldSpawn   = null;  // { x, z } — locked the first time a ground spawn resolves
+
+const EAT_TIME = 1.5;       // seconds to hold right-click to consume food
+const CREATIVE_MINE_CD = 0.3; // seconds between creative mining breaks
 
 // ── Camera ────────────────────────────────────────────────────────────────────
 
@@ -303,7 +328,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 512);
 
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    // preserveDrawingBuffer lets us grab a world screenshot at save time.
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
@@ -335,8 +361,14 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
 
     _gameMode = gameMode;
 
+    // Reset survivals stats to safe defaults; will be overwritten by saved state below.
+    me.health = 100;
+    me.hunger = 100;
+    me.energy = 100;
+
     _blockReg = buildRegistryFromGamePack(gamepackData);
     _itemReg  = buildItemRegistryFromGamePack(gamepackData);
+    _itemToBlock = _buildItemToBlock(gamepackData.blocks ?? []);
 
     worldState = new WorldState();
     if (worldSeed != null) worldState.seed = worldSeed;
@@ -369,7 +401,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
         blockFaceMap:  BLOCK_FACE_MAP,
     });
 
-    chunkManager = new ChunkManager(worldState, workerPool, 12);
+    chunkManager = new ChunkManager(worldState, workerPool, _renderDist);
     chunkManager.worldId = worldId;
     chunkManager.onMeshReady        = _onMeshReady;
     chunkManager.onPartialMeshReady = _onPartialMeshReady;
@@ -384,6 +416,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
             _autoSaveTimer = setInterval(() => _saveAll(), AUTO_SAVE_MS);
         } catch {
             console.warn('[world] Save server unreachable — world will not be persisted');
+            worldClient?.close();   // stop the auto-reconnect loop for this discarded client
             worldClient = null;
         }
 
@@ -398,16 +431,34 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     }
 
     if (!_physics) return; // guard if quitWorld raced
+
+    // _disposeAll() removes the selection mesh from the scene; re-add it here.
+    if (_selMesh && !scene.children.includes(_selMesh)) scene.add(_selMesh);
+
     const spawnPos = playerPos ?? { x: 0, y: 80, z: 0 };
-    if (!me.position || !me.position.fromSave) {
-        me.position = { x: spawnPos.x, y: spawnPos.y, z: spawnPos.z };
+    _worldSpawn   = null;
+    _spawnPending = false;
+    _loadGateDone = false;   // re-gate the loading screen for this world
+    if (me.position && me.position.fromSave) {
+        // Returning player — keep their saved position.
+        me.position = { x: me.position.x, y: me.position.y, z: me.position.z };
+    } else {
+        // Fresh spawn — drop onto the ground once terrain loads.
+        _beginGroundSpawn(spawnPos.x, spawnPos.z);
     }
     camera.position.set(me.position.x, me.position.y + CAMERA_HEIGHT, me.position.z);
     camera.rotation.set(0, 0, 0);
 
-    _isDead      = false;
-    _damageFade  = 0;
-    _attackCharge = 0;
+    _isDead         = false;
+    _damageFade     = 0;
+    _attackCharge   = 0;
+    _suffocateTimer = 0;
+    _eatTimer       = 0;
+
+    // Persistence + spawn position are now established. Release the generation gate
+    // so the render loop's chunk dispatches load saved edits from disk (rather than
+    // regenerating fresh terrain over the player's build during the connect window).
+    chunkManager.ready = true;
 
     console.log('[world] Loaded — seed:', worldState.seed, '— mode:', _gameMode,
                 '— workers:', workerPool.workerCount);
@@ -432,14 +483,25 @@ function _applyPlayerState(state) {
 document.addEventListener('WorldJS_quitWorld', () => {
     clearInterval(_autoSaveTimer);
     _autoSaveTimer = null;
-    _saveAll();
+
+    const client = worldClient;   // capture before nulling so we can flush + close it
+    _saveAll();                   // queues the final chunk save onto the socket
     _savePlayerState();
     _disposeAll();
 
     chunkManager = null;
     worldClient  = null;
-    workerPool?.clearQueue();
-    renderer?.dispose();
+    // Let the queued save drain, THEN close the socket — closing immediately would
+    // drop the player's final edits.
+    if (client) _flushAndCloseClient(client);
+    // Fully terminate the worker pool — clearQueue() alone leaves the workers
+    // alive. Without this, the next world spins up a second pool while the old
+    // one keeps running with the previous world's seed.
+    workerPool?.terminate();
+    workerPool = null;
+    worldState = null;
+    // Do NOT call renderer.dispose() — it destroys the WebGL context and makes
+    // the renderer unusable for the next world load in the same session.
     _blockReg = _itemReg = _physics = _inventory = _water = _entities = _crafting = null;
 });
 
@@ -447,6 +509,10 @@ document.addEventListener('WorldJS_quitWorld', () => {
 
 document.addEventListener('WorldJS_tick', (e) => {
     if (!chunkManager) return;
+
+    // While the loading screen is up, report how much of the area around the
+    // player has finished meshing so main.js can gate the reveal + drive the bar.
+    if (!_loadGateDone) _reportLoadGate();
 
     const dt = Math.min(e.data?.dt ?? 0.016, 0.1);
 
@@ -456,17 +522,32 @@ document.addEventListener('WorldJS_tick', (e) => {
 
     if (_isDead) { renderer.render(scene, camera); return; }
 
-    // Build input object for physics
+    // Waiting for a ground spawn: keep loading terrain around the spawn column and
+    // hold the player frozen above it until a surface is found.
+    if (_spawnPending) {
+        _tryGroundSpawn();
+        _camFwd.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).normalize();
+        _updateCamera();
+        chunkManager.update(me.position, _camFwd, { x: 0, z: 0 });
+        _updateHUD();
+        renderer.render(scene, camera);
+        return;
+    }
+
+    // Build input object for physics. Movement keys are only honoured while the
+    // pointer is locked to the game — when paused or in a menu the character
+    // must not respond to WASD / Space.
+    const controlsActive = document.pointerLockElement === document.getElementById('GameScreen');
     const fwd      = _horizontalForward();
     const rightDir = { x: fwd.z, z: -fwd.x };
     const input = {
-        forward:  !!KEYS['KeyW'],
-        backward: !!KEYS['KeyS'],
-        left:     !!KEYS['KeyA'],
-        right:    !!KEYS['KeyD'],
-        jump:     !!KEYS['Space'],
-        sneak:    !!KEYS['ControlLeft'] || !!KEYS['KeyQ'],
-        sprint:   !!KEYS['ShiftLeft'],
+        forward:  controlsActive && !!KEYS['KeyW'],
+        backward: controlsActive && !!KEYS['KeyS'],
+        left:     controlsActive && !!KEYS['KeyA'],
+        right:    controlsActive && !!KEYS['KeyD'],
+        jump:     controlsActive && !!KEYS['Space'],
+        sneak:    controlsActive && (!!KEYS['ControlLeft'] || !!KEYS['KeyQ']),
+        sprint:   controlsActive && !!KEYS['ShiftLeft'],
         fwd,
         rightDir,
     };
@@ -480,6 +561,7 @@ document.addEventListener('WorldJS_tick', (e) => {
 
     if (_gameMode === 'SURVIVAL') _survivalTick(dt);
 
+    _checkSuffocation(dt);
     _water.tick(dt, (cx, cz) => chunkManager?.markDirty(cx, cz));
     _entities.update(dt, me.position, _inventory, _gameMode);
 
@@ -491,9 +573,20 @@ document.addEventListener('WorldJS_tick', (e) => {
     // Mob targeting — check before block so mobs in front of walls are hit correctly
     const mobHit = _entities?.getClosestMobInRay(origin, _camFwd, INTERACT_REACH) ?? null;
 
-    // Block breaking only when no mob is targeted
-    _handleBreaking(dt, mobHit ? null : hit);
+    // Bow draw start / zoom — must run before placement so the bow has first
+    // priority on _rightJust (placement would otherwise always consume it).
+    const isBowSelected = _bowItemSelected();
+    if (!isBowSelected && _bowDrawing) { _bowDrawing = false; _bowCharge = 0; }
+    if (_rightJust && isBowSelected) { _bowDrawing = true; _bowCharge = 0; _rightJust = false; }
+    if (_bowDrawing) _handleBowDraw(dt);
+    _bowZoom = _bowDrawing;
+
+    // Block breaking only when no mob is targeted. If the head is buried inside a
+    // mineable block, dig that block out first (lets you escape being stuck).
+    const headHit = _mineableHeadBlock();
+    _handleBreaking(dt, mobHit ? null : (headHit ?? hit));
     _handlePlacement(hit);
+    _handleEating(dt);
     _handleAttackCharge(dt, mobHit, mobHit ? null : hit);
 
     // Selection outline: mob outline overrides block outline
@@ -504,13 +597,6 @@ document.addEventListener('WorldJS_tick', (e) => {
     } else if (_selMesh) {
         _selMesh.visible = false;
     }
-
-    // Bow draw start / zoom
-    const isBowSelected = _bowItemSelected();
-    if (!isBowSelected && _bowDrawing) { _bowDrawing = false; _bowCharge = 0; }
-    if (_rightJust && isBowSelected) { _bowDrawing = true; _bowCharge = 0; _rightJust = false; }
-    if (_bowDrawing) _handleBowDraw(dt);
-    _bowZoom = _bowDrawing;
 
     _updateCamera();
     chunkManager.update(me.position, _camFwd, { x: fwd.x, z: fwd.z });
@@ -537,10 +623,26 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 document.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement !== document.getElementById('GameScreen')) return;
-    const sensitivity = 0.0018;
+    const sensitivity = 0.0018 * _sensMult;
     yaw   -= e.movementX * sensitivity;
-    pitch -= e.movementY * sensitivity;
+    pitch -= e.movementY * sensitivity * (_invertY ? -1 : 1);
     pitch  = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
+});
+
+// Player display/control settings pushed from main.js (cosmetic + control only).
+let _sensMult  = 1.0;
+let _invertY   = false;
+let _baseFov   = 75;
+let _renderDist = 12;
+document.addEventListener('WorldJS_applySettings', (e) => {
+    const s = e.data ?? {};
+    if (s.sensitivity != null) _sensMult = s.sensitivity;
+    if (s.invertY     != null) _invertY  = !!s.invertY;
+    if (s.fov         != null) _baseFov  = s.fov;
+    if (s.renderDistance != null) {
+        _renderDist = s.renderDistance;
+        if (chunkManager) chunkManager.renderDistance = _renderDist;
+    }
 });
 
 document.addEventListener('mousedown', (e) => {
@@ -574,6 +676,10 @@ document.addEventListener('keydown', (e) => {
     if (e.code === 'KeyE' && document.pointerLockElement === document.getElementById('GameScreen')) {
         window.dispatchEvent(new CustomEvent('ww_toggleInventory'));
     }
+    // Craft menu / creative inventory
+    if (e.code === 'KeyC' && document.pointerLockElement === document.getElementById('GameScreen')) {
+        window.dispatchEvent(new CustomEvent('ww_toggleCraftMenu', { detail: { gameMode: _gameMode } }));
+    }
 });
 
 document.addEventListener('keyup', (e) => { KEYS[e.code] = false; });
@@ -601,6 +707,9 @@ function _updateMobOutline(mob) {
 // ── Block breaking ────────────────────────────────────────────────────────────
 
 function _handleBreaking(dt, hit) {
+    // Count down the creative mining cooldown regardless of target state.
+    if (_creativeMineCD > 0) _creativeMineCD = Math.max(0, _creativeMineCD - dt);
+
     if (!MOUSE.left || !hit) {
         if (_breakTarget) {
             _breakTarget   = null;
@@ -616,9 +725,12 @@ function _handleBreaking(dt, hit) {
         _breakProgress = 0;
     }
 
-    // Creative: instant break
+    // Creative: fast break with a short cooldown so holding the button doesn't
+    // clear blocks every single frame.
     if (_gameMode === 'CREATIVE') {
+        if (_creativeMineCD > 0) return;
         _breakBlock(hit);
+        _creativeMineCD = CREATIVE_MINE_CD;
         _breakTarget   = null;
         _breakProgress = 0;
         return;
@@ -660,6 +772,9 @@ function _breakBlock(hit, hasCorrectTool = true) {
     worldState.setBlock(hit.x, hit.y, hit.z, 0);
     chunkManager.markDirty(hit.x >> CHUNK_SHIFT, hit.z >> CHUNK_SHIFT);
 
+    // Creative players don't collect broken blocks.
+    if (_gameMode === 'CREATIVE') return;
+
     // Blocks with requiresTool drop nothing if broken with the wrong tool
     if (block.requiresTool && !hasCorrectTool) return;
 
@@ -682,6 +797,9 @@ function _breakBlock(hit, hasCorrectTool = true) {
             if (overflow > 0) _entities?.dropItem(dropPos, itemId, overflow);
         }
     }
+
+    // Refresh the hotbar so collected blocks / updated stack counts show up.
+    window.dispatchEvent(new CustomEvent('ww_itemPickup'));
 }
 
 // ── Block placement / interaction ─────────────────────────────────────────────
@@ -706,7 +824,13 @@ function _handlePlacement(hit) {
     if (!held) return;
 
     const itemDef = _itemReg?.getItem(held.itemId);
-    if (!itemDef?.isBlock) return;
+    // Food is consumed via hold — don't place anything on right-press
+    if (itemDef?.type === 'food') return;
+
+    // Resolve which block this item places (by block name, then reverse of the
+    // block's drop list). Returns null for non-block items (tools, ingots, …).
+    const blockDef = _itemToBlock.get(held.itemId);
+    if (!blockDef) return;
 
     const px = hit.x + hit.face.x;
     const py = hit.y + hit.face.y;
@@ -718,9 +842,6 @@ function _handlePlacement(hit) {
         py + 1 > me.position.y && py < me.position.y + 1.8 &&
         Math.abs(pz + 0.5 - me.position.z) < pw) return;
 
-    const blockDef = _blockReg.getByName(held.itemId.toUpperCase());
-    if (!blockDef) return;
-
     worldState.setBlock(px, py, pz, blockDef.id);
     chunkManager?.markDirty(px >> CHUNK_SHIFT, pz >> CHUNK_SHIFT);
 
@@ -729,7 +850,33 @@ function _handlePlacement(hit) {
 
     if (_gameMode !== 'CREATIVE') {
         _inventory.removeItem(held.itemId, 1);
+        window.dispatchEvent(new CustomEvent('ww_itemPickup'));
     }
+}
+
+// item id → block def. Built once per world load from the block list: a block's
+// own lowercased name maps to it, and (unless already mapped) each item the
+// block drops maps back to it — so e.g. "coal" places COAL_ORE, "wood_log"
+// places WOOD, "clay_ball" places CLAY.
+let _itemToBlock = new Map();
+
+function _buildItemToBlock(blocks) {
+    const map = new Map();
+    // Pass 1: canonical name match (gives "dirt" → DIRT even though GRASS drops dirt).
+    for (const b of blocks) {
+        const def = _blockReg.getByName(b.name);
+        if (def) map.set(b.name.toLowerCase(), def);
+    }
+    // Pass 2: reverse drops, without overriding a canonical name mapping.
+    for (const b of blocks) {
+        const def = _blockReg.getByName(b.name);
+        if (!def) continue;
+        for (const drop of (b.drops ?? [])) {
+            const id = drop.itemId ?? drop.item;
+            if (id && !map.has(id)) map.set(id, def);
+        }
+    }
+    return map;
 }
 
 // ── Attack charge ─────────────────────────────────────────────────────────────
@@ -764,6 +911,28 @@ function _handleAttackCharge(dt, mobHit, hit) {
     }
 }
 
+// ── Food eating ───────────────────────────────────────────────────────────────
+
+function _handleEating(dt) {
+    if (!MOUSE.right) { _eatTimer = 0; return; }
+    const held = _inventory?.getHotbar(_hotbarSlot);
+    if (!held) { _eatTimer = 0; return; }
+    const itemDef = _itemReg?.getItem(held.itemId);
+    if (itemDef?.type !== 'food') { _eatTimer = 0; return; }
+    // Don't eat if hunger is full and item provides no health
+    if (me.hunger >= 100 && !itemDef.healthRestore) { _eatTimer = 0; return; }
+
+    _eatTimer += dt;
+    if (_eatTimer >= EAT_TIME) {
+        _eatTimer = 0;
+        me.hunger = Math.min(100, me.hunger + (itemDef.hungerRestore ?? 0));
+        me.energy = Math.min(100, me.energy + (itemDef.energyRestore ?? 0));
+        if (itemDef.healthRestore) me.health = Math.min(100, me.health + itemDef.healthRestore);
+        _inventory.removeItem(held.itemId, 1);
+        window.dispatchEvent(new CustomEvent('ww_itemPickup'));
+    }
+}
+
 // ── Bow mechanics ─────────────────────────────────────────────────────────────
 
 function _bowItemSelected() {
@@ -778,8 +947,12 @@ function _handleBowDraw(dt) {
 
 function _fireBow() {
     if (!_inventory || !_entities) return;
-    const arrowSource = _inventory.takeArrow();
-    if (!arrowSource) return;
+    // Creative: arrows are free and not required. Survival: must have an arrow.
+    if (_gameMode !== 'CREATIVE') {
+        const arrowSource = _inventory.takeArrow();
+        if (!arrowSource) return;
+        window.dispatchEvent(new CustomEvent('ww_itemPickup'));
+    }
 
     const speed    = 20 + _bowCharge * 30;
     const dmg      = 3 + _bowCharge * 9;
@@ -812,6 +985,69 @@ function _survivalTick(dt) {
     if (me.health <= 0 && !_isDead) _handleDeath();
 }
 
+// Returns a break target for the block the player's head is inside, but only when
+// it's actually mineable (solid, opaque, non-liquid). Leaves (transparent) and
+// water (liquid) are excluded, so mining falls back to the normal raycast there.
+function _mineableHeadBlock() {
+    if (!worldState || _gameMode === 'SPECTATOR') return null;
+    const hx = Math.floor(me.position.x);
+    const hy = Math.floor(me.position.y + CAMERA_HEIGHT);
+    const hz = Math.floor(me.position.z);
+    const id = worldState.getBlock(hx, hy, hz);
+    if (id <= 0) return null;
+    if (_blockReg.isTransparent(id) || _blockReg.isLiquid(id)) return null;
+    return { x: hx, y: hy, z: hz, blockId: id, face: { x: 0, y: 1, z: 0 } };
+}
+
+// ── Suffocation ───────────────────────────────────────────────────────────────
+
+function _checkSuffocation(dt) {
+    const overlayEl = document.getElementById('suffocateOverlay');
+
+    // Spectators pass through blocks — never show the overlay or take damage.
+    if (_gameMode === 'SPECTATOR') {
+        _suffocateTimer = 0;
+        if (overlayEl) overlayEl.classList.add('hidden');
+        return;
+    }
+
+    const camX = Math.floor(me.position.x);
+    const camY = Math.floor(me.position.y + CAMERA_HEIGHT);
+    const camZ = Math.floor(me.position.z);
+    const headId = worldState?.getBlock(camX, camY, camZ) ?? 0;
+
+    const inSolid = headId > 0 && !_blockReg?.isTransparent(headId) && !_blockReg?.isLiquid(headId);
+
+    if (inSolid) {
+        if (overlayEl) {
+            const layer = BLOCK_FACE_MAP[headId]?.side ?? BLOCK_FACE_MAP[headId]?.top;
+            const path  = layer != null ? BLOCK_TEX_LAYERS[layer] : null;
+            // Fully opaque texture fill of the block the head is inside.
+            overlayEl.style.backgroundImage = path
+                ? `url('${path}')`
+                : `linear-gradient(${_blockColorCss(headId)}, ${_blockColorCss(headId)})`;
+            overlayEl.classList.remove('hidden');
+        }
+        if (_gameMode === 'SURVIVAL') {
+            _suffocateTimer += dt;
+            if (_suffocateTimer >= 1.0) {
+                _applyDamage(2);
+                _suffocateTimer -= 1.0;
+            }
+        }
+    } else {
+        _suffocateTimer = 0;
+        if (overlayEl) overlayEl.classList.add('hidden');
+    }
+}
+
+// CSS rgb() string for a block's base colour (fallback when no texture exists).
+function _blockColorCss(id) {
+    const def = _blockReg.get(id);
+    const [r, g, b] = def?.color ?? [0.1, 0.1, 0.1];
+    return `rgb(${(r*255)|0},${(g*255)|0},${(b*255)|0})`;
+}
+
 // ── Damage + death ────────────────────────────────────────────────────────────
 
 function _applyDamage(amount) {
@@ -824,11 +1060,101 @@ function _applyDamage(amount) {
     window.dispatchEvent(new CustomEvent('ww_damage', { detail: { amount: actual } }));
 }
 
+// ── Initial-load gate ───────────────────────────────────────────────────────
+// Reports meshing progress around the player during the loading screen. "Ready"
+// means the player's own chunk is rendered and at least 75% of the nearby chunks
+// have meshed, so the world is presentable.
+let _loadGateDone = false;
+
+function _reportLoadGate() {
+    const pcx = Math.floor(me.position.x) >> CHUNK_SHIFT;
+    const pcz = Math.floor(me.position.z) >> CHUNK_SHIFT;
+    const R   = Math.min(_renderDist, 4);
+
+    let total = 0, meshed = 0;
+    for (let dx = -R; dx <= R; dx++) {
+        for (let dz = -R; dz <= R; dz++) {
+            if (dx * dx + dz * dz > R * R + R) continue;   // roughly circular
+            total++;
+            if (worldState.getChunk(pcx + dx, pcz + dz)?.meshed) meshed++;
+        }
+    }
+
+    const centerReady = !!worldState.getChunk(pcx, pcz)?.meshed;
+    const progress    = total ? meshed / total : 0;
+    const ready       = !_spawnPending && centerReady && progress >= 0.75;
+
+    window.dispatchEvent(new CustomEvent('ww_loadProgress', { detail: { progress, ready } }));
+    if (ready) _loadGateDone = true;
+}
+
+// ── Ground spawn ────────────────────────────────────────────────────────────
+
+// Park the player above the spawn column and resolve a ground position once the
+// terrain there has generated. Used on first spawn and on respawn so the player
+// never appears in the air, in water, or buried in a hill.
+function _beginGroundSpawn(x, z) {
+    _spawnXZ      = { x, z };
+    _spawnPending = true;
+    _spawnStart   = performance.now();
+    me.position   = { x: x + 0.5, y: SEA_LEVEL + 96, z: z + 0.5 };
+    if (_physics?.vel) _physics.vel = { x: 0, y: 0, z: 0 };
+}
+
+// Y of the topmost solid (opaque, non-liquid) block in a generated column, or null.
+function _columnGround(wx, wz) {
+    const chunk = worldState.getChunk(wx >> CHUNK_SHIFT, wz >> CHUNK_SHIFT);
+    if (!chunk?.generated) return null;
+    for (let y = WORLD_MAX_Y; y > WORLD_MIN_Y; y--) {
+        const id = worldState.getBlock(wx, y, wz);
+        if (id !== 0 && _blockReg.isSolid(id)) return y;
+    }
+    return null;
+}
+
+function _tryGroundSpawn() {
+    const sx = Math.floor(_spawnXZ.x);
+    const sz = Math.floor(_spawnXZ.z);
+
+    // Search outward in rings for the nearest column whose surface is open to the
+    // sky (air directly above) — this skips ocean (water above seabed) and trees
+    // (leaves above the trunk).
+    const R = 24;
+    for (let r = 0; r <= R; r++) {
+        for (let dx = -r; dx <= r; dx++) {
+            for (let dz = -r; dz <= r; dz++) {
+                if (Math.max(Math.abs(dx), Math.abs(dz)) !== r) continue;  // ring perimeter
+                const wx = sx + dx, wz = sz + dz;
+                const gy = _columnGround(wx, wz);
+                if (gy === null) continue;
+                if (worldState.getBlock(wx, gy + 1, wz) !== 0) continue;   // water/leaves above
+                _finishGroundSpawn(wx + 0.5, gy + 1, wz + 0.5);
+                return;
+            }
+        }
+    }
+
+    // Fallback: if nothing open turned up within a few seconds, drop onto whatever
+    // ground exists at the spawn column (even if it's a shallow shore).
+    if (performance.now() - _spawnStart > 6000) {
+        const gy = _columnGround(sx, sz);
+        if (gy !== null) _finishGroundSpawn(sx + 0.5, gy + 1, sz + 0.5);
+    }
+}
+
+function _finishGroundSpawn(x, y, z) {
+    me.position = { x, y, z };
+    if (_physics?.vel) _physics.vel = { x: 0, y: 0, z: 0 };
+    if (!_worldSpawn) _worldSpawn = { x: Math.floor(x), z: Math.floor(z) };  // lock world spawn
+    _spawnPending = false;
+}
+
 function _handleDeath() {
     if (_isDead) return;
     _isDead = true;
     if (_entities) _entities.spawnDeathPack({ ...me.position }, _inventory);
     window.dispatchEvent(new CustomEvent('ww_playerDied'));
+    window.dispatchEvent(new CustomEvent('ww_itemPickup'));   // inventory was emptied
 }
 
 window.addEventListener('ww_mobAttack', (e) => {
@@ -840,6 +1166,7 @@ document.addEventListener('WorldJS_setGameMode', (e) => {
     if (mode && ['SURVIVAL','CREATIVE','SPECTATOR'].includes(mode)) {
         _gameMode = mode;
         if (_physics) { _physics.flying = false; _physics.vel = { x:0, y:0, z:0 }; }
+        window.dispatchEvent(new CustomEvent('ww_gameModeChange', { detail: { gameMode: mode } }));
     }
 });
 
@@ -851,7 +1178,8 @@ document.addEventListener('WorldJS_respawn', () => {
     me.hunger    = 80;
     me.energy    = 80;
     _physics.vel = { x: 0, y: 0, z: 0 };
-    me.position  = { x: 0, y: 100, z: 0 };
+    // Respawn on the ground at the world spawn point.
+    _beginGroundSpawn(_worldSpawn?.x ?? 0, _worldSpawn?.z ?? 0);
     if (_inventory) {
         _inventory.slots    = [];
         _inventory.hotbar   = new Array(10).fill(null);
@@ -860,14 +1188,29 @@ document.addEventListener('WorldJS_respawn', () => {
         _inventory.quiverArrows = 0;
     }
     window.dispatchEvent(new CustomEvent('ww_respawned'));
+    window.dispatchEvent(new CustomEvent('ww_itemPickup'));   // hotbar cleared
 });
 
 // ── HUD updates ───────────────────────────────────────────────────────────────
 
 function _updateHUD() {
-    _setInnerHTML('playerHealth', `<img src="./data/textures/UI/Heart.png" width="25"> Health: ${Math.ceil(me.health)} / 100`);
-    _setInnerHTML('playerHunger', `<img src="./data/textures/UI/Bread.png" width="25"> Hunger: ${Math.ceil(me.hunger)} / 100`);
-    _setInnerHTML('playerEnergy', `<img src="./data/textures/UI/Energy1.png" width="25"> Energy: ${Math.ceil(me.energy)} / 100`);
+    // Player coordinates — top-right, shown in every game mode.
+    const coordEl = document.getElementById('playerCoords');
+    if (coordEl) {
+        coordEl.textContent =
+            `X: ${Math.round(me.position.x)}  Y: ${Math.round(me.position.y)}  Z: ${Math.round(me.position.z)}`;
+    }
+
+    // Game-mode gating: hide survival stats in Creative/Spectator
+    const showStats = _gameMode === 'SURVIVAL';
+    const infoEl = document.getElementById('playerInfo');
+    if (infoEl) infoEl.classList.toggle('hidden', !showStats);
+
+    if (showStats) {
+        _setInnerHTML('playerHealth', `<img src="./data/textures/UI/Heart.png" width="25"> Health: ${Math.ceil(me.health)} / 100`);
+        _setInnerHTML('playerHunger', `<img src="./data/textures/UI/Bread.png" width="25"> Hunger: ${Math.ceil(me.hunger)} / 100`);
+        _setInnerHTML('playerEnergy', `<img src="./data/textures/UI/Energy1.png" width="25"> Energy: ${Math.ceil(me.energy)} / 100`);
+    }
 
     const protEl = document.getElementById('playerProtection');
     if (protEl) {
@@ -886,6 +1229,24 @@ function _updateHUD() {
     // Attack charge bar
     const barEl = document.getElementById('attackChargeFill');
     if (barEl) barEl.style.width = `${Math.round(_attackCharge * 100)}%`;
+
+    // Mining progress bar — visible while breaking a block in survival
+    const mineWrap = document.getElementById('mineProgressBar');
+    const mineFill = document.getElementById('mineProgressFill');
+    if (mineWrap && mineFill) {
+        const mining = _breakProgress > 0 && _breakTarget !== null && _gameMode !== 'CREATIVE';
+        mineWrap.style.display = mining ? 'block' : 'none';
+        mineFill.style.width = `${Math.round(_breakProgress * 100)}%`;
+    }
+
+    // Eating progress bar — visible while consuming food
+    const eatWrap = document.getElementById('eatProgressBar');
+    const eatFill = document.getElementById('eatProgressFill');
+    if (eatWrap && eatFill) {
+        const eating = _eatTimer > 0;
+        eatWrap.style.display = eating ? 'block' : 'none';
+        eatFill.style.width = `${Math.round((_eatTimer / EAT_TIME) * 100)}%`;
+    }
 
     // Damage vignette
     const vig = document.getElementById('damageVignette');
@@ -911,7 +1272,7 @@ function _updateCamera() {
     _camQ.multiply(_camQx.setFromAxisAngle(_axisX, pitch));
     camera.quaternion.copy(_camQ);
 
-    const targetFov = _bowZoom ? 30 : 75;
+    const targetFov = _bowZoom ? Math.min(30, _baseFov - 10) : _baseFov;
     camera.fov += (targetFov - camera.fov) * 0.2;
     camera.updateProjectionMatrix();
 }
@@ -1002,9 +1363,61 @@ function _disposeAll() {
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 function _saveAll() {
-    if (chunkManager?.worldId && worldClient?.connected) {
-        chunkManager.saveAll();
-    }
+    if (!(chunkManager?.worldId && worldClient?.connected)) return;
+
+    const client = worldClient;   // capture — quitWorld may null worldClient mid-save
+    window.dispatchEvent(new CustomEvent('ww_saving', { detail: { active: true } }));
+
+    chunkManager.saveAll();   // queues the batch onto the WebSocket send buffer
+    _saveScreenshot(chunkManager.worldId);
+
+    // Hide the indicator once the data has actually left the socket (buffer
+    // drained), with a minimum visible time so fast saves still register, and a
+    // hard timeout so a stalled socket never leaves the sign stuck on.
+    const start = performance.now();
+    const MIN_VISIBLE = 500;   // ms
+    const MAX_WAIT    = 6000;  // ms
+    const finish = () => window.dispatchEvent(new CustomEvent('ww_saving', { detail: { active: false } }));
+    const poll = () => {
+        const elapsed = performance.now() - start;
+        const drained = !client.connected || client.bufferedAmount === 0;
+        if ((drained && elapsed >= MIN_VISIBLE) || elapsed >= MAX_WAIT) { finish(); return; }
+        setTimeout(poll, 100);
+    };
+    setTimeout(poll, 100);
+}
+
+// Wait for a WorldClient's send buffer to drain, then close it. Used on quit so
+// the final batch of edits actually reaches the server before we disconnect.
+function _flushAndCloseClient(client) {
+    const start = performance.now();
+    const poll = () => {
+        if (!client.connected || client.bufferedAmount === 0 || performance.now() - start > 5000) {
+            client.close();
+            return;
+        }
+        setTimeout(poll, 100);
+    };
+    poll();
+}
+
+// Grab the current frame, downscale it, and upload it as the world's thumbnail.
+function _saveScreenshot(worldId) {
+    if (!renderer || !worldId) return;
+    try {
+        const src = renderer.domElement;
+        const w = 320;
+        const h = Math.max(1, Math.round(w * (src.height / src.width)));
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        c.getContext('2d').drawImage(src, 0, 0, w, h);
+        const dataUrl = c.toDataURL('image/jpeg', 0.6);
+        fetch(`${SERVER_URL}/api/worlds/${worldId}/screenshot`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ dataUrl }),
+        }).catch(() => { /* offline — ignore */ });
+    } catch { /* canvas tainted or not ready — ignore */ }
 }
 
 async function _savePlayerState() {

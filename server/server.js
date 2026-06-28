@@ -14,13 +14,13 @@
  *   PUT  /api/settings            update global player settings
  *   GET  /api/data/manifest       list all data JSON files by category
  *
- * WebSocket — chunk I/O (chunks are 16×640×16 columns, addressed by cx,cz only):
+ * WebSocket — chunk I/O (chunks are 16×CHUNK_SIZE_Y×16 columns, addressed by cx,cz only):
  *   Client→Server text:   { type:'loadChunk', worldId, cx, cz }
- *   Server→Client binary: [cx:i32][cz:i32][has:u8]([palLen:u16][pal:u16*][idx:u8*163840])
+ *   Server→Client binary: [cx:i32][cz:i32][has:u8]([palLen:u16][pal:u16*][idx:u8*CHUNK_VOLUME])
  *
  *   Client→Server binary (batch save):
  *     [0xC5:u8][worldIdLen:u16][worldId:utf8][count:u32]
- *     per chunk: [cx:i32][cz:i32][palLen:u16][pal:u16*][idx:u8*163840]
+ *     per chunk: [cx:i32][cz:i32][palLen:u16][pal:u16*][idx:u8*CHUNK_VOLUME]
  *
  * Region file format (gzip-compressed JSON):
  *   File: user/worlds/{id}/regions/{rx},{rz}.wwr
@@ -40,6 +40,10 @@ import zlib           from 'zlib';
 import { promisify }  from 'util';
 import { fileURLToPath } from 'url';
 import crypto         from 'crypto';
+// Single source of truth for chunk dimensions — keeps the binary save/load
+// format byte-for-byte identical to the client. If CHUNK_SIZE_Y changes on the
+// client, the server picks it up automatically (no stale hardcoded volume).
+import { CHUNK_VOLUME } from '../src/scripts/engine/ChunkData.js';
 
 const __dirname    = path.dirname(fileURLToPath(import.meta.url));
 const ROOT         = path.join(__dirname, '..');
@@ -47,7 +51,6 @@ const WORLDS_DIR   = path.join(ROOT, 'user', 'worlds');
 const SETTINGS_PATH = path.join(ROOT, 'user', 'settings.json');
 const PORT         = process.env.PORT ?? 3000;
 const REGION_BITS = 3;                 // 2^3 = 8 chunk columns per axis per region
-const CHUNK_VOLUME = 163840;           // 16 × 640 × 16 voxels per chunk column
 
 const gzip   = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -59,6 +62,7 @@ fs.mkdirSync(WORLDS_DIR, { recursive: true });
 function worldDir(id)         { return path.join(WORLDS_DIR, id); }
 function worldMetaPath(id)    { return path.join(worldDir(id), 'world.json'); }
 function playerStatePath(id)  { return path.join(worldDir(id), 'player.json'); }
+function screenshotPath(id)   { return path.join(worldDir(id), 'screenshot.jpg'); }
 function regionsDir(id)       { return path.join(worldDir(id), 'regions'); }
 
 function regionPath(id, rx, rz) {
@@ -102,6 +106,23 @@ function copyDir(src, dst) {
 
 // ── Region I/O ─────────────────────────────────────────────────────────────────
 
+// Per-region async mutex. Region files use read-merge-write, so concurrent saves
+// (autosave batch overlapping an unload-save) or a load reading mid-write would
+// otherwise clobber each other and silently lose edits. Every read/write of a
+// given region funnels through its lock so they run strictly one at a time.
+const _regionLocks = new Map();
+
+function withRegion(worldId, rx, rz, fn) {
+    const key  = `${worldId}:${rx},${rz}`;
+    const prev = _regionLocks.get(key) ?? Promise.resolve();
+    const run  = prev.then(fn, fn);                       // run fn after prev settles (ok or not)
+    const tail = run.then(() => {}, () => {});            // chain link that never rejects
+    _regionLocks.set(key, tail);
+    // Drop the entry once the chain is idle so the map doesn't grow unboundedly.
+    tail.then(() => { if (_regionLocks.get(key) === tail) _regionLocks.delete(key); });
+    return run;
+}
+
 async function readRegion(id, rx, rz) {
     const p = regionPath(id, rx, rz);
     if (!fs.existsSync(p)) return {};
@@ -114,14 +135,21 @@ async function readRegion(id, rx, rz) {
 async function writeRegion(id, rx, rz, data) {
     fs.mkdirSync(regionsDir(id), { recursive: true });
     const compressed = await gzip(Buffer.from(JSON.stringify(data), 'utf8'));
-    fs.writeFileSync(regionPath(id, rx, rz), compressed);
+    // Write to a temp file then rename so a concurrent read never sees a partial
+    // (and therefore corrupt / "empty") region file.
+    const dst = regionPath(id, rx, rz);
+    const tmp = `${dst}.${process.pid}.${Date.now()}.tmp`;
+    fs.writeFileSync(tmp, compressed);
+    fs.renameSync(tmp, dst);
 }
 
 async function getChunkFromRegion(id, cx, cz) {
     const [rx, rz] = regionCoords(cx, cz);
     const [lx, lz] = localCoords(cx, cz);
-    const region = await readRegion(id, rx, rz);
-    return region[`${lx},${lz}`] ?? null;
+    return withRegion(id, rx, rz, async () => {
+        const region = await readRegion(id, rx, rz);
+        return region[`${lx},${lz}`] ?? null;
+    });
 }
 
 /**
@@ -140,19 +168,20 @@ async function saveChunkBatch(worldId, chunks) {
             indices: Buffer.from(indices).toString('base64'),
         };
     }
-    // Write each region (read-merge-write)
-    await Promise.all([...byRegion.values()].map(async ({ rx, rz, entries }) => {
-        const existing = await readRegion(worldId, rx, rz);
-        Object.assign(existing, entries);
-        await writeRegion(worldId, rx, rz, existing);
-    }));
+    // Read-merge-write each region under its lock so saves never clobber.
+    await Promise.all([...byRegion.values()].map(({ rx, rz, entries }) =>
+        withRegion(worldId, rx, rz, async () => {
+            const existing = await readRegion(worldId, rx, rz);
+            Object.assign(existing, entries);
+            await writeRegion(worldId, rx, rz, existing);
+        })));
 }
 
 // ── Express app ───────────────────────────────────────────────────────────────
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '8mb' }));   // generous limit for world screenshots
 app.use(express.static(ROOT));
 
 // World list
@@ -160,7 +189,7 @@ app.get('/api/worlds', (_req, res) => res.json(listWorlds()));
 
 // Create world
 app.post('/api/worlds', (req, res) => {
-    const { name = 'New World', seed, gameMode = 'SURVIVAL' } = req.body ?? {};
+    const { name = 'New World', seed, gameMode = 'SURVIVAL', difficulty = 'NORMAL' } = req.body ?? {};
     const id  = crypto.randomUUID();
     const now = Date.now();
     const meta = {
@@ -168,6 +197,7 @@ app.post('/api/worlds', (req, res) => {
         seed: seed != null ? Number(seed) : (Math.random() * 2147483647 | 0),
         created: now, lastPlayed: now,
         gameMode: ['SURVIVAL','CREATIVE','SPECTATOR'].includes(gameMode) ? gameMode : 'SURVIVAL',
+        difficulty: ['PEACEFUL','EASY','NORMAL','HARD'].includes(difficulty) ? difficulty : 'NORMAL',
         playerPos: { x: 0, y: 100, z: 0 },
     };
     fs.mkdirSync(worldDir(id), { recursive: true });
@@ -224,6 +254,21 @@ app.put('/api/worlds/:id/player-state', (req, res) => {
     res.json({ ok: true });
 });
 
+// Save a world screenshot (JPEG data URL) — written next to the save files and
+// served back via the static mount at /user/worlds/:id/screenshot.jpg.
+app.put('/api/worlds/:id/screenshot', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const dataUrl = req.body?.dataUrl ?? '';
+    const m = /^data:image\/\w+;base64,(.+)$/s.exec(dataUrl);
+    if (!m) return res.status(400).json({ error: 'Bad image data' });
+    try {
+        fs.writeFileSync(screenshotPath(req.params.id), Buffer.from(m[1], 'base64'));
+        res.json({ ok: true });
+    } catch (e) {
+        res.status(500).json({ error: 'Write failed' });
+    }
+});
+
 // Load full player state
 app.get('/api/worlds/:id/player-state', (req, res) => {
     if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
@@ -237,8 +282,9 @@ app.get('/api/worlds/:id/player-state', (req, res) => {
 app.put('/api/worlds/:id/settings', (req, res) => {
     const meta = readMeta(req.params.id);
     if (!meta) return res.status(404).json({ error: 'Not found' });
-    const { gameMode } = req.body ?? {};
+    const { gameMode, difficulty } = req.body ?? {};
     if (gameMode && ['SURVIVAL','CREATIVE','SPECTATOR'].includes(gameMode)) meta.gameMode = gameMode;
+    if (difficulty && ['PEACEFUL','EASY','NORMAL','HARD'].includes(difficulty)) meta.difficulty = difficulty;
     writeMeta(req.params.id, meta);
     res.json({ ok: true });
 });
@@ -328,7 +374,7 @@ async function buildManifest(worldId) {
  *   [1..2]:    worldId length (uint16 LE)
  *   [3..3+wl-1]: worldId (UTF-8)
  *   [3+wl..6+wl]: chunk count (uint32 LE)
- *   per chunk: [cx:i32][cz:i32][palLen:u16][pal:u16*palLen][idx:u8*163840]
+ *   per chunk: [cx:i32][cz:i32][palLen:u16][pal:u16*palLen][idx:u8*CHUNK_VOLUME]
  */
 async function handleBinaryMessage(ws, data) {
     const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -363,7 +409,7 @@ async function handleBinaryMessage(ws, data) {
 
 /**
  * Build the binary chunk response sent back to the client.
- * Layout: [cx:i32][cz:i32][has:u8]([palLen:u16][pal:u16*][idx:u8*163840])
+ * Layout: [cx:i32][cz:i32][has:u8]([palLen:u16][pal:u16*][idx:u8*CHUNK_VOLUME])
  */
 function buildChunkResponse(cx, cz, entry) {
     if (!entry) {
