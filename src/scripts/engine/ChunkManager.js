@@ -21,7 +21,7 @@
  *   onChunkUnload(key)                — dispose Three.js mesh
  */
 
-import { ChunkData, CHUNK_SIZE, CHUNK_SIZE_Y } from './ChunkData.js';
+import { ChunkData, CHUNK_SIZE, CHUNK_SHIFT, CHUNK_MASK, CHUNK_SIZE_Y } from './ChunkData.js';
 import { WorldState }            from './WorldState.js';
 
 const MAX_DISPATCH = 32;  // max new jobs queued per update() call
@@ -155,6 +155,27 @@ export class ChunkManager {
             chunk.dirty = true;
             this._requestMesh(cx, cz);
         }
+    }
+
+    /**
+     * Re-mesh after a single block edit at world coords (wx, wz). Always re-meshes
+     * the edited chunk, and additionally re-meshes any face-adjacent neighbour whose
+     * seam faces depend on this voxel — i.e. when the edit sits on a chunk boundary.
+     * Without this, mining/placing at a chunk edge leaves the neighbour's boundary
+     * faces stale (holes or leftover faces along the seam). Each re-mesh runs as a
+     * job on the shared worker pool, so neighbour updates happen off the main thread.
+     */
+    markEdited(wx, wz) {
+        const cx = wx >> CHUNK_SHIFT;
+        const cz = wz >> CHUNK_SHIFT;
+        this.markDirty(cx, cz);
+
+        const lx = wx & CHUNK_MASK;
+        const lz = wz & CHUNK_MASK;
+        if (lx === 0)              this.markDirty(cx - 1, cz);
+        if (lx === CHUNK_SIZE - 1) this.markDirty(cx + 1, cz);
+        if (lz === 0)              this.markDirty(cx, cz - 1);
+        if (lz === CHUNK_SIZE - 1) this.markDirty(cx, cz + 1);
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────

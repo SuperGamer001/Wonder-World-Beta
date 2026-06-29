@@ -56,42 +56,38 @@ export class Inventory {
      * Returns how many items could NOT be added (overflow).
      */
     addItem(itemId, count = 1) {
-        let remaining = count;
+        let remaining       = count;
+        const maxStack      = this._maxStack(itemId);
 
-        // Stack into existing hotbar stacks first (no weight cost)
+        // Stack into existing hotbar stacks first (free — topping off a stack
+        // adds no new slot, so it costs no weight).
         for (const s of this.hotbar) {
             if (!s || s.itemId !== itemId) continue;
-            const space = this._maxStack(itemId) - s.count;
-            const take  = Math.min(space, remaining);
+            const take  = Math.min(maxStack - s.count, remaining);
             s.count    += take;
             remaining  -= take;
             if (remaining === 0) return 0;
         }
 
-        // Stack into existing general inventory slots (no weight cost)
+        // Stack into existing general inventory slots (also free).
         for (const s of this.slots) {
             if (s.itemId !== itemId) continue;
-            const space = this._maxStack(itemId) - s.count;
-            const take  = Math.min(space, remaining);
+            const take  = Math.min(maxStack - s.count, remaining);
             s.count    += take;
             remaining  -= take;
             if (remaining === 0) return 0;
         }
 
-        // Fill empty hotbar slots before general inventory
-        for (let i = 0; i < this.hotbar.length && remaining > 0; i++) {
-            if (this.hotbar[i]) continue;
-            const take = Math.min(this._maxStack(itemId), remaining);
-            this.hotbar[i] = { itemId, count: take };
-            remaining -= take;
-        }
-
-        // Create new general inventory slots
-        while (remaining > 0) {
-            const wt = this._wt(itemId);
-            if (this.availableWeight < wt) break;
-            const take = Math.min(this._maxStack(itemId), remaining);
-            this.slots.push({ itemId, count: take });
+        // Create new stacks — each new stack (hotbar OR general) costs one unit of
+        // the item's weight. Empty hotbar slots fill before general inventory.
+        // Stop the moment there isn't enough free weight for another stack so the
+        // leftover is returned as overflow (the caller drops it as a ground item).
+        const wt = this._wt(itemId);
+        while (remaining > 0 && this.availableWeight >= wt) {
+            const hotbarSlot = this.hotbar.indexOf(null);
+            const take       = Math.min(maxStack, remaining);
+            if (hotbarSlot !== -1) this.hotbar[hotbarSlot] = { itemId, count: take };
+            else                   this.slots.push({ itemId, count: take });
             remaining -= take;
         }
         return remaining;

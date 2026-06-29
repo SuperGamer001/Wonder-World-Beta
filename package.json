@@ -1,4 +1,13 @@
 {
+  "name": "wonder-world",
+  "version": "beta.1.0.0",
+  "main": "server.js",
+  "description": "Wonder World is a 3D game that allows players to explore a vast and immersive world filled with unique landscapes, hidden treasures, and challenging quests. Players can interact with the environment and characters, and engage in combat with various creatures as they uncover the secrets of Wonder World.",
+  "author": "Alex Fischer, Interlinked Creations",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 Alex Fischer, Interlinked Creations",
+  
+  
   "type": "module",
   "dependencies": {
     "three": "^0.184.0"

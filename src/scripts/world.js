@@ -770,7 +770,7 @@ function _breakBlock(hit, hasCorrectTool = true) {
     if (!worldState || !chunkManager) return;
     const block = _blockReg.get(hit.blockId);
     worldState.setBlock(hit.x, hit.y, hit.z, 0);
-    chunkManager.markDirty(hit.x >> CHUNK_SHIFT, hit.z >> CHUNK_SHIFT);
+    chunkManager.markEdited(hit.x, hit.z);
 
     // Creative players don't collect broken blocks.
     if (_gameMode === 'CREATIVE') return;
@@ -843,7 +843,7 @@ function _handlePlacement(hit) {
         Math.abs(pz + 0.5 - me.position.z) < pw) return;
 
     worldState.setBlock(px, py, pz, blockDef.id);
-    chunkManager?.markDirty(px >> CHUNK_SHIFT, pz >> CHUNK_SHIFT);
+    chunkManager?.markEdited(px, pz);
 
     // Trigger water simulation if placing water
     if (blockDef.id === 5) _water?.addSource(px, py, pz);
@@ -928,8 +928,11 @@ function _handleEating(dt) {
         me.hunger = Math.min(100, me.hunger + (itemDef.hungerRestore ?? 0));
         me.energy = Math.min(100, me.energy + (itemDef.energyRestore ?? 0));
         if (itemDef.healthRestore) me.health = Math.min(100, me.health + itemDef.healthRestore);
-        _inventory.removeItem(held.itemId, 1);
-        window.dispatchEvent(new CustomEvent('ww_itemPickup'));
+        // Creative food is free — gain the effects but don't consume the stack.
+        if (_gameMode !== 'CREATIVE') {
+            _inventory.removeItem(held.itemId, 1);
+            window.dispatchEvent(new CustomEvent('ww_itemPickup'));
+        }
     }
 }
 
