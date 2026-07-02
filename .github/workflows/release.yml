@@ -1,0 +1,89 @@
+name: Release
+
+# Push a version tag (e.g. v1.0.0-beta.1) to build the Windows + macOS
+# installers and attach them to a GitHub Release. The tag MUST match the
+# "version" in package.json, prefixed with "v".
+#
+# workflow_dispatch lets you dry-run the build (installers are uploaded as
+# workflow artifacts, but nothing is published to a Release).
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+# Never run two release builds for the same ref at once, and never cancel a
+# build that may be mid-upload to a Release.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Create the draft Release once (on tag builds) so the parallel OS builds
+  # only ever upload assets to it — no chance of two jobs racing to create it.
+  create-release:
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Create draft release if it does not exist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — reusing it."
+          else
+            gh release create "$TAG" --repo "$REPO" --draft \
+              --title "$TAG" --generate-notes
+          fi
+
+  build:
+    needs: create-release
+    # Still run on workflow_dispatch (where create-release is skipped).
+    if: always() && (needs.create-release.result == 'success' || needs.create-release.result == 'skipped')
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build ${{ matrix.platform }} installer
+        env:
+          # electron-builder publishes to GitHub using this token.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No Apple Developer cert available — skip code signing on macOS.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: >
+          npx --no-install electron-builder --${{ matrix.platform }}
+          --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+
+      - name: Upload installers as workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+          if-no-files-found: ignore

@@ -1,19 +1,33 @@
 {
   "name": "wonder-world",
-  "version": "beta.1.0.0",
-  "main": "server.js",
-  "description": "Wonder World is a 3D game that allows players to explore a vast and immersive world filled with unique landscapes, hidden treasures, and challenging quests. Players can interact with the environment and characters, and engage in combat with various creatures as they uncover the secrets of Wonder World.",
+  "version": "1.0.0-beta.1",
+  "description": "Wonder World is a 3D voxel sandbox game where players explore a vast, procedurally generated world.",
   "author": "Alex Fischer, Interlinked Creations",
   "license": "MIT",
   "copyright": "Copyright (c) 2026 Alex Fischer, Interlinked Creations",
-  
-  
   "type": "module",
-  "dependencies": {
-    "three": "^0.184.0"
+  "main": "electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SuperGamer001/Wonder-World-Beta.git"
   },
-    "scripts": {
-    "start": "cd server & node server.js",
-    "dev": "node --watch server.js"
+  "scripts": {
+    "start": "electron .",
+    "server": "node server/server.js",
+    "dev": "node --watch server/server.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "dist:win": "electron-builder --win",
+    "dist:mac": "electron-builder --mac"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "three": "^0.184.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^43.0.0",
+    "electron-builder": "^26.0.0"
   }
 }

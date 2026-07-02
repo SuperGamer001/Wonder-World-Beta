@@ -1,0 +1,68 @@
+appId: com.interlinked.wonderworld
+productName: Wonder World
+copyright: Copyright (c) 2026 Alex Fischer, Interlinked Creations
+
+directories:
+  output: dist
+  buildResources: build
+
+# Keep file names predictable and space-free for downloads.
+# e.g. WonderWorld-1.0.0-beta.1-x64.exe / WonderWorld-1.0.0-beta.1-universal.dmg
+artifactName: "WonderWorld-${version}-${arch}.${ext}"
+
+# asar is intentionally disabled: the app entry (electron/main.js) and the
+# embedded server are ES modules, and Electron's main-process ESM loader does
+# not reliably load ES modules from inside an asar archive
+# (see electron/electron#43532). Shipping plain files avoids that entirely.
+# There is no downside here — this is a web game whose source is already fully
+# visible to the browser, so an archive would hide nothing.
+# Only the runtime files are shipped; dev tooling, local saves, and CI/build
+# helpers are excluded below.
+asar: false
+files:
+  - "**/*"
+  - "!user${/*}"                 # local dev world saves — never ship these
+  - "!server/node_modules${/*}"  # stale duplicate; deps resolve from root node_modules
+  - "!.github${/*}"
+  - "!.claude${/*}"
+  - "!**/*.py"
+  - "!INSTRUCT.md"
+  - "!CLAUDE.md"
+  - "!**/*.map"
+
+# ── Windows ────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch: x64
+  icon: build/icon.png
+
+nsis:
+  oneClick: false                       # show a real installer wizard
+  perMachine: false                     # per-user install (no admin prompt)
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Wonder World
+
+# ── macOS ──────────────────────────────────────────────────────────────────
+mac:
+  target:
+    - target: dmg
+      arch: universal                   # runs on both Apple Silicon and Intel
+  icon: build/icon.png
+  category: public.app-category.games
+  # No Apple Developer certificate in CI — ship an unsigned (ad-hoc) build.
+  # Set CSC_LINK / CSC_KEY_PASSWORD secrets and remove this to enable signing.
+  identity: null
+
+dmg:
+  title: "Wonder World ${version}"
+
+# ── Publishing ─────────────────────────────────────────────────────────────
+# Uploads the installers to the GitHub Release whose tag matches v${version}.
+publish:
+  provider: github
+  owner: SuperGamer001
+  repo: Wonder-World-Beta

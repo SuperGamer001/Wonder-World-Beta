@@ -47,8 +47,13 @@ import { CHUNK_VOLUME } from '../src/scripts/engine/ChunkData.js';
 
 const __dirname    = path.dirname(fileURLToPath(import.meta.url));
 const ROOT         = path.join(__dirname, '..');
-const WORLDS_DIR   = path.join(ROOT, 'user', 'worlds');
-const SETTINGS_PATH = path.join(ROOT, 'user', 'settings.json');
+// Writable game data (world saves, settings, screenshots) lives under DATA_ROOT.
+// In the packaged desktop (Electron) build the app files are read-only, so the
+// launcher points WONDER_DATA_DIR at a per-user writable location. Defaults to
+// the repo root for a plain `node server.js` run.
+const DATA_ROOT    = process.env.WONDER_DATA_DIR ?? ROOT;
+const WORLDS_DIR   = path.join(DATA_ROOT, 'user', 'worlds');
+const SETTINGS_PATH = path.join(DATA_ROOT, 'user', 'settings.json');
 const PORT         = process.env.PORT ?? 3000;
 const REGION_BITS = 3;                 // 2^3 = 8 chunk columns per axis per region
 
@@ -182,6 +187,10 @@ async function saveChunkBatch(worldId, chunks) {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));   // generous limit for world screenshots
+// Serve writable user data (e.g. world screenshots) from DATA_ROOT, which may
+// differ from the app root in the packaged desktop build. Mounted before the
+// app-root static handler so these paths resolve to the per-user location.
+app.use('/user', express.static(path.join(DATA_ROOT, 'user')));
 app.use(express.static(ROOT));
 
 // World list
@@ -439,7 +448,15 @@ function buildChunkResponse(cx, cz, entry) {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
-server.listen(PORT, () => {
-    console.log(`Wonder World server listening on http://localhost:${PORT}`);
-    console.log(`Worlds stored in: ${WORLDS_DIR}`);
+// Resolves once the HTTP + WebSocket server is accepting connections. The
+// Electron launcher awaits this before opening the game window so the first
+// request can't race server startup. Running `node server.js` directly still
+// just starts the server as a side effect of importing this module.
+export const serverReady = new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(PORT, () => {
+        console.log(`Wonder World server listening on http://localhost:${PORT}`);
+        console.log(`Worlds stored in: ${WORLDS_DIR}`);
+        resolve({ port: PORT });
+    });
 });
