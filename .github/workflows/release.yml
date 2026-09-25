@@ -69,21 +69,64 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The update feed is the Interlinked library (publish.provider: generic),
+      # which electron-builder cannot upload to — so never ask it to publish.
+      # The release assets are attached to the GitHub Release below instead, and
+      # that is where you fetch them from to upload to the library host.
       - name: Build ${{ matrix.platform }} installer
         env:
-          # electron-builder publishes to GitHub using this token.
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No Apple Developer cert available — skip code signing on macOS.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: >
-          npx --no-install electron-builder --${{ matrix.platform }}
-          --publish ${{ startsWith(github.ref, 'refs/tags/') && 'always' || 'never' }}
+        run: npx --no-install electron-builder --${{ matrix.platform }} --publish never
 
-      - name: Upload installers as workflow artifacts
+      # latest.yml and the .blockmap are what make auto-update work at all:
+      # latest.yml is the feed the app reads, and the .blockmap is what lets it
+      # download only the changed parts of the installer. Losing either silently
+      # degrades updates, so they are collected explicitly.
+      - name: Upload release assets as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.platform }}
           path: |
             dist/*.exe
+            dist/*.exe.blockmap
             dist/*.dmg
+            dist/*.zip
+            dist/*.blockmap
+            dist/*.yml
+            !dist/builder-debug.yml
           if-no-files-found: ignore
+
+      - name: Attach assets to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          # dist/*.yml, not dist/latest*.yml: the feed file is named after the
+          # channel, so a 1.0.0-beta.N build emits beta.yml. Matching only
+          # "latest*" would silently drop the one file the updater reads.
+          # builder-debug.yml is build diagnostics and must not ship.
+          # Globs overlap (*.exe.blockmap also matches *.blockmap), so dedupe —
+          # gh rejects the same asset twice. Skip the NSIS uninstaller stub and
+          # build diagnostics, which are not release assets.
+          declare -A seen=()
+          files=()
+          for f in dist/*.exe dist/*.dmg dist/*.zip dist/*.blockmap dist/*.yml; do
+            base=$(basename "$f")
+            case "$base" in
+              builder-debug.yml|*__uninstaller*) continue ;;
+            esac
+            [ -n "${seen[$base]:-}" ] && continue
+            seen[$base]=1
+            files+=("$f")
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No release assets produced — nothing to attach."
+            exit 0
+          fi
+          printf 'attaching: %s\n' "${files[@]}"
+          gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber

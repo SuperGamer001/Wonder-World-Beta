@@ -611,6 +611,26 @@ img.logo.game {
     pointer-events: none;
 }
 
+/* ── Software-renderer warning ─────────────────────────────────────────────── */
+
+#gpuWarning {
+    position: fixed;
+    bottom: 2vw;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 46vw;
+    font-size: 1vw;
+    line-height: 1.5;
+    color: #ffd9a0;
+    background: rgba(70, 30, 0, 0.88);
+    border: 0.1vw solid #c98a3a;
+    padding: 0.8vw 1.2vw;
+    border-radius: 0.4vw;
+    text-align: center;
+    z-index: 3000;
+    pointer-events: none;
+}
+
 /* ── "Saving World..." indicator (below coords, all screens) ──────────────── */
 
 #savingIndicator {
@@ -1214,3 +1234,36 @@ body.a11y-contrast #fpsCounter { background: #000; }
     gap: 0.8vw;
     padding: 2.5vw 3vw;
 }
+/* ── Update banner ─────────────────────────────────────────────────────────── */
+/* Deliberately follows the existing vw-based conventions of this file so a
+   later restyle can pick it up with everything else. */
+
+#updateBanner {
+    position: fixed;
+    top: 1.2vw;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    max-width: 60vw;
+    padding: 0.7vw 1.2vw;
+    font-size: 1.1vw;
+    color: #e9edf2;
+    background: rgba(20, 26, 34, 0.95);
+    border: 0.1vw solid #88cc88;
+    border-radius: 0.4vw;
+    box-shadow: 0 0.4vw 1.2vw rgba(0, 0, 0, 0.55);
+    z-index: 4000;
+}
+
+#updateBanner .updateBannerBtn {
+    width: auto;
+    height: auto;
+    line-height: normal;
+    margin: 0;
+    padding: 0.45vw 1.1vw;
+    font-size: 1vw;
+    background: #2f8000;
+}
+#updateBanner .updateBannerBtn:hover { background: #3da000; }

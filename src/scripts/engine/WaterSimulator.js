@@ -36,6 +36,11 @@ export class WaterSimulator {
 
         const batch = this._queue.splice(0, 64); // process up to 64 blocks per tick
         for (const { x, y, z, dist } of batch) {
+            // Drop the dedup entry as the cell is processed. Leaving it in place
+            // grew _queued without bound for the lifetime of the world, and also
+            // meant a position could never be re-entered once visited — so water
+            // would refuse to flow back through a channel it had used before.
+            this._queued.delete(`${x},${y},${z}`);
             this._step(x, y, z, dist, markDirty);
         }
     }

@@ -31,9 +31,9 @@ export class WorkerPool {
 
         for (let i = 0; i < n; i++) {
             const w = new Worker(workerUrl, { type: 'module' });
-            const entry = { worker: w, busy: false, id: i };
+            const entry = { worker: w, busy: false, id: i, currentTask: null };
             w.onmessage = (e) => this._onMessage(i, e);
-            w.onerror   = (e) => console.error(`[WorkerPool] worker ${i} error:`, e);
+            w.onerror   = (e) => this._onWorkerError(i, e);
             this._workers.push(entry);
         }
     }
@@ -136,12 +136,44 @@ export class WorkerPool {
         if (type === 'ready') return;
 
         const entry = this._workers[workerId];
-        entry.busy  = false;
+        entry.busy        = false;
+        entry.currentTask = null;
 
         const cb = this._callbacks.get(taskId);
         if (cb) {
             this._callbacks.delete(taskId);
-            cb({ type, ...data });
+            if (type === 'error') {
+                console.error(`[WorkerPool] task ${taskId} failed in worker ${workerId}:`, data.message);
+                cb({ type: 'error', error: data.message });
+            } else {
+                cb({ type, ...data });
+            }
+        }
+
+        this._flush();
+    }
+
+    /**
+     * A worker that throws never posts a result, so without this its `busy`
+     * flag stayed set forever: the pool permanently lost that worker and the
+     * chunk it was holding never completed, leaving a hole in the world that
+     * nothing would retry. Release the slot and fail the task so the caller can
+     * decide whether to re-queue it.
+     */
+    _onWorkerError(workerId, e) {
+        const entry = this._workers[workerId];
+        const msg   = e?.message ?? String(e?.type ?? e);
+        console.error(`[WorkerPool] worker ${workerId} error:`, msg, e?.filename ?? '', e?.lineno ?? '');
+
+        const taskId = entry?.currentTask;
+        if (entry) { entry.busy = false; entry.currentTask = null; }
+
+        if (taskId != null) {
+            const cb = this._callbacks.get(taskId);
+            if (cb) {
+                this._callbacks.delete(taskId);
+                cb({ type: 'error', error: msg });
+            }
         }
 
         this._flush();

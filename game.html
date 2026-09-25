@@ -4,11 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="src/css/game.css">
+    <!-- Without this the browser requests /favicon.ico on every load and logs a 404. -->
+    <link rel="icon" href="./data/textures/favicon.ico" sizes="any">
     <script src="src/main.js" defer></script>
+    <!-- Minified build: three.module.js + three.core.js is ~2 MB of source the
+         browser parses at every startup, against ~0.7 MB for the minified pair.
+         Swap to three.module.js when you need readable stack traces. -->
     <script type="importmap">
     {
     "imports": {
-        "three": "/node_modules/three/build/three.module.js"
+        "three": "/node_modules/three/build/three.module.min.js"
     }
     }
     </script>
@@ -179,8 +184,13 @@
                     </div>
                     <div class="settingsRow">
                         <span class="settingsLabel">Render Distance</span>
-                        <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="12" class="settingsSlider">
-                        <span class="settingsValue" id="settingRenderDistVal">12</span>
+                        <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="8" class="settingsSlider">
+                        <span class="settingsValue" id="settingRenderDistVal">8</span>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Resolution</span>
+                        <input type="range" id="settingResScale" min="0.5" max="1" step="0.05" value="1" class="settingsSlider">
+                        <span class="settingsValue" id="settingResScaleVal">100%</span>
                     </div>
                     <div class="settingsRow">
                         <span class="settingsLabel">Brightness</span>
@@ -224,6 +234,16 @@
                         <span class="settingsLabel">Large Text</span>
                         <label class="settingsToggle"><input type="checkbox" id="settingLargeText"><span class="track"></span></label>
                     </div>
+                    <div class="settingsSectionTitle">Updates</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Game Version</span>
+                        <span class="settingsValue" id="updateCheckStatus"></span>
+                    </div>
+                    <div class="settingsRow">
+                        <div class="menuButton" id="settingCheckUpdates" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Check for Updates</div>
+                    </div>
+
+                    <div class="settingsSectionTitle">Reset</div>
                     <div class="settingsRow">
                         <div class="menuButton" id="settingsResetBtn" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Reset to Defaults</div>
                     </div>
@@ -324,9 +344,11 @@
 
         <div id="gameUI">
             <div id="playerInfo">
-                <div id="playerHealth"><img src="./data/textures/UI/Heart.png" width="25"> Health: 100 / 100</div>
-                <div id="playerHunger"><img src="./data/textures/UI/Bread.png" width="25"> Hunger: 100 / 100</div>
-                <div id="playerEnergy"><img src="./data/textures/UI/Energy1.png" width="25"> Energy: 100 / 100</div>
+                <!-- The <img> elements are static; only the adjacent span text is
+                     rewritten each frame, so the HUD never re-parses markup. -->
+                <div id="playerHealth"><img src="./data/textures/UI/Heart.png" width="25"> <span id="playerHealthVal">Health: 100 / 100</span></div>
+                <div id="playerHunger"><img src="./data/textures/UI/Bread.png" width="25"> <span id="playerHungerVal">Hunger: 100 / 100</span></div>
+                <div id="playerEnergy"><img src="./data/textures/UI/Energy1.png" width="25"> <span id="playerEnergyVal">Energy: 100 / 100</span></div>
                 <div id="playerProtection" class="hidden">Protection: 0%</div>
                 <div id="playerArrows" class="hidden">Arrows: 0</div>
             </div>
@@ -438,6 +460,13 @@
 
     <!-- "Saving World..." sign — body-level so it shows on every screen -->
     <div id="savingIndicator" class="hidden">Saving World...</div>
+
+    <!-- Shown when the renderer comes up on a software rasteriser. -->
+    <div id="gpuWarning" class="hidden"></div>
+
+    <!-- Update notice. Populated by renderUpdateBanner(); only ever visible on
+         the title and pause screens, never during play. -->
+    <div id="updateBanner" class="hidden"></div>
 
 </body>
 </html>

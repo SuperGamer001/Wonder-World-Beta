@@ -25,17 +25,39 @@ files:
   - "!server/node_modules${/*}"  # stale duplicate; deps resolve from root node_modules
   - "!.github${/*}"
   - "!.claude${/*}"
+  - "!test${/*}"                 # dev-only test harnesses
   - "!**/*.py"
   - "!INSTRUCT.md"
   - "!CLAUDE.md"
   - "!**/*.map"
+  # three ships ~35 MB but the game loads exactly one build file. Dropping the
+  # examples, the TypeScript-facing sources and the unused bundles takes ~33 MB
+  # off the installer with no runtime effect.
+  - "!node_modules/three/examples${/*}"
+  - "!node_modules/three/src${/*}"
+  - "!node_modules/three/test${/*}"
+  - "!node_modules/three/build/three.cjs"
+  - "!node_modules/three/build/three.webgpu*"
+  - "!node_modules/three/build/three.tsl*"
 
 # ── Windows ────────────────────────────────────────────────────────────────
+# NOT CODE SIGNED. Unsigned installers trip SmartScreen ("Windows protected your
+# PC — Unknown publisher") and a large share of players will not click through
+# it. To sign, provide these as CI secrets and electron-builder picks them up
+# with no further config:
+#   CSC_LINK           base64 of a .pfx, or a path to one
+#   CSC_KEY_PASSWORD   its password
+# An OV certificate clears the warning once the binary builds reputation; an EV
+# certificate clears it immediately. Azure Trusted Signing is the cheapest
+# credible route and is supported via the `azureSignOptions` key.
 win:
   target:
     - target: nsis
       arch: x64
   icon: build/icon.png
+  # When you do sign, add a timestamp server so signatures stay valid past the
+  # certificate's expiry. In electron-builder 26 that lives under
+  # `win.signtoolOptions.rfc3161TimeStampServer`, not at the `win` root.
 
 nsis:
   oneClick: false                       # show a real installer wizard
@@ -51,6 +73,12 @@ mac:
   target:
     - target: dmg
       arch: universal                   # runs on both Apple Silicon and Intel
+    # electron-updater can only apply a macOS update from a zip, never a dmg.
+    # Building it costs nothing and means macOS auto-update works the moment the
+    # app is signed (see MAC_AUTO_UPDATE_SIGNED in electron/main.js). Until then
+    # macOS falls back to the "download it yourself" notice.
+    - target: zip
+      arch: universal
   icon: build/icon.png
   category: public.app-category.games
   # No Apple Developer certificate in CI — ship an unsigned (ad-hoc) build.
@@ -61,8 +89,39 @@ dmg:
   title: "Wonder World ${version}"
 
 # ── Publishing ─────────────────────────────────────────────────────────────
-# Uploads the installers to the GitHub Release whose tag matches v${version}.
+# The app updates from the Interlinked library, not from GitHub, so the update
+# feed points there. electron-builder generates the feed file at build time; it
+# carries the version, filename, size and sha512, and that hash is what lets the
+# updater verify what it downloaded.
+#
+# ── THE FEED FILE IS NAMED AFTER THE CHANNEL, NOT ALWAYS "latest" ────────────
+# electron-builder derives the channel from the version's prerelease tag, and
+# bakes it into the installed app's app-update.yml. At 1.0.0-beta.1 that means:
+#
+#     channel: beta   ->   beta.yml   (and beta-mac.yml on macOS)
+#
+# A stable 1.0.0 would instead produce latest.yml. Upload whichever file the
+# build actually emits into dist/ — uploading the wrong name means the app
+# requests a URL that 404s and silently never updates.
+#
+# Note this makes channels sticky: a player on a -beta build keeps asking for
+# beta.yml forever. To move beta players onto a stable release, keep publishing
+# a beta.yml that points at it.
+#
+# UPLOAD ALL OF THESE for each release, into the directory below:
+#   WonderWorld-${version}-x64.exe
+#   WonderWorld-${version}-x64.exe.blockmap   <- do not skip this
+#   beta.yml                                  (or latest.yml on a stable release)
+#   WonderWorld-${version}-universal-mac.zip  (macOS)
+#   beta-mac.yml                              (macOS)
+#
+# The .blockmap is what makes updates cheap: with it present the updater
+# downloads only the changed blocks of the installer instead of all ~110 MB.
+# Omitting it silently falls back to a full download every release.
+#
+# Then update wonderworld-app.json with the new version and links — that file
+# still drives the website's download buttons and the in-app fallback notice on
+# platforms that cannot auto-install.
 publish:
-  provider: github
-  owner: SuperGamer001
-  repo: Wonder-World-Beta
+  provider: generic
+  url: https://alex.planetkodiak.com/Interlinked-Creations/Library/src/installers/wonder-world/

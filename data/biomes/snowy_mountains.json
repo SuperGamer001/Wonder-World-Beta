@@ -23,13 +23,13 @@
       "block": "COAL_ORE",
       "minY": -90,
       "maxY": 279,
-      "frequency": 0.01,
+      "frequency": 0.0072,
       "minSize": 4,
       "maxSize": 14
     },
     {
       "block": "IRON_ORE",
-      "minY": -460,
+      "minY": -128,
       "maxY": 200,
       "frequency": 0.008,
       "minSize": 3,
@@ -37,8 +37,8 @@
     },
     {
       "block": "GOLD_ORE",
-      "minY": -460,
-      "maxY": -340,
+      "minY": -128,
+      "maxY": -90,
       "frequency": 0.005,
       "minSize": 2,
       "maxSize": 7

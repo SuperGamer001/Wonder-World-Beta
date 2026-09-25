@@ -73,9 +73,15 @@ export class EntityManager {
             const sx = Math.floor(playerPos.x + Math.cos(angle) * dist);
             const sz = Math.floor(playerPos.z + Math.sin(angle) * dist);
 
-            // Find ground at this XZ
+            // Find ground at this XZ. Bounded to a window around the player
+            // instead of scanning to the world floor — a mob that would spawn
+            // hundreds of blocks below is out of range anyway, and the old scan
+            // cost up to a full world-height of getBlock calls per attempt, per
+            // entity type, on every spawn tick.
             let sy = null;
-            for (let y = Math.floor(playerPos.y) + 10; y > WORLD_MIN_Y; y--) {
+            const scanTop    = Math.floor(playerPos.y) + 10;
+            const scanBottom = Math.max(WORLD_MIN_Y + 1, scanTop - (DESPAWN_RADIUS + 16));
+            for (let y = scanTop; y > scanBottom; y--) {
                 const id  = this.world.getBlock(sx, y, sz);
                 const idy = this.world.getBlock(sx, y - 1, sz);
                 if (id === 0 && idy !== 0 && !this.blkReg.isNoCollision(idy)) {
@@ -340,7 +346,11 @@ export class EntityManager {
         const mob = this._mobs.get(id);
         if (!mob) return;
         this.scene.remove(mob.mesh);
-        mob.mesh.geometry?.dispose();
+        // mob.mesh is a THREE.Group, which has no .geometry — the old
+        // `mob.mesh.geometry?.dispose()` here was a silent no-op that leaked the
+        // child geometries and materials on every despawn. Those are now shared
+        // per entity type and released in dispose(), so there is nothing
+        // per-mob left to free; removing it from the scene is enough.
         this._mobs.delete(id);
     }
 
@@ -377,9 +387,23 @@ export class EntityManager {
         return tex;
     }
 
+    /**
+     * SpriteMaterials are cached per item id alongside the textures. Previously
+     * every dropped item allocated its own material and none were ever disposed,
+     * so a long session leaked one GPU material per item ever dropped.
+     */
+    _getDropMaterial(itemId) {
+        if (!this._dropMats) this._dropMats = new Map();
+        let mat = this._dropMats.get(itemId);
+        if (!mat) {
+            mat = new THREE.SpriteMaterial({ map: this._getDropTex(itemId), transparent: true });
+            this._dropMats.set(itemId, mat);
+        }
+        return mat;
+    }
+
     dropItem(pos, itemId, count = 1) {
-        const tex  = this._getDropTex(itemId);
-        const mat  = new THREE.SpriteMaterial({ map: tex, transparent: true });
+        const mat  = this._getDropMaterial(itemId);
         const mesh = new THREE.Sprite(mat);
         mesh.scale.set(0.45, 0.45, 0.45);
         mesh.position.set(pos.x + (Math.random() - 0.5) * 0.5,
@@ -403,7 +427,8 @@ export class EntityManager {
             // Expire
             if (d.age > ITEM_LIFETIME) {
                 this.scene.remove(d.mesh);
-                d.mesh.geometry?.dispose();
+                // Sprite geometry is a Three.js singleton and the material is cached per
+                // item id, so removing it from the scene is the whole cleanup.
                 this._drops.splice(i, 1);
                 continue;
             }
@@ -434,7 +459,8 @@ export class EntityManager {
                 const overflow = inventory.addItem(d.itemId, d.count);
                 if (overflow === 0) {
                     this.scene.remove(d.mesh);
-                    d.mesh.geometry?.dispose();
+                    // Sprite geometry is a Three.js singleton and the material is cached per
+                    // item id, so removing it from the scene is the whole cleanup.
                     this._drops.splice(i, 1);
                     window.dispatchEvent(new CustomEvent('ww_itemPickup', {
                         detail: { itemId: d.itemId, count: d.count }
@@ -446,7 +472,35 @@ export class EntityManager {
 
     // ── Three.js mesh builder ─────────────────────────────────────────────────
 
+    /**
+     * Build a mob mesh, reusing one geometry + material pair per entity type.
+     *
+     * Every mob of a given type has identical dimensions and colour, so there is
+     * no reason to allocate fresh BoxGeometry and MeshLambertMaterial objects
+     * per spawn. Sharing them also means despawning a mob has nothing to
+     * dispose, which is what makes _removeMob leak-free.
+     */
     _buildMesh(def) {
+        const shared = this._sharedMobParts(def);
+        const body = new THREE.Mesh(shared.bodyGeo, shared.bodyMat);
+        const head = new THREE.Mesh(shared.headGeo, shared.headMat);
+
+        // Offset so the bottom of the body sits at y=0 (foot position)
+        body.position.y = shared.bodyH / 2;
+        head.position.y = shared.bodyH + shared.headH / 2;
+
+        const group = new THREE.Group();
+        group.add(body);
+        group.add(head);
+        return group;
+    }
+
+    _sharedMobParts(def) {
+        if (!this._mobParts) this._mobParts = new Map();
+        const key = def.id ?? def.name ?? JSON.stringify(def);
+        const hit = this._mobParts.get(key);
+        if (hit) return hit;
+
         const w = def.width ?? 0.8;
         const h = def.height ?? 1.4;
 
@@ -458,24 +512,39 @@ export class EntityManager {
             Math.min(1, (def.color?.[2] ?? 0.4) * 1.25),
         );
 
-        const bodyH   = h * 0.55;
-        const headH   = h * 0.38;
-        const bodyGeo = new THREE.BoxGeometry(w, bodyH, w * 0.7);
-        const headGeo = new THREE.BoxGeometry(w * 0.65, headH, w * 0.65);
-        const bodyMat = new THREE.MeshLambertMaterial({ color: bodyColor });
-        const headMat = new THREE.MeshLambertMaterial({ color: headColor });
+        const bodyH = h * 0.55;
+        const headH = h * 0.38;
+        const parts = {
+            bodyH, headH,
+            bodyGeo: new THREE.BoxGeometry(w, bodyH, w * 0.7),
+            headGeo: new THREE.BoxGeometry(w * 0.65, headH, w * 0.65),
+            bodyMat: new THREE.MeshLambertMaterial({ color: bodyColor }),
+            headMat: new THREE.MeshLambertMaterial({ color: headColor }),
+        };
+        this._mobParts.set(key, parts);
+        return parts;
+    }
 
-        const body = new THREE.Mesh(bodyGeo, bodyMat);
-        const head = new THREE.Mesh(headGeo, headMat);
+    /**
+     * Release every shared GPU resource this manager owns.
+     * Called from world.js when leaving a world.
+     */
+    dispose() {
+        for (const id of [...this._mobs.keys()]) this._removeMob(id);
+        for (const d of this._drops) this.scene.remove(d.mesh);
+        this._drops.length = 0;
 
-        // Offset so the bottom of the body sits at y=0 (foot position)
-        body.position.y = bodyH / 2;
-        head.position.y = bodyH + headH / 2;
+        for (const p of (this._mobParts?.values() ?? [])) {
+            p.bodyGeo.dispose(); p.headGeo.dispose();
+            p.bodyMat.dispose(); p.headMat.dispose();
+        }
+        this._mobParts?.clear();
 
-        const group = new THREE.Group();
-        group.add(body);
-        group.add(head);
-        return group;
+        for (const m of (this._dropMats?.values() ?? [])) m.dispose();
+        this._dropMats?.clear();
+
+        for (const t of (this._texCache?.values() ?? [])) t.dispose();
+        this._texCache?.clear();
     }
 
     // ── Death pack (player death) ─────────────────────────────────────────────

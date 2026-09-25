@@ -30,8 +30,15 @@ import { WaterSimulator }                    from './engine/WaterSimulator.js';
 import { EntityManager }                     from './engine/EntityManager.js';
 import { CraftingSystem }                    from './engine/CraftingSystem.js';
 
-const WS_URL       = 'ws://localhost:3000';
-const SERVER_URL   = 'http://localhost:3000';
+// The page is served by the game server itself, so derive both URLs from the
+// current origin. The server now binds an OS-assigned port (a fixed 3000 meant
+// the desktop app silently failed to launch whenever something else held it),
+// so nothing may assume a port number. The literal is only a fallback for
+// opening the page directly off disk during development.
+const SERVER_URL   = (typeof location !== 'undefined' && location.origin && location.origin !== 'null')
+    ? location.origin
+    : 'http://127.0.0.1:3000';
+const WS_URL       = SERVER_URL.replace(/^http/, 'ws');
 const AUTO_SAVE_MS = 5 * 60 * 1000;
 const CAMERA_HEIGHT = 1.6;
 const INTERACT_REACH = 4.5;
@@ -136,6 +143,13 @@ const BLOCK_FACE_MAP = {
 // GLSL 300 es shaders (Three.js injects the version + built-in uniforms automatically)
 // Three.js automatically injects `position`, `normal`, `uv` before our code,
 // so we only declare our custom attributes here.
+// The mesher does not emit a `normal` attribute — these shaders never read one,
+// because directional brightness is baked into the vertex colour.
+//
+// vDepth carries view-space distance so the fragment stage can apply fog. A
+// custom ShaderMaterial gets no fog from Three.js automatically, and without it
+// chunks pop in hard at the render-distance edge, which is what forced the very
+// long default view distance.
 const CHUNK_VERT = `
 in vec3  color;
 in float layer;
@@ -143,56 +157,143 @@ in float layer;
 out vec3  vColor;
 out vec2  vUV;
 out float vLayer;
+out float vDepth;
 
 void main() {
     vColor  = color;
     vUV     = uv;
     vLayer  = layer;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vDepth  = -mv.z;
+    gl_Position = projectionMatrix * mv;
 }
 `;
 
-const CHUNK_FRAG = `
+// Shared fragment tail: fog, then the display adjustments that used to be a CSS
+// filter on <body>. Running them here costs a few ALU ops instead of forcing the
+// whole page — canvas included — through an extra compositing pass every frame.
+const CHUNK_COMMON = `
 precision highp sampler2DArray;
 uniform sampler2DArray uTex;
+uniform vec3  uFogColor;
+uniform float uFogNear;
+uniform float uFogFar;
+uniform float uBrightness;
+uniform int   uColorMode;   // 0 none, 1 protanopia, 2 deuteranopia, 3 tritanopia
 
 in vec3  vColor;
 in vec2  vUV;
 in float vLayer;
+in float vDepth;
 
 out vec4 fragColor;
 
+vec3 applyFog(vec3 c) {
+    float f = clamp((vDepth - uFogNear) / max(uFogFar - uFogNear, 0.001), 0.0, 1.0);
+    return mix(c, uFogColor, f);
+}
+
+// Cheap saturate + hue-rotate, matching the previous CSS filter values.
+vec3 applyColorMode(vec3 c) {
+    if (uColorMode == 0) return c;
+    float sat = uColorMode == 3 ? 1.30 : 1.25;
+    float ang = uColorMode == 1 ? -0.3142 : uColorMode == 2 ? 0.3142 : 0.6981;
+    float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+    c = mix(vec3(l), c, sat);
+    float cs = cos(ang), sn = sin(ang);
+    mat3 hue = mat3(
+        0.213 + cs * 0.787 - sn * 0.213, 0.213 - cs * 0.213 + sn * 0.143, 0.213 - cs * 0.213 - sn * 0.787,
+        0.715 - cs * 0.715 - sn * 0.715, 0.715 + cs * 0.285 + sn * 0.140, 0.715 - cs * 0.715 + sn * 0.715,
+        0.072 - cs * 0.072 + sn * 0.928, 0.072 - cs * 0.072 - sn * 0.283, 0.072 + cs * 0.928 + sn * 0.072
+    );
+    return clamp(hue * c, 0.0, 1.0);
+}
+
+vec3 grade(vec3 c) { return applyColorMode(applyFog(c) * uBrightness); }
+`;
+
+const CHUNK_FRAG = CHUNK_COMMON + `
 void main() {
     if (vLayer >= 0.0) {
         vec4 t = texture(uTex, vec3(fract(vUV.x), fract(vUV.y), floor(vLayer + 0.5)));
         if (t.a < 0.1) discard;
-        fragColor = vec4(t.rgb * vColor.r, t.a);
+        fragColor = vec4(grade(t.rgb * vColor.r), t.a);
     } else {
-        fragColor = vec4(vColor, 1.0);
+        fragColor = vec4(grade(vColor), 1.0);
     }
 }
 `;
 
-const CHUNK_TRANSP_FRAG = `
-precision highp sampler2DArray;
-uniform sampler2DArray uTex;
-
-in vec3  vColor;
-in vec2  vUV;
-in float vLayer;
-
-out vec4 fragColor;
-
+const CHUNK_TRANSP_FRAG = CHUNK_COMMON + `
 void main() {
     if (vLayer >= 0.0) {
         vec4 t = texture(uTex, vec3(fract(vUV.x), fract(vUV.y), floor(vLayer + 0.5)));
         if (t.a < 0.05) discard;
-        fragColor = vec4(t.rgb * vColor.r, t.a * 0.72);
+        fragColor = vec4(grade(t.rgb * vColor.r), t.a * 0.72);
     } else {
-        fragColor = vec4(vColor, 0.72);
+        fragColor = vec4(grade(vColor), 0.72);
     }
 }
 `;
+
+// ── GPU capability checks ─────────────────────────────────────────────────────
+
+/**
+ * Verify WebGL2 before anything tries to compile a chunk shader. Without this a
+ * machine with a blocklisted driver just shows a black screen and a console
+ * error the player will never see.
+ */
+function _checkWebGL2(canvas) {
+    let gl = null;
+    try { gl = canvas.getContext('webgl2'); } catch { /* fall through */ }
+    if (gl) return true;
+
+    window.dispatchEvent(new CustomEvent('ww_fatalError', {
+        detail: {
+            title: 'Graphics not supported',
+            message: 'Wonder World needs WebGL 2, which this system did not provide.\n\n' +
+                     'This usually means graphics drivers are out of date, or hardware ' +
+                     'acceleration is disabled. Updating your graphics driver normally fixes it.',
+        },
+    }));
+    console.error('[world] WebGL2 unavailable — cannot start renderer');
+    return false;
+}
+
+/**
+ * Chromium silently falls back to the SwiftShader software rasteriser when the
+ * GPU is blocklisted. WebGL2 still works, but at a few frames per second, and
+ * the player has no way to tell why. Surface it.
+ */
+function _warnIfSoftwareRenderer() {
+    try {
+        const gl   = renderer.getContext();
+        const dbg  = gl.getExtension('WEBGL_debug_renderer_info');
+        const name = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : '';
+        if (/swiftshader|software|llvmpipe|basic render/i.test(name)) {
+            console.warn('[world] software renderer detected:', name);
+            window.dispatchEvent(new CustomEvent('ww_gpuWarning', {
+                detail: {
+                    message: 'Hardware graphics acceleration is not active, so the game will ' +
+                             'run very slowly. Updating your graphics driver, or enabling ' +
+                             'hardware acceleration, will fix this.',
+                    renderer: name,
+                },
+            }));
+        }
+    } catch { /* extension unavailable — nothing to report */ }
+}
+
+// Resolution scale. Rendering at native ratio on a high-DPI Windows laptop can
+// mean 2.25x the pixels of a 1080p panel for no visual gain in a blocky game,
+// so this is exposed as a setting and multiplied into the device pixel ratio.
+let _resScale = 1.0;
+
+function _applyPixelRatio() {
+    if (!renderer) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    renderer.setPixelRatio(Math.max(0.3, dpr * _resScale));
+}
 
 function _loadImage(url) {
     return new Promise((resolve, reject) => {
@@ -210,7 +311,9 @@ async function _buildBlockTextureArray() {
     const canvas = document.createElement('canvas');
     canvas.width  = SIZE;
     canvas.height = SIZE;
-    const ctx = canvas.getContext('2d');
+    // getImageData runs once per texture layer; the hint keeps the canvas on a
+    // CPU-readable backing so each readback isn't a GPU round trip.
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
     ctx.imageSmoothingEnabled = false;
 
     for (let i = 0; i < N; i++) {
@@ -243,25 +346,102 @@ async function _buildBlockTextureArray() {
     return tex;
 }
 
+const SKY_COLOR = 0x87CEEB;
+
+// Camera far plane, in blocks. Fixed rather than derived from render distance:
+// the far plane should never be what removes geometry from view — fog is. This
+// is generous enough for the maximum render distance (16 chunks = 256 blocks,
+// ~362 diagonal) with a lot of headroom to spare.
+//
+// If you push this much further for a long-range view mode, watch depth
+// precision: it is governed by the far/near ratio, and near is only 0.1 because
+// the camera sits inside the player's own AABB. The lever at that point is
+// `logarithmicDepthBuffer: true` on the WebGLRenderer, not a bigger far value.
+const CAMERA_FAR = 4096;
+
+// Fog range as a fraction of the loaded radius.
+const FOG_START = 0.75;   // fully clear inside this
+const FOG_END   = 1.00;   // fully fogged at the edge of the loaded area
+
+// Shared by both chunk materials so a single write updates the whole terrain.
+let chunkUniforms = null;
+// Held so _disposeAll can release it — it is rebuilt on each world load.
+let _blockTexArray = null;
+
 function _createChunkMaterials(texArray) {
-    const uniforms = { uTex: { value: texArray } };
+    _blockTexArray = texArray;
+    chunkUniforms = {
+        uTex:        { value: texArray },
+        uFogColor:   { value: new THREE.Color(SKY_COLOR) },
+        uFogNear:    { value: 160 },
+        uFogFar:     { value: 280 },
+        uBrightness: { value: 1.0 },
+        uColorMode:  { value: 0 },
+    };
 
     opaqueMaterial = new THREE.ShaderMaterial({
         glslVersion:  THREE.GLSL3,
-        uniforms,
+        uniforms:     chunkUniforms,
         vertexShader:   CHUNK_VERT,
         fragmentShader: CHUNK_FRAG,
     });
 
     transparentMaterial = new THREE.ShaderMaterial({
         glslVersion:  THREE.GLSL3,
-        uniforms,
+        uniforms:     chunkUniforms,
         vertexShader:   CHUNK_VERT,
         fragmentShader: CHUNK_TRANSP_FRAG,
         transparent:  true,
         depthWrite:   false,
+        // Must stay DoubleSide: the mesher only emits the outward-facing shell of
+        // a transparent volume, so culling backfaces would make the water surface
+        // vanish when the camera is underneath it.
         side:         THREE.DoubleSide,
     });
+
+    _applyViewDistance();
+}
+
+/**
+ * Derive fog and the camera far plane from the render distance.
+ *
+ * Fog previously ran from a fixed 160..280 while chunks loaded to 12 chunks
+ * (192 blocks) and the camera clipped at 512, so terrain simply ended in mid-air
+ * and the far plane was mostly wasted. Tying all three together means a lower
+ * render distance fades out cleanly instead of showing a hard edge — which is
+ * what makes a cheaper default viable.
+ */
+function _applyViewDistance() {
+    const blocks = _renderDist * CHUNK_SIZE;
+    // Fade only across the outermost quarter of the loaded area. Starting the
+    // fade earlier hid a lot of world the player had already paid to generate.
+    // Ending it exactly at `blocks` still covers the load boundary, because a
+    // chunk's far corners sit past its centre distance.
+    const near = blocks * FOG_START;
+    const far  = blocks * FOG_END;
+
+    if (chunkUniforms) {
+        chunkUniforms.uFogNear.value = near;
+        chunkUniforms.uFogFar.value  = far;
+    }
+    // Entities use Lambert materials and still read scene.fog.
+    if (scene?.fog) { scene.fog.near = near; scene.fog.far = far; }
+
+    // camera.far is deliberately NOT touched here. It is a fixed CAMERA_FAR set
+    // once at camera creation. Scaling it with render distance clipped the far
+    // corners of the outermost chunks — a chunk centred at the render radius
+    // extends past it diagonally — and it would fight any future long-range
+    // view mode. Fog, not the far plane, is what limits how far you can see.
+}
+
+/** Push the display settings that are now shader-side rather than CSS-side. */
+function _applyDisplaySettings(brightness, colorblind) {
+    if (!chunkUniforms) return;
+    chunkUniforms.uBrightness.value = brightness ?? 1.0;
+    chunkUniforms.uColorMode.value =
+        colorblind === 'protanopia'   ? 1 :
+        colorblind === 'deuteranopia' ? 2 :
+        colorblind === 'tritanopia'   ? 3 : 0;
 }
 
 // ── Selection + break state ───────────────────────────────────────────────────
@@ -326,12 +506,27 @@ document.addEventListener('DOMContentLoaded', () => {
     scene.background = new THREE.Color(0x87CEEB);
     scene.fog        = new THREE.Fog(0x87CEEB, 160, 280);
 
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 512);
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, CAMERA_FAR);
 
-    // preserveDrawingBuffer lets us grab a world screenshot at save time.
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, preserveDrawingBuffer: true });
+    // The chunk shaders are GLSL3 and sample a sampler2DArray, so WebGL2 is
+    // required. Fail loudly here rather than rendering a black screen later.
+    if (!_checkWebGL2(canvas)) return;
+
+    // powerPreference matters a lot on Windows laptops with switchable graphics:
+    // without it the browser may bind the integrated GPU for the whole session.
+    //
+    // preserveDrawingBuffer is deliberately NOT set. It forces the compositor to
+    // retain the back buffer every frame on many drivers. World screenshots are
+    // taken by capturing the canvas in the same task as the render instead —
+    // see _render() / _capturePendingScreenshot().
+    renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: false,
+        powerPreference: 'high-performance',
+    });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    _applyPixelRatio();
+    _warnIfSoftwareRenderer();
 
     ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(ambientLight);
@@ -487,6 +682,9 @@ document.addEventListener('WorldJS_quitWorld', () => {
     const client = worldClient;   // capture before nulling so we can flush + close it
     _saveAll();                   // queues the final chunk save onto the socket
     _savePlayerState();
+    // Release mob geometries, sprite materials and item textures before the
+    // scene is torn down; these are GPU-side and are not reclaimed by GC alone.
+    _entities?.dispose();
     _disposeAll();
 
     chunkManager = null;
@@ -503,6 +701,11 @@ document.addEventListener('WorldJS_quitWorld', () => {
     // Do NOT call renderer.dispose() — it destroys the WebGL context and makes
     // the renderer unusable for the next world load in the same session.
     _blockReg = _itemReg = _physics = _inventory = _water = _entities = _crafting = null;
+
+    // Drop the HUD's cached handles and last-written values so the next world
+    // starts from a clean slate rather than skipping writes that look unchanged.
+    _hud.ready = false;
+    _loadGateDone = false;
 });
 
 // ── Tick event ────────────────────────────────────────────────────────────────
@@ -520,7 +723,7 @@ document.addEventListener('WorldJS_tick', (e) => {
     if (_wasLocked && !isLocked) { _saveAll(); _savePlayerState(); }
     _wasLocked = isLocked;
 
-    if (_isDead) { renderer.render(scene, camera); return; }
+    if (_isDead) { _render(); return; }
 
     // Waiting for a ground spawn: keep loading terrain around the spawn column and
     // hold the player frozen above it until a surface is found.
@@ -530,7 +733,7 @@ document.addEventListener('WorldJS_tick', (e) => {
         _updateCamera();
         chunkManager.update(me.position, _camFwd, { x: 0, z: 0 });
         _updateHUD();
-        renderer.render(scene, camera);
+        _render();
         return;
     }
 
@@ -605,7 +808,7 @@ document.addEventListener('WorldJS_tick', (e) => {
     // Fade vignette
     if (_damageFade > 0) _damageFade = Math.max(0, _damageFade - dt * 1.5);
 
-    renderer.render(scene, camera);
+    _render();
 });
 
 // ── Resize ────────────────────────────────────────────────────────────────────
@@ -621,9 +824,25 @@ window.addEventListener('contextmenu', (e) => e.preventDefault());
 
 // ── Pointer lock ──────────────────────────────────────────────────────────────
 
+// Radians of rotation per unit of mouse movement at slider position 1.0.
+// Minecraft's equivalent is 0.15 degrees per count; this is a little slower.
+const BASE_RAD_PER_COUNT = 0.0018;
+
+// Mouse look.
+//
+// Rotation is applied as events arrive rather than accumulated and flushed per
+// frame: the renderer reads yaw/pitch at draw time, so everything since the last
+// frame is already integrated, and deferring would only add latency. Nothing
+// here is scaled by dt — camera movement should track the mouse exactly, not the
+// frame clock, which is what keeps it stable when frame times vary.
+//
+// The mapping from slider to radians is deliberately linear. Minecraft applies a
+// cubic response curve, which does give nicer fine control at low settings, but
+// adding one would silently change what every existing saved sensitivity value
+// means — and would make a raised setting *faster*, not calmer.
 document.addEventListener('mousemove', (e) => {
     if (document.pointerLockElement !== document.getElementById('GameScreen')) return;
-    const sensitivity = 0.0018 * _sensMult;
+    const sensitivity = BASE_RAD_PER_COUNT * _sensMult;
     yaw   -= e.movementX * sensitivity;
     pitch -= e.movementY * sensitivity * (_invertY ? -1 : 1);
     pitch  = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
@@ -633,7 +852,7 @@ document.addEventListener('mousemove', (e) => {
 let _sensMult  = 1.0;
 let _invertY   = false;
 let _baseFov   = 75;
-let _renderDist = 12;
+let _renderDist = 8;
 document.addEventListener('WorldJS_applySettings', (e) => {
     const s = e.data ?? {};
     if (s.sensitivity != null) _sensMult = s.sensitivity;
@@ -642,6 +861,14 @@ document.addEventListener('WorldJS_applySettings', (e) => {
     if (s.renderDistance != null) {
         _renderDist = s.renderDistance;
         if (chunkManager) chunkManager.renderDistance = _renderDist;
+        _applyViewDistance();
+    }
+    if (s.resolutionScale != null) {
+        _resScale = s.resolutionScale;
+        _applyPixelRatio();
+    }
+    if (s.brightness != null || s.colorblind != null) {
+        _applyDisplaySettings(s.brightness, s.colorblind);
     }
 });
 
@@ -1196,73 +1423,91 @@ document.addEventListener('WorldJS_respawn', () => {
 
 // ── HUD updates ───────────────────────────────────────────────────────────────
 
+// ── HUD ───────────────────────────────────────────────────────────────────────
+// _updateHUD runs once per frame, so it does no getElementById lookups and no
+// innerHTML writes. Element handles are resolved once and every value is
+// compared against the last one written — an unchanged HUD touches the DOM zero
+// times, where the previous version rebuilt three <img> elements 60x a second.
+
+const _hud = { ready: false, el: {}, last: {} };
+
+function _hudInit() {
+    const ids = [
+        'playerCoords', 'playerInfo', 'playerHealthVal', 'playerHungerVal', 'playerEnergyVal',
+        'playerProtection', 'playerArrows', 'attackChargeFill', 'mineProgressBar',
+        'mineProgressFill', 'eatProgressBar', 'eatProgressFill', 'damageVignette', 'actionLines',
+    ];
+    for (const id of ids) _hud.el[id] = document.getElementById(id);
+    _hud.last = {};
+    _hud.ready = true;
+}
+
+/** Write `value` to the element only when it differs from the last write. */
+function _hudText(id, value) {
+    if (_hud.last[id] === value) return;
+    _hud.last[id] = value;
+    const el = _hud.el[id];
+    if (el) el.textContent = value;
+}
+
+function _hudStyle(id, prop, value) {
+    const k = id + '.' + prop;
+    if (_hud.last[k] === value) return;
+    _hud.last[k] = value;
+    const el = _hud.el[id];
+    if (el) el.style[prop] = value;
+}
+
+function _hudClass(id, cls, on) {
+    const k = id + '#' + cls;
+    if (_hud.last[k] === on) return;
+    _hud.last[k] = on;
+    const el = _hud.el[id];
+    if (el) el.classList.toggle(cls, on);
+}
+
 function _updateHUD() {
+    if (!_hud.ready) _hudInit();
+
     // Player coordinates — top-right, shown in every game mode.
-    const coordEl = document.getElementById('playerCoords');
-    if (coordEl) {
-        coordEl.textContent =
-            `X: ${Math.round(me.position.x)}  Y: ${Math.round(me.position.y)}  Z: ${Math.round(me.position.z)}`;
-    }
+    _hudText('playerCoords',
+        `X: ${Math.round(me.position.x)}  Y: ${Math.round(me.position.y)}  Z: ${Math.round(me.position.z)}`);
 
     // Game-mode gating: hide survival stats in Creative/Spectator
     const showStats = _gameMode === 'SURVIVAL';
-    const infoEl = document.getElementById('playerInfo');
-    if (infoEl) infoEl.classList.toggle('hidden', !showStats);
+    _hudClass('playerInfo', 'hidden', !showStats);
 
     if (showStats) {
-        _setInnerHTML('playerHealth', `<img src="./data/textures/UI/Heart.png" width="25"> Health: ${Math.ceil(me.health)} / 100`);
-        _setInnerHTML('playerHunger', `<img src="./data/textures/UI/Bread.png" width="25"> Hunger: ${Math.ceil(me.hunger)} / 100`);
-        _setInnerHTML('playerEnergy', `<img src="./data/textures/UI/Energy1.png" width="25"> Energy: ${Math.ceil(me.energy)} / 100`);
+        _hudText('playerHealthVal', `Health: ${Math.ceil(me.health)} / 100`);
+        _hudText('playerHungerVal', `Hunger: ${Math.ceil(me.hunger)} / 100`);
+        _hudText('playerEnergyVal', `Energy: ${Math.ceil(me.energy)} / 100`);
     }
 
-    const protEl = document.getElementById('playerProtection');
-    if (protEl) {
-        const hasArmor = _inventory?.hasAnyArmor ?? false;
-        protEl.classList.toggle('hidden', !hasArmor);
-        if (hasArmor) protEl.textContent = `Protection: ${Math.round(_inventory.totalProtection)}%`;
-    }
+    const hasArmor = _inventory?.hasAnyArmor ?? false;
+    _hudClass('playerProtection', 'hidden', !hasArmor);
+    if (hasArmor) _hudText('playerProtection', `Protection: ${Math.round(_inventory.totalProtection)}%`);
 
-    const arrowEl = document.getElementById('playerArrows');
-    if (arrowEl) {
-        const hasQuiver = _inventory?.hasQuiver ?? false;
-        arrowEl.classList.toggle('hidden', !hasQuiver);
-        if (hasQuiver) arrowEl.textContent = `Arrows: ${_inventory.quiverArrows}`;
-    }
+    const hasQuiver = _inventory?.hasQuiver ?? false;
+    _hudClass('playerArrows', 'hidden', !hasQuiver);
+    if (hasQuiver) _hudText('playerArrows', `Arrows: ${_inventory.quiverArrows}`);
 
     // Attack charge bar
-    const barEl = document.getElementById('attackChargeFill');
-    if (barEl) barEl.style.width = `${Math.round(_attackCharge * 100)}%`;
+    _hudStyle('attackChargeFill', 'width', `${Math.round(_attackCharge * 100)}%`);
 
     // Mining progress bar — visible while breaking a block in survival
-    const mineWrap = document.getElementById('mineProgressBar');
-    const mineFill = document.getElementById('mineProgressFill');
-    if (mineWrap && mineFill) {
-        const mining = _breakProgress > 0 && _breakTarget !== null && _gameMode !== 'CREATIVE';
-        mineWrap.style.display = mining ? 'block' : 'none';
-        mineFill.style.width = `${Math.round(_breakProgress * 100)}%`;
-    }
+    const mining = _breakProgress > 0 && _breakTarget !== null && _gameMode !== 'CREATIVE';
+    _hudStyle('mineProgressBar', 'display', mining ? 'block' : 'none');
+    _hudStyle('mineProgressFill', 'width', `${Math.round(_breakProgress * 100)}%`);
 
     // Eating progress bar — visible while consuming food
-    const eatWrap = document.getElementById('eatProgressBar');
-    const eatFill = document.getElementById('eatProgressFill');
-    if (eatWrap && eatFill) {
-        const eating = _eatTimer > 0;
-        eatWrap.style.display = eating ? 'block' : 'none';
-        eatFill.style.width = `${Math.round((_eatTimer / EAT_TIME) * 100)}%`;
-    }
+    _hudStyle('eatProgressBar', 'display', _eatTimer > 0 ? 'block' : 'none');
+    _hudStyle('eatProgressFill', 'width', `${Math.round((_eatTimer / EAT_TIME) * 100)}%`);
 
     // Damage vignette
-    const vig = document.getElementById('damageVignette');
-    if (vig) vig.style.opacity = String(_damageFade.toFixed(3));
+    _hudStyle('damageVignette', 'opacity', _damageFade.toFixed(3));
 
     // Action lines: flash when freshly damaged
-    const lines = document.getElementById('actionLines');
-    if (lines) lines.classList.toggle('flash', _damageFade > 0.7);
-}
-
-function _setInnerHTML(id, html) {
-    const el = document.getElementById(id);
-    if (el) el.innerHTML = html;
+    _hudClass('actionLines', 'flash', _damageFade > 0.7);
 }
 
 // ── Camera + view ─────────────────────────────────────────────────────────────
@@ -1275,9 +1520,18 @@ function _updateCamera() {
     _camQ.multiply(_camQx.setFromAxisAngle(_axisX, pitch));
     camera.quaternion.copy(_camQ);
 
+    // The FOV lerp converges asymptotically and never lands exactly on target,
+    // so snap once it is visually there. Otherwise updateProjectionMatrix() —
+    // which also recomputes the inverse — would run on every frame forever.
     const targetFov = _bowZoom ? Math.min(30, _baseFov - 10) : _baseFov;
-    camera.fov += (targetFov - camera.fov) * 0.2;
-    camera.updateProjectionMatrix();
+    const delta = targetFov - camera.fov;
+    if (Math.abs(delta) > 0.01) {
+        camera.fov += delta * 0.2;
+        camera.updateProjectionMatrix();
+    } else if (camera.fov !== targetFov) {
+        camera.fov = targetFov;
+        camera.updateProjectionMatrix();
+    }
 }
 
 // ── Mesh callbacks ─────────────────────────────────────────────────────────────
@@ -1326,20 +1580,38 @@ function _attachGeo(entry, geo, worldX, worldZ, suffix) {
     }
 }
 
+// Reused scratch so the bounding sphere below allocates nothing per chunk.
+const _bsCenter = new THREE.Vector3();
+
 function _buildGeometry(geo, transparent) {
     const buf  = new THREE.BufferGeometry();
     const pos  = transparent ? geo.transparentPositions : geo.positions;
-    const norm = transparent ? geo.transparentNormals   : geo.normals;
     const col  = transparent ? geo.transparentColors    : geo.colors;
     const idx  = transparent ? geo.transparentIndices   : geo.indices;
     const uvs  = transparent ? geo.transparentUVs       : geo.uvs;
     const lay  = transparent ? geo.transparentLayers    : geo.layers;
+
+    // No 'normal' attribute — the chunk shaders bake lighting into vertex colour
+    // and never read one, so uploading it would be 12 bytes per vertex of waste.
     buf.setAttribute('position', new THREE.BufferAttribute(pos,  3));
-    buf.setAttribute('normal',   new THREE.BufferAttribute(norm, 3));
     buf.setAttribute('color',    new THREE.BufferAttribute(col,  3));
     buf.setAttribute('uv',       new THREE.BufferAttribute(uvs,  2));
     buf.setAttribute('layer',    new THREE.BufferAttribute(lay,  1));
     buf.setIndex(new THREE.BufferAttribute(idx, 1));
+
+    // Set the bounding sphere from the chunk's known extent instead of letting
+    // Three.js derive it lazily, which would scan every position on the main
+    // thread the first time the chunk is considered for frustum culling.
+    const yMin = geo.yMin ?? 0;
+    const yMax = (geo.yMax ?? (CHUNK_SIZE_Y - 1)) + 1;
+    const halfY = (yMax - yMin) * 0.5;
+    _bsCenter.set(CHUNK_SIZE * 0.5, yMin + halfY, CHUNK_SIZE * 0.5);
+    const halfXZ = CHUNK_SIZE * 0.5;
+    buf.boundingSphere = new THREE.Sphere(
+        _bsCenter.clone(),
+        Math.sqrt(halfXZ * halfXZ * 2 + halfY * halfY),
+    );
+
     return buf;
 }
 
@@ -1361,6 +1633,13 @@ function _disposeAll() {
     transparentMaterial?.dispose();
     opaqueMaterial = null;
     transparentMaterial = null;
+
+    // The block atlas is rebuilt on every world load, so it has to be released
+    // on every unload too — otherwise each world entered in a session leaves
+    // another DataArrayTexture resident on the GPU.
+    _blockTexArray?.dispose();
+    _blockTexArray = null;
+    chunkUniforms  = null;
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -1405,8 +1684,53 @@ function _flushAndCloseClient(client) {
 }
 
 // Grab the current frame, downscale it, and upload it as the world's thumbnail.
+/**
+ * Request a world thumbnail.
+ *
+ * The capture itself has to happen in the same task as a render, because the
+ * renderer no longer sets preserveDrawingBuffer (it costs a full-framebuffer
+ * copy every frame). So this only flags the request; _render() performs the
+ * capture immediately after the next draw, while the buffer is still valid.
+ */
 function _saveScreenshot(worldId) {
     if (!renderer || !worldId) return;
+    _pendingScreenshotWorldId = worldId;
+}
+
+let _pendingScreenshotWorldId = null;
+
+// Live render stats, for the in-game FPS overlay and for automated smoke tests.
+// Reading renderer.info is free — Three.js maintains it regardless.
+window.__wwDebug = () => {
+    if (!renderer) return null;
+    const i = renderer.info;
+    return {
+        meshes:     chunkMeshes.size,
+        drawCalls:  i.render.calls,
+        tris:       i.render.triangles,
+        geometries: i.memory.geometries,
+        textures:   i.memory.textures,
+        programs:   i.programs?.length ?? 0,
+        chunks:     worldState?.chunks.size ?? 0,
+        renderDist: _renderDist,
+        pixelRatio: renderer.getPixelRatio(),
+        cameraFar:  camera?.far ?? null,
+        fogNear:    chunkUniforms?.uFogNear.value ?? null,
+        fogFar:     chunkUniforms?.uFogFar.value ?? null,
+    };
+};
+
+/** Draw the scene, then service a pending screenshot request in the same task. */
+function _render() {
+    renderer.render(scene, camera);
+    if (_pendingScreenshotWorldId !== null) {
+        const worldId = _pendingScreenshotWorldId;
+        _pendingScreenshotWorldId = null;
+        _capturePendingScreenshot(worldId);
+    }
+}
+
+function _capturePendingScreenshot(worldId) {
     try {
         const src = renderer.domElement;
         const w = 320;

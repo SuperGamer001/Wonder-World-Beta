@@ -23,7 +23,7 @@
       "block": "COAL_ORE",
       "minY": -90,
       "maxY": 279,
-      "frequency": 0.006,
+      "frequency": 0.0043,
       "minSize": 3,
       "maxSize": 10
     }

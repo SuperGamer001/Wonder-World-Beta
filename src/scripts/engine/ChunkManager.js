@@ -26,13 +26,27 @@ import { WorldState }            from './WorldState.js';
 
 const MAX_DISPATCH = 32;  // max new jobs queued per update() call
 
-// Build the four horizontal neighbour voxel buffers for a mesh job.
-// Missing / ungenerated neighbours are omitted; the mesher culls those faces.
-function _collectNeighbors(world, cx, cz) {
+const NEIGHBOR_OFFSETS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+/**
+ * Build the four horizontal neighbour payloads for a mesh job.
+ *
+ * Each neighbour is sent as its compressed palette pair rather than an expanded
+ * Uint16Array: that is CHUNK_VOLUME bytes instead of 2x CHUNK_VOLUME, and the
+ * expansion runs on the worker instead of blocking the frame. The returned
+ * buffers are fresh copies, so they are pushed onto the transfer list by the
+ * caller and move to the worker without a structured-clone copy.
+ *
+ * Missing / ungenerated neighbours are omitted; the mesher culls those faces.
+ */
+function _collectNeighbors(world, cx, cz, transferList) {
     const neighbors = {};
-    for (const [ddx, ddz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+    for (const [ddx, ddz] of NEIGHBOR_OFFSETS) {
         const nc = world.getChunk(cx + ddx, cz + ddz);
-        if (nc?.generated) neighbors[`${ddx},${ddz}`] = nc.toUint16Array().buffer;
+        if (!nc?.generated) continue;
+        const snap = nc.snapshot();
+        neighbors[`${ddx},${ddz}`] = snap;
+        transferList.push(snap.palette.buffer, snap.indices.buffer);
     }
     return neighbors;
 }
@@ -60,6 +74,15 @@ export class ChunkManager {
 
         // Keys unloaded while their generation was still in-flight.
         this._cancelledChunks = new Set();
+
+        // Cached residency set. Rebuilding it allocates ~500 string keys, so it is
+        // recomputed only when the player crosses a chunk boundary or the render
+        // distance changes — not on every one of the 60 update() calls per second.
+        this._neededKeys   = new Set();
+        this._neededCoords = [];        // parallel [cx, cz, cx, cz, …] for the missing scan
+        this._lastPcx      = null;
+        this._lastPcz      = null;
+        this._lastRD       = -1;
 
         // Server-backed world persistence. Set worldId and worldClient to enable.
         this.worldId     = null;
@@ -100,37 +123,57 @@ export class ChunkManager {
 
         const pcx = WorldState.worldToChunk(playerPos.x | 0);
         const pcz = WorldState.worldToChunk(playerPos.z | 0);
+        const rd  = this.renderDistance;
 
-        // ── Build set of chunk columns that should be resident ──────────────
-        const needed = new Set();
-        const rd     = this.renderDistance;
+        // ── Rebuild the residency set only when it can actually have changed ──
+        const moved = pcx !== this._lastPcx || pcz !== this._lastPcz || rd !== this._lastRD;
+        if (moved) {
+            this._lastPcx = pcx;
+            this._lastPcz = pcz;
+            this._lastRD  = rd;
 
-        for (let dx = -rd; dx <= rd; dx++) {
-            for (let dz = -rd; dz <= rd; dz++) {
-                // Circular cull — skip corners beyond the render radius
-                if (dx*dx + dz*dz > (rd + 0.5) * (rd + 0.5)) continue;
-                needed.add(WorldState.key(pcx + dx, pcz + dz));
+            const needed = this._neededKeys;
+            const coords = this._neededCoords;
+            needed.clear();
+            coords.length = 0;
+
+            const rdSq = (rd + 0.5) * (rd + 0.5);
+            for (let dx = -rd; dx <= rd; dx++) {
+                for (let dz = -rd; dz <= rd; dz++) {
+                    // Circular cull — skip corners beyond the render radius
+                    if (dx * dx + dz * dz > rdSq) continue;
+                    const cx = pcx + dx, cz = pcz + dz;
+                    needed.add(WorldState.key(cx, cz));
+                    coords.push(cx, cz);
+                }
+            }
+
+            // ── Unload chunks no longer needed ──────────────────────────────
+            // Only possible right after the set changed, so it is gated too.
+            for (const key of [...this.world.chunks.keys()]) {
+                if (!needed.has(key)) this._unload(key);
             }
         }
 
-        // ── Unload chunks no longer needed ──────────────────────────────────
-        for (const key of [...this.world.chunks.keys()]) {
-            if (!needed.has(key)) this._unload(key);
-        }
+        const coords = this._neededCoords;
 
         // ── Collect and prioritise missing chunks ────────────────────────────
+        // Walks the cached coordinate list, so no key parsing and no per-frame
+        // string allocation in the common case where nothing is missing.
         const missing = [];
-        for (const key of needed) {
+        for (let i = 0; i < coords.length; i += 2) {
+            const cx = coords[i], cz = coords[i + 1];
+            const key = WorldState.key(cx, cz);
             const chunk = this.world.chunks.get(key);
             if (chunk?.generated && !chunk.dirty) continue;
             if (this._pendingGen.has(key) || this._pendingMesh.has(key) || this._pendingMeshXZ.has(key)) continue;
-            const [cx, cz] = key.split(',').map(Number);
             missing.push({
                 key, cx, cz,
                 priority: this._priority(cx, cz, pcx, pcz),
             });
         }
 
+        if (missing.length === 0) return;
         missing.sort((a, b) => a.priority - b.priority);
 
         // ── Dispatch generation jobs ─────────────────────────────────────────
@@ -212,8 +255,16 @@ export class ChunkManager {
         // No saved data — generate via worker (lowest priority: gen waits behind mesh jobs).
         this.pool.dispatch(
             { type: 'generateChunk', cx, cz },
-            ({ voxels }) => {
+            ({ type, voxels }) => {
                 this._pendingGen.delete(key);
+
+                // Generation failed in the worker. The key is already cleared,
+                // so update() will pick this column up again on a later frame
+                // rather than leaving a permanent hole.
+                if (type === 'error' || !voxels) {
+                    this._cancelledChunks.delete(key);
+                    return;
+                }
 
                 if (this._cancelledChunks.has(key)) {
                     this._cancelledChunks.delete(key);
@@ -236,7 +287,7 @@ export class ChunkManager {
     }
 
     _remeshNeighbors(cx, cz) {
-        for (const [ddx, ddz] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        for (const [ddx, ddz] of NEIGHBOR_OFFSETS) {
             const nc = this.world.getChunk(cx + ddx, cz + ddz);
             if (!nc?.generated) continue;
             nc.dirty = true;
@@ -263,12 +314,22 @@ export class ChunkManager {
         this._pendingMesh.add(key);
         chunk.dirty = false;
 
-        const neighbors = _collectNeighbors(this.world, cx, cz);
+        const xfer      = [];
+        const self      = chunk.snapshot();
+        xfer.push(self.palette.buffer, self.indices.buffer);
+        const neighbors = _collectNeighbors(this.world, cx, cz, xfer);
 
         this.pool.dispatch(
-            { type: 'meshChunk', cx, cz, voxels: chunk.toUint16Array().buffer, neighbors, partial: false },
-            ({ yGeo, xzGeo }) => {
+            { type: 'meshChunk', cx, cz, chunk: self, neighbors, partial: false },
+            ({ type, yGeo, xzGeo }) => {
                 this._pendingMesh.delete(key);
+
+                // Meshing failed in the worker — leave the chunk dirty so the
+                // next update() re-queues it instead of leaving it invisible.
+                if (type === 'error' || !yGeo || !xzGeo) {
+                    if (this.world.getChunk(cx, cz) === chunk) chunk.dirty = true;
+                    return;
+                }
 
                 // Stale result — chunk was unloaded or replaced while in flight.
                 if (this.world.getChunk(cx, cz) !== chunk) return;
@@ -279,7 +340,7 @@ export class ChunkManager {
                 // Re-run full mesh if dirty was set during this job (e.g. block edit).
                 if (chunk.dirty) this._requestMesh(cx, cz);
             },
-            [],
+            xfer,
             1, // priority: normal — initial chunk appearances
         );
     }
@@ -304,12 +365,20 @@ export class ChunkManager {
         this._pendingMeshXZ.add(key);
         chunk.dirty = false;
 
-        const neighbors = _collectNeighbors(this.world, cx, cz);
+        const xfer      = [];
+        const self      = chunk.snapshot();
+        xfer.push(self.palette.buffer, self.indices.buffer);
+        const neighbors = _collectNeighbors(this.world, cx, cz, xfer);
 
         this.pool.dispatch(
-            { type: 'meshChunk', cx, cz, voxels: chunk.toUint16Array().buffer, neighbors, partial: true },
-            ({ xzGeo }) => {
+            { type: 'meshChunk', cx, cz, chunk: self, neighbors, partial: true },
+            ({ type, xzGeo }) => {
                 this._pendingMeshXZ.delete(key);
+
+                if (type === 'error' || !xzGeo) {
+                    if (this.world.getChunk(cx, cz) === chunk) chunk.dirty = true;
+                    return;
+                }
 
                 if (this.world.getChunk(cx, cz) !== chunk) return;
 
@@ -318,7 +387,7 @@ export class ChunkManager {
                 // If more neighbours loaded while this job ran, queue another partial.
                 if (chunk.dirty) this._requestPartialMesh(cx, cz);
             },
-            [],
+            xfer,
             0, // priority: highest — fixes visible seams before new chunks appear
         );
     }

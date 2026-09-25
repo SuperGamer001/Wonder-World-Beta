@@ -19,10 +19,14 @@
     "pack": "electron-builder --dir",
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
-    "dist:mac": "electron-builder --mac"
+    "dist:mac": "electron-builder --mac",
+    "test": "node test/mesher.test.mjs && node test/persistence.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
+    "test:smoke": "node test/smoke.mjs && node test/update-ui.test.mjs",
+    "bench:load": "node test/loadbench.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "electron-updater": "^6.8.9",
     "express": "^4.21.2",
     "three": "^0.184.0",
     "ws": "^8.18.0"

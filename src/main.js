@@ -3,7 +3,12 @@
 ========================================================= */
 
 const gamePacks = ["-**DEFAULT**-"];
-const SERVER_URL = 'http://localhost:3000';
+// Served by the game server, so use whatever origin this page came from — the
+// server binds an OS-assigned port rather than a fixed 3000. The literal is a
+// fallback for loading the page straight off disk in development.
+const SERVER_URL = (location.origin && location.origin !== 'null')
+    ? location.origin
+    : 'http://127.0.0.1:3000';
 
 /* =========================================================
    GLOBAL STATE
@@ -172,7 +177,7 @@ function bindEvents() {
     DOM.gameScreen?.addEventListener('mousedown', () => {
         if (gameStarted && !_menuOpen && !paused &&
             document.pointerLockElement !== DOM.gameScreen) {
-            DOM.gameScreen.requestPointerLock();
+            lockPointer(DOM.gameScreen);
         }
     });
     DOM.worldListBackBtn.addEventListener("click", () => {
@@ -239,6 +244,17 @@ function bindEvents() {
         document.getElementById(id)?.addEventListener('change', commitSettingsFromForm);
     }
     document.getElementById('settingsResetBtn')?.addEventListener('click', resetSettings);
+    document.getElementById('settingCheckUpdates')?.addEventListener('click', checkForUpdatesNow);
+
+    // Poll the launcher's update status. The first automatic check is deferred
+    // by a few seconds on the launcher side, so this catches it once it lands,
+    // and again when a background download finishes.
+    fetchUpdateStatus();
+    setInterval(() => {
+        // Skip while actively playing — the banner is menu-only anyway.
+        if (gameStarted && !paused && !_menuOpen) return;
+        fetchUpdateStatus();
+    }, UPDATE_POLL_MS);
 
     // World events from world.js
     window.addEventListener('ww_playerDied', () => {
@@ -248,7 +264,7 @@ function bindEvents() {
 
     window.addEventListener('ww_respawned', () => {
         DOM.deathScreen?.classList.add("hidden");
-        DOM.gameScreen?.requestPointerLock();
+        lockPointer(DOM.gameScreen);
     });
 
     window.addEventListener('ww_hotbarChange', (e) => {
@@ -322,6 +338,44 @@ document.addEventListener('pointerlockchange', () => {
 // Re-acquiring pointer lock can fail if requested during the browser's brief
 // post-Esc cooldown. Retry with backoff until it sticks (or we no longer want
 // it), and also retry whenever a pointerlockerror fires.
+/**
+ * Acquire pointer lock with raw, unaccelerated mouse input.
+ *
+ * By default the browser feeds pointer-lock movement through the OS pointer
+ * acceleration curve ("Enhance pointer precision" on Windows), so the same
+ * physical motion produces different deltas depending how fast you move. That
+ * is what makes a mouse-look camera feel jittery and unpredictable. Minecraft
+ * and other first-person games read raw input instead; `unadjustedMovement`
+ * asks the browser for the same thing.
+ *
+ * Falls back to a plain lock where the option is unsupported (it rejects on
+ * some platforms), and swallows the throw that occurs when the element is not
+ * in an active document.
+ */
+function lockPointer(el) {
+    if (!el || document.pointerLockElement === el) return;
+
+    // requestPointerLock may either throw synchronously or return a rejecting
+    // promise depending on the browser and the failure, so both have to be
+    // swallowed — an unhandled rejection here would surface as a page error
+    // every time the lock is declined.
+    const attempt = (opts) => {
+        try {
+            const p = opts ? el.requestPointerLock(opts) : el.requestPointerLock();
+            return (p && typeof p.then === 'function') ? p : Promise.resolve();
+        } catch (err) {
+            return Promise.reject(err);
+        }
+    };
+
+    attempt({ unadjustedMovement: true }).catch(() => {
+        // Raw input is unsupported on this platform — fall back to an ordinary
+        // lock rather than leaving the player unable to look around.
+        if (document.pointerLockElement === el) return;
+        attempt(null).catch(() => { /* not lockable right now; the retry loop handles it */ });
+    });
+}
+
 let _lockRetryTimer = null;
 function requestGameLock() {
     clearTimeout(_lockRetryTimer);
@@ -329,7 +383,7 @@ function requestGameLock() {
     const tryLock = () => {
         if (!gameStarted || _menuOpen) return;                           // no longer wanted
         if (document.pointerLockElement === DOM.gameScreen) return;      // already locked
-        DOM.gameScreen?.requestPointerLock();
+        lockPointer(DOM.gameScreen);
         if (++attempts < 15) _lockRetryTimer = setTimeout(tryLock, 250);
     };
     tryLock();
@@ -366,6 +420,128 @@ window.addEventListener('ww_saving', (e) => {
     if (el) el.classList.toggle('hidden', _savingCount === 0);
 });
 
+// ── Graphics capability reporting ─────────────────────────────────────────────
+// world.js raises these when the renderer cannot start, or when it starts on a
+// software rasteriser. Without surfacing them the player just sees a black
+// screen or an unexplained single-digit frame rate.
+
+window.addEventListener('ww_fatalError', (e) => {
+    const { title = 'Error', message = '' } = e.detail ?? {};
+    document.getElementById('appLoadingContainer')?.classList.add('hidden');
+    document.getElementById('loadingContainer')?.classList.add('hidden');
+    openConfirm(title, message, () => {});
+    const yes = document.getElementById('confirmYes');
+    if (yes) yes.textContent = 'OK';
+    const no = document.getElementById('confirmNo');
+    if (no) no.classList.add('hidden');
+});
+
+window.addEventListener('ww_gpuWarning', (e) => {
+    const msg = e.detail?.message ?? '';
+    console.warn('[main] GPU warning:', e.detail?.renderer ?? '');
+    const el = document.getElementById('gpuWarning');
+    if (el) {
+        el.textContent = msg;
+        el.classList.remove('hidden');
+        // Self-dismiss — this is advisory, not something to block play on.
+        setTimeout(() => el.classList.add('hidden'), 15000);
+    }
+});
+
+/* =========================================================
+   UPDATES
+   The launcher publishes updater progress to the local server (the window has
+   no IPC channel — contextIsolation and sandbox are on with no preload), so the
+   UI reads it over HTTP like everything else.
+
+   The banner only ever appears on the title and pause screens. An update is
+   never worth interrupting play for, and it installs on quit regardless.
+========================================================= */
+
+const UPDATE_POLL_MS = 10000;
+let _updateStatus = null;
+
+async function fetchUpdateStatus() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/update-status`, { cache: 'no-store' });
+        if (!res.ok) return;
+        _updateStatus = await res.json();
+        applyVersionLabel();
+        renderUpdateBanner();
+    } catch { /* server not reachable — nothing to show */ }
+}
+
+/** Show the real running version rather than a hardcoded string. */
+function applyVersionLabel() {
+    const el = document.getElementById('versionText');
+    const v  = _updateStatus?.currentVersion;
+    if (el && v) el.textContent = `Wonder World Beta v${v}`;
+}
+
+function renderUpdateBanner() {
+    const el = document.getElementById('updateBanner');
+    if (!el) return;
+
+    const s = _updateStatus;
+    // Menus only — never over live gameplay.
+    const onMenu = !gameStarted || paused || _menuOpen;
+    if (!s?.available || !onMenu) { el.classList.add('hidden'); return; }
+
+    const ready = s.downloaded && s.canAutoInstall;
+    el.innerHTML = '';
+
+    const text = document.createElement('span');
+    text.textContent = ready
+        ? `Version ${s.newVersion} is ready to install.`
+        : `Version ${s.newVersion} is available.`;
+    el.appendChild(text);
+
+    const btn = document.createElement('div');
+    btn.className = 'menuButton updateBannerBtn';
+    btn.textContent = ready ? 'Restart & Install' : 'Download';
+    btn.onclick = ready ? installUpdateNow : openUpdateDownload;
+    el.appendChild(btn);
+
+    el.classList.remove('hidden');
+}
+
+function openUpdateDownload() {
+    const url = _updateStatus?.downloadUrl;
+    if (!url) return;
+    // The launcher's window-open handler routes this to the real browser.
+    window.open(url, '_blank');
+}
+
+async function installUpdateNow() {
+    try {
+        await fetch(`${SERVER_URL}/api/update-install`, { method: 'POST' });
+        // The app quits and relaunches into the installer from here.
+    } catch { /* if it fails the update still installs on next quit */ }
+}
+
+/** Settings → Check for Updates. */
+async function checkForUpdatesNow() {
+    const btn = document.getElementById('settingCheckUpdates');
+    const status = document.getElementById('updateCheckStatus');
+    if (btn) btn.textContent = 'Checking…';
+    if (status) status.textContent = '';
+    try {
+        const res = await fetch(`${SERVER_URL}/api/update-check`, { method: 'POST' });
+        _updateStatus = await res.json();
+    } catch { /* fall through to the message below */ }
+    if (btn) btn.textContent = 'Check for Updates';
+    if (status) {
+        const s = _updateStatus;
+        status.textContent =
+            !s?.supported      ? 'Updates are only available in the desktop app.'
+          : s.available        ? `Version ${s.newVersion} available`
+          : s.error            ? 'Could not check right now'
+          :                      'Up to date';
+    }
+    applyVersionLabel();
+    renderUpdateBanner();
+}
+
 // Close whichever in-game menu is currently open and return to play.
 function closeAnyMenu() {
     if (DOM.inventoryScreen && !DOM.inventoryScreen.classList.contains('hidden'))   { closeInventory();        return; }
@@ -396,7 +572,13 @@ const DEFAULT_SETTINGS = {
     sensitivity: 1.0,
     invertY: false,
     fov: 75,
-    renderDistance: 12,
+    // 8 chunks rather than 12: chunk fog is now applied in the chunk shader and
+    // scaled to the render distance, so terrain fades out instead of ending in
+    // a hard edge. 8 loads ~2.2x fewer columns and looks better doing it.
+    renderDistance: 8,
+    // Multiplier on the device pixel ratio. Below 1.0 renders fewer pixels and
+    // upscales — the cheapest way to recover frame rate on a high-DPI display.
+    resolutionScale: 1.0,
     brightness: 1.0,
     showCoords: true,
     crosshair: true,
@@ -420,14 +602,12 @@ function saveSettings(s) {
 // Apply settings to the page (accessibility/HUD) and forward the gameplay-facing
 // ones (sensitivity, FOV, render distance) to the engine.
 function applyPlayerSettings(s) {
-    const cb = {
-        none:        'none',
-        protanopia:  'saturate(1.25) hue-rotate(-18deg)',
-        deuteranopia:'saturate(1.25) hue-rotate(18deg)',
-        tritanopia:  'saturate(1.3) hue-rotate(40deg)',
-    }[s.colorblind] ?? 'none';
-    const filter = `brightness(${s.brightness})` + (cb !== 'none' ? ` ${cb}` : '');
-    document.body.style.filter = filter === 'brightness(1)' ? '' : filter;
+    // Brightness and the colourblind transforms are applied inside the chunk
+    // shader, not as a CSS filter on <body>. A filter on the body forces the
+    // entire page — the WebGL canvas included — through an extra full-screen
+    // compositing pass every frame, so enabling an accessibility option used to
+    // cost frame rate. The UI layer is unaffected either way.
+    document.body.style.filter = '';
 
     document.body.classList.toggle('a11y-contrast',  !!s.highContrast);
     document.body.classList.toggle('a11y-reduce',    !!s.reduceMotion);
@@ -440,10 +620,13 @@ function applyPlayerSettings(s) {
     _fpsEnabled = !!s.showFps;
 
     callWorldJS('applySettings', {
-        sensitivity:    s.sensitivity,
-        invertY:        s.invertY,
-        fov:            s.fov,
-        renderDistance: s.renderDistance,
+        sensitivity:     s.sensitivity,
+        invertY:         s.invertY,
+        fov:             s.fov,
+        renderDistance:  s.renderDistance,
+        resolutionScale: s.resolutionScale,
+        brightness:      s.brightness,
+        colorblind:      s.colorblind,
     });
 }
 
@@ -496,6 +679,7 @@ function populateSettingsForm() {
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
     set('settingSensitivity', s.sensitivity); chk('settingInvertY', s.invertY);
     set('settingFov', s.fov);                 set('settingRenderDist', s.renderDistance);
+    set('settingResScale', s.resolutionScale);
     set('settingBrightness', s.brightness);
     chk('settingShowCoords', s.showCoords);   chk('settingCrosshair', s.crosshair);
     chk('settingShowFps', s.showFps);
@@ -512,6 +696,7 @@ function _updateSettingLabels() {
     t('settingSensitivityVal', parseFloat(v('settingSensitivity')).toFixed(1));
     t('settingFovVal', v('settingFov'));
     t('settingRenderDistVal', v('settingRenderDist'));
+    t('settingResScaleVal', `${Math.round(parseFloat(v('settingResScale')) * 100)}%`);
     t('settingBrightnessVal', `${Math.round(parseFloat(v('settingBrightness')) * 100)}%`);
 }
 
@@ -523,8 +708,9 @@ function commitSettingsFromForm() {
         sensitivity:    num('settingSensitivity'),
         invertY:        on('settingInvertY'),
         fov:            num('settingFov'),
-        renderDistance: Math.round(num('settingRenderDist')),
-        brightness:     num('settingBrightness'),
+        renderDistance:  Math.round(num('settingRenderDist')),
+        resolutionScale: num('settingResScale'),
+        brightness:      num('settingBrightness'),
         showCoords:     on('settingShowCoords'),
         crosshair:      on('settingCrosshair'),
         showFps:        on('settingShowFps'),

@@ -18,16 +18,16 @@
  *                          Veins are clamped below terrain surface.
  */
 
-import { CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, CHUNK_VOLUME, voxelIndex } from '../engine/ChunkData.js';
+import { CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, WORLD_MAX_Y, CHUNK_VOLUME, voxelIndex } from '../engine/ChunkData.js';
 import {
     setSeed, noise2D, noise3D,
     fbm2D, fbm3D, ridged2D, warpedFbm2D, hashSeed, randFloat,
 } from './noise.js';
 
 const N         = CHUNK_SIZE;    // 16 — XZ size
-const N_Y       = CHUNK_SIZE_Y;  // 640 — full world height
+const N_Y       = CHUNK_SIZE_Y;  // full world height
 const SEA_LEVEL = 64;
-const BEDROCK_Y = WORLD_MIN_Y;   // -160
+const BEDROCK_Y = WORLD_MIN_Y;
 
 // Continent noise parameters
 const CONTINENT_FREQ   = 0.00008;
@@ -42,6 +42,10 @@ const CAVE_FREQ_A  = 0.010;
 const CAVE_FREQ_B  = 0.01;
 const CAVE_THRESH  = 0.1;
 
+// Lowest world Y that can be carved. Cave carving is the single most expensive
+// step in generation — two 3D noise samples per candidate voxel — and caves down
+// at the bedrock floor are never seen. Leaving a solid band above bedrock both
+// speeds generation up and gives the deep-stone layer something to be.
 const CAVE_MIN_Y   = BEDROCK_Y + 8;
 
 // Lake / pond noise
@@ -58,7 +62,16 @@ export class TerrainGenerator {
     constructor(seed, blockRegistry, biomes) {
         this.seed   = seed;
         this.reg    = blockRegistry;
-        this.biomes = biomes.map(b => this._normaliseBiome(b));
+        this.biomes = (biomes ?? []).map(b => this._normaliseBiome(b));
+
+        // A pack that supplies no biomes used to take down every worker with an
+        // unhandled TypeError deep in ore placement, leaving the player on a
+        // loading screen forever with nothing in the UI to explain it.
+        // Synthesise a plain biome instead so the world still generates.
+        if (this.biomes.length === 0) {
+            console.warn('[TerrainGenerator] no biomes supplied — falling back to a default biome');
+            this.biomes = [this._normaliseBiome({ name: 'DEFAULT' })];
+        }
 
         setSeed(seed);
 
@@ -140,11 +153,16 @@ export class TerrainGenerator {
             }
         }
 
-        // ── 2. Voxel fill (full 640-block column) ─────────────────────────
+        // ── 2. Voxel fill ──────────────────────────────────────────────────
+        // Written as contiguous vertical bands rather than a per-voxel branch
+        // chain. Each band walks the column with `idx += SY` instead of
+        // recomputing voxelIndex, and the air above the terrain is skipped
+        // entirely because the buffer is already zero-filled — on a 448-tall
+        // world that is most of every column.
+        const SY = N;   // voxelIndex stride between consecutive ly values
+
         for (let lx = 0; lx < N; lx++) {
-            const wx = worldOriginX + lx;
             for (let lz = 0; lz < N; lz++) {
-                const wz            = worldOriginZ + lz;
                 const col           = lx * N + lz;
                 const terrainHeight = heights[col];
                 const blend         = blends[col];
@@ -154,32 +172,44 @@ export class TerrainGenerator {
                 const stoneId   = this._blendedBlock(blend, '_stoneId');
                 const deepId    = this._blendedBlock(blend, '_deepId');
 
-                for (let ly = 0; ly < N_Y; ly++) {
-                    const wy  = WORLD_MIN_Y + ly;
-                    const idx = voxelIndex(lx, ly, lz);
+                const colBase = voxelIndex(lx, 0, lz);
+                // Write voxels in world-Y band [loW, hiW] with a single id.
+                const band = (loW, hiW, id) => {
+                    let lo = loW - WORLD_MIN_Y;
+                    let hi = hiW - WORLD_MIN_Y;
+                    if (lo < 0) lo = 0;
+                    if (hi > N_Y - 1) hi = N_Y - 1;
+                    let idx = colBase + lo * SY;
+                    for (let ly = lo; ly <= hi; ly++, idx += SY) voxels[idx] = id;
+                };
 
-                    if (wy <= BEDROCK_Y + 2) {
-                        voxels[idx] = this._bedrockId;
-                        continue;
-                    }
+                const bedrockTopW = BEDROCK_Y + 2;
 
-                    if (wy > terrainHeight) {
-                        voxels[idx] = (wy <= SEA_LEVEL) ? this._waterId : this._airId;
-                        continue;
-                    }
+                // Bedrock floor — always wins.
+                band(BEDROCK_Y, bedrockTopW, this._bedrockId);
 
-                    if (wy === terrainHeight) {
-                        voxels[idx] = (wy <= SEA_LEVEL - 2) ? stoneId : surfaceId;
-                        continue;
-                    }
+                if (terrainHeight > bedrockTopW) {
+                    // Deep fill and ordinary stone, below the 4-block subsurface layer.
+                    const fillHiW  = terrainHeight - 5;
+                    const deepHiW  = Math.min(fillHiW, -81);      // deep applies where wy < -80
+                    const stoneLoW = Math.max(bedrockTopW + 1, -80);
+                    if (deepHiW >= bedrockTopW + 1) band(bedrockTopW + 1, deepHiW, deepId);
+                    if (fillHiW >= stoneLoW)        band(stoneLoW, fillHiW, stoneId);
 
-                    const depth = terrainHeight - wy;
-                    if (depth <= 4) {
-                        voxels[idx] = subId;
-                        continue;
-                    }
+                    // Subsurface (dirt / sand) directly under the surface block.
+                    const subLoW = Math.max(bedrockTopW + 1, terrainHeight - 4);
+                    const subHiW = terrainHeight - 1;
+                    if (subHiW >= subLoW) band(subLoW, subHiW, subId);
 
-                    voxels[idx] = (wy < -80) ? deepId : stoneId;
+                    // Surface block. Below sea level the exposed floor is stone.
+                    band(terrainHeight, terrainHeight,
+                         terrainHeight <= SEA_LEVEL - 2 ? stoneId : surfaceId);
+                }
+
+                // Water from just above the terrain up to sea level. Everything
+                // above that stays AIR, which the zero-filled buffer already is.
+                if (terrainHeight < SEA_LEVEL) {
+                    band(Math.max(terrainHeight + 1, bedrockTopW + 1), SEA_LEVEL, this._waterId);
                 }
             }
         }
@@ -278,6 +308,13 @@ export class TerrainGenerator {
     // ── Cave carving ────────────────────────────────────────────────────────
 
     _carveCaves(voxels, ox, oz, heights) {
+        // Carving only ever applies between CAVE_MIN_Y and the column surface, so
+        // the loop is bounded to that band rather than walking all N_Y levels and
+        // discarding most of them. At two noise3D samples per candidate voxel this
+        // is the hottest loop in generation, and the skipped levels were by far
+        // the majority of it.
+        const lyLo = Math.max(0, CAVE_MIN_Y - WORLD_MIN_Y);
+
         for (let lx = 0; lx < N; lx++) {
             const wx = ox + lx;
             for (let lz = 0; lz < N; lz++) {
@@ -288,21 +325,19 @@ export class TerrainGenerator {
                 // Underwater, keep the surface capped so we don't punch air pockets
                 // beneath the ocean floor.
                 const maxCaveY = surfaceY > SEA_LEVEL ? surfaceY : surfaceY - 1;
+                const lyHi     = Math.min(N_Y - 1, maxCaveY - WORLD_MIN_Y);
 
-                for (let ly = 0; ly < N_Y; ly++) {
-                    const wy = WORLD_MIN_Y + ly;
-                    if (wy > maxCaveY || wy <= BEDROCK_Y + 4) continue;
-
+                for (let ly = lyLo; ly <= lyHi; ly++) {
                     const idx     = voxelIndex(lx, ly, lz);
                     const current = voxels[idx];
                     if (current === this._airId || current === this._waterId) continue;
 
+                    const wy = WORLD_MIN_Y + ly;
                     const na = Math.abs(noise3D(wx * CAVE_FREQ_A, wy * CAVE_FREQ_A, wz * CAVE_FREQ_A));
-                    const nb = Math.abs(noise3D(wx * CAVE_FREQ_B + 31.5, wy * CAVE_FREQ_B, wz * CAVE_FREQ_B - 17.2));
+                    if (na >= CAVE_THRESH) continue;   // cheap reject before the second sample
 
-                    if (na < CAVE_THRESH && nb < CAVE_THRESH) {
-                        voxels[idx] = this._airId;
-                    }
+                    const nb = Math.abs(noise3D(wx * CAVE_FREQ_B + 31.5, wy * CAVE_FREQ_B, wz * CAVE_FREQ_B - 17.2));
+                    if (nb < CAVE_THRESH) voxels[idx] = this._airId;
                 }
             }
         }
@@ -312,28 +347,33 @@ export class TerrainGenerator {
 
     _placeOres(voxels, cx, cz, ox, oz, blends, heights) {
         const dominantIdx = this._dominantBiome(blends);
-        const ores        = this.biomes[dominantIdx].ores;
+        const ores        = this.biomes[dominantIdx]?.ores;
+        if (!ores) return;
 
         for (const ore of ores) {
             if (!ore._blockId) continue;
 
-            // Check if this ore's Y range overlaps the world height range at all
-            const worldMaxY = WORLD_MIN_Y + N_Y - 1;
-            if (worldMaxY < ore.minY || WORLD_MIN_Y > ore.maxY) continue;
+            // Clamp the ore band to the world, and skip ores whose configured
+            // range falls entirely outside it.
+            const loW = Math.max(ore.minY, WORLD_MIN_Y);
+            const hiW = Math.min(ore.maxY, WORLD_MAX_Y);
+            if (hiW < loW) continue;
+            const span = hiW - loW + 1;
 
-            const attempts = Math.ceil(ore.frequency * N * N * N_Y);
+            // Attempts scale with the band volume rather than the whole column,
+            // and the sampled Y lands inside the band by construction. Previously
+            // every attempt sampled the full height and most were thrown away —
+            // for a narrow band that was well over 80% wasted work.
+            const attempts = Math.ceil(ore.frequency * N * N * span);
 
             for (let attempt = 0; attempt < attempts; attempt++) {
                 const rng = hashSeed(this.seed, cx * 7919 + attempt, cz * 5237 + ore._blockId, 6271);
 
-                // 4 bits for XZ (0-15), 10 bits for Y (0-1023 → % N_Y for 0-639)
+                // Disjoint bit fields: 4 for X, 4 for Z, 20 for the Y offset.
                 const rx  = rng & 0x0F;
-                const ry  = ((rng >> 4) & 0x3FF) % N_Y;
-                const rz  = (rng >> 14) & 0x0F;
-
-                const wy = WORLD_MIN_Y + ry;
-
-                if (wy < ore.minY || wy > ore.maxY) continue;
+                const rz  = (rng >> 4) & 0x0F;
+                const wy  = loW + (((rng >> 8) & 0xFFFFF) % span);
+                const ry  = wy - WORLD_MIN_Y;
 
                 const colHeight = heights[rx * N + rz];
                 if (wy > colHeight - 4) continue;
