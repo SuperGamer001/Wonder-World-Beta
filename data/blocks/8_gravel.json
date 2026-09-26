@@ -1,6 +1,7 @@
 {
   "id": 8,
   "name": "GRAVEL",
+  "terrainType": "mesh",
   "color": [
     0.46,
     0.45,

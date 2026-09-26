@@ -74,7 +74,14 @@ export class WorkerPool {
     /**
      * Queue a job.  `callback` is called with the response data when complete.
      *
-     * @param {object}   job          — message payload (must include `type`)
+     * `job` may instead be a function that builds the payload when a worker
+     * picks the job up: `() => ({ job, xfer }) | null`. Mesh and light jobs use
+     * this, so their chunk snapshots (about 1 MB per job) are copied only when
+     * they are about to run — they reflect the chunk as it is then, the queue
+     * holds no copies, and a job whose chunk has gone costs nothing. Returning
+     * null drops the job and calls back with { type: 'cancelled' }.
+     *
+     * @param {object|function} job   — message payload (must include `type`), or its builder
      * @param {function} callback     — called with response data (minus taskId)
      * @param {Transferable[]} [xfer] — transferable objects in `job`
      * @param {number}   [priority]   — lower value runs first (default 1)
@@ -121,12 +128,35 @@ export class WorkerPool {
 
     _flush() {
         for (const entry of this._workers) {
-            if (entry.busy || this._queue.length === 0) continue;
-            const { taskId, job, xfer } = this._queue.shift();
-            entry.busy         = true;
-            entry.currentTask  = taskId;
-            entry.worker.postMessage({ ...job, taskId }, xfer);
+            // `busy` is re-read each pass: a cancelled job's callback may queue
+            // work and flush re-entrantly, filling this worker.
+            while (!entry.busy && this._queue.length > 0) {
+                const { taskId } = this._queue[0];
+                let { job, xfer } = this._queue.shift();
+                if (typeof job === 'function') {
+                    let built;
+                    try {
+                        built = job();
+                    } catch (err) {
+                        console.error(`[WorkerPool] task ${taskId} could not be built:`, err);
+                        this._finish(taskId, { type: 'error', error: String(err?.message ?? err) });
+                        continue;
+                    }
+                    if (!built) { this._finish(taskId, { type: 'cancelled' }); continue; }
+                    ({ job, xfer } = built);
+                }
+                entry.busy         = true;
+                entry.currentTask  = taskId;
+                entry.worker.postMessage({ ...job, taskId }, xfer ?? []);
+            }
         }
+    }
+
+    /** Complete a task that never reached a worker. */
+    _finish(taskId, result) {
+        const cb = this._callbacks.get(taskId);
+        this._callbacks.delete(taskId);
+        cb?.(result);
     }
 
     _onMessage(workerId, e) {

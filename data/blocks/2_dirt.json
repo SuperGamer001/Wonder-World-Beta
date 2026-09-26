@@ -1,6 +1,7 @@
 {
   "id": 2,
   "name": "DIRT",
+  "terrainType": "mesh",
   "color": [
     0.5,
     0.35,

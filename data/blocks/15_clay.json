@@ -1,6 +1,7 @@
 {
   "id": 15,
   "name": "CLAY",
+  "terrainType": "mesh",
   "color": [
     0.62,
     0.58,

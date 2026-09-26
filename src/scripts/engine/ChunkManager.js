@@ -5,28 +5,43 @@
  * scheduling generation and meshing jobs through the WorkerPool, and notifying
  * the render layer when geometry is ready or should be removed.
  *
- * Each chunk is a 16×640×16 column spanning the full world height.
+ * Each chunk is a 16×448×16 column spanning the full world height.
  * Chunks are addressed by (cx, cz) only — there is no vertical chunking.
  *
  * Priority model (lower number = higher priority)
  * ───────────────────────────────────────────────
- *   0  partial XZ re-mesh — dirty seam fix on a visible chunk (fastest to process,
- *                           most noticeable if delayed)
- *   1  initial full mesh  — first appearance of a new chunk
+ *   0  re-mesh or relight of a chunk already on screen — a stale seam or light
+ *      edge is the most noticeable thing to leave waiting
+ *   1  first mesh — a new chunk appearing
  *   2  terrain generation — slowest job, can wait behind mesh updates
  *
+ * Neighbour-driven work is coalesced: a chunk is not meshed while a neighbour
+ * that is due to load is still missing, so it is meshed once rather than once
+ * per neighbour that arrives after it (see _schedule).
+ *
  * The render layer (world.js) attaches three callbacks:
- *   onMeshReady(cx, cz, yGeo, xzGeo)  — full split mesh ready (initial / block-edit)
- *   onPartialMeshReady(cx, cz, xzGeo) — XZ side faces updated (neighbour-load fix)
- *   onChunkUnload(key)                — dispose Three.js mesh
+ *   onMeshReady(cx, cz, geo, light)  — chunk geometry ready (first mesh, re-mesh or edit)
+ *   onLightReady(cx, cz, light)      — sky light changed, geometry did not
+ *   onChunkUnload(key)               — dispose Three.js mesh
+ *
+ * `light` is the chunk's sky light (workers/Skylight.js). It rides with every
+ * mesh job and can arrive out of order, so each chunk counts its light jobs and
+ * a result older than the one on screen passes `light` as null.
+ *
+ * Sky light reaches SKY_MAX blocks, so it depends on all eight surrounding
+ * chunks: every job sends the diagonal chunks too, and a load or an edit
+ * relights the neighbours whose geometry does not otherwise need rebuilding.
  */
 
 import { ChunkData, CHUNK_SIZE, CHUNK_SHIFT, CHUNK_MASK, CHUNK_SIZE_Y } from './ChunkData.js';
 import { WorldState }            from './WorldState.js';
+import { SMOOTH_REACH }          from './SmoothShape.js';
 
 const MAX_DISPATCH = 32;  // max new jobs queued per update() call
 
 const NEIGHBOR_OFFSETS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const DIAGONAL_OFFSETS = [[1, 1], [1, -1], [-1, 1], [-1, -1]];
+const ALL_OFFSETS      = [...NEIGHBOR_OFFSETS, ...DIAGONAL_OFFSETS];
 
 /**
  * Build the four horizontal neighbour payloads for a mesh job.
@@ -51,6 +66,38 @@ function _collectNeighbors(world, cx, cz, transferList) {
     return neighbors;
 }
 
+/** Full snapshots of the four diagonal chunks, for sky light. */
+function _collectDiagonals(world, cx, cz, transferList) {
+    const diagonals = {};
+    for (const [ddx, ddz] of DIAGONAL_OFFSETS) {
+        const nc = world.getChunk(cx + ddx, cz + ddz);
+        if (!nc?.generated) continue;
+        const snap = nc.snapshot();
+        diagonals[`${ddx},${ddz}`] = snap;
+        transferList.push(snap.palette.buffer, snap.indices.buffer);
+    }
+    return diagonals;
+}
+
+/**
+ * Smooth worlds only: the SMOOTH_REACH × SMOOTH_REACH columns of each diagonal
+ * chunk nearest this chunk's corner. Smooth surfaces near a chunk corner read
+ * voxels in the diagonal chunk; without them the two chunks would disagree
+ * there and leave a crack.
+ */
+function _collectCorners(world, cx, cz, transferList) {
+    const corners = {};
+    const far = CHUNK_SIZE - SMOOTH_REACH;
+    for (const [ddx, ddz] of DIAGONAL_OFFSETS) {
+        const nc = world.getChunk(cx + ddx, cz + ddz);
+        if (!nc?.generated) continue;
+        const block = nc.cornerBlock(ddx > 0 ? 0 : far, ddz > 0 ? 0 : far, SMOOTH_REACH);
+        corners[`${ddx},${ddz}`] = block;
+        transferList.push(block.buffer);
+    }
+    return corners;
+}
+
 export class ChunkManager {
     /**
      * @param {WorldState}  worldState
@@ -63,17 +110,18 @@ export class ChunkManager {
         this.renderDistance = renderDistance;
 
         // Callbacks wired by world.js
-        this.onMeshReady        = null;  // (cx, cz, yGeo, xzGeo) => void
-        this.onPartialMeshReady = null;  // (cx, cz, xzGeo) => void
+        this.onMeshReady        = null;  // (cx, cz, geo, light) => void
+        this.onLightReady       = null;  // (cx, cz, light) => void
         this.onChunkUnload      = null;  // (key) => void
 
         // Track in-flight jobs so we never double-dispatch
-        this._pendingGen   = new Set();  // keys currently being generated
-        this._pendingMesh  = new Set();  // keys currently being full-meshed
-        this._pendingMeshXZ = new Set(); // keys currently being partial-XZ-meshed
+        this._pendingGen    = new Map(); // key → token of the generation request in flight
+        this._pendingMesh   = new Set(); // keys with a mesh job queued or in flight
+        this._pendingLight  = new Set(); // keys with a light-only job in flight
+        this._relight       = new Set(); // keys to relight again once that job returns
+        this._gated         = new Map(); // key → chunk held until its neighbours load (_schedule)
 
-        // Keys unloaded while their generation was still in-flight.
-        this._cancelledChunks = new Set();
+        this._genToken = 0;
 
         // Cached residency set. Rebuilding it allocates ~500 string keys, so it is
         // recomputed only when the player crosses a chunk boundary or the render
@@ -95,6 +143,11 @@ export class ChunkManager {
         // worldClient is attached — and generates fresh terrain over the spawn-area
         // chunks instead of loading the player's saved edits from disk.
         this.ready = false;
+
+        // Smooth-terrain world. Set once by world.js before `ready`. Mesh shapes
+        // at a chunk's edge depend on neighbour voxels (including diagonals), so
+        // this widens neighbour re-meshing and sends corner columns.
+        this.smooth = false;
     }
 
     /** Send all currently loaded chunks to the server in one WebSocket batch. */
@@ -153,6 +206,16 @@ export class ChunkManager {
             for (const key of [...this.world.chunks.keys()]) {
                 if (!needed.has(key)) this._unload(key);
             }
+            // Requests for chunks not loaded yet are not in world.chunks, so the
+            // sweep above never sees them. Dropping them invalidates their tokens:
+            // queued ones never run, running ones are discarded on arrival.
+            for (const key of [...this._pendingGen.keys()]) {
+                if (!needed.has(key)) this._pendingGen.delete(key);
+            }
+
+            // A held chunk may have been waiting on a neighbour that is no
+            // longer due to load; look at each again against the new set.
+            for (const chunk of [...this._gated.values()]) this._schedule(chunk.cx, chunk.cz);
         }
 
         const coords = this._neededCoords;
@@ -166,7 +229,10 @@ export class ChunkManager {
             const key = WorldState.key(cx, cz);
             const chunk = this.world.chunks.get(key);
             if (chunk?.generated && !chunk.dirty) continue;
-            if (this._pendingGen.has(key) || this._pendingMesh.has(key) || this._pendingMeshXZ.has(key)) continue;
+            if (this._pendingGen.has(key) || this._pendingMesh.has(key)) continue;
+            // Held for its neighbours; released by their arrival, not by polling,
+            // so it must not use up this frame's dispatch budget.
+            if (this._gated.has(key)) continue;
             missing.push({
                 key, cx, cz,
                 priority: this._priority(cx, cz, pcx, pcz),
@@ -185,7 +251,7 @@ export class ChunkManager {
             if (!chunk || !chunk.generated) {
                 this._requestGenerate(cx, cz);
             } else if (chunk.dirty) {
-                this._requestMesh(cx, cz);
+                this._schedule(cx, cz);
             }
             dispatched++;
         }
@@ -213,12 +279,24 @@ export class ChunkManager {
         const cz = wz >> CHUNK_SHIFT;
         this.markDirty(cx, cz);
 
+        // How far a voxel's influence reaches across a seam: only the boundary
+        // faces in blocky worlds, SMOOTH_REACH blocks of shapes in smooth ones.
+        const m  = this.smooth ? SMOOTH_REACH : 1;
         const lx = wx & CHUNK_MASK;
         const lz = wz & CHUNK_MASK;
-        if (lx === 0)              this.markDirty(cx - 1, cz);
-        if (lx === CHUNK_SIZE - 1) this.markDirty(cx + 1, cz);
-        if (lz === 0)              this.markDirty(cx, cz - 1);
-        if (lz === CHUNK_SIZE - 1) this.markDirty(cx, cz + 1);
+        const ex = lx < m ? -1 : lx >= CHUNK_SIZE - m ? 1 : 0;
+        const ez = lz < m ? -1 : lz >= CHUNK_SIZE - m ? 1 : 0;
+        if (ex) this.markDirty(cx + ex, cz);
+        if (ez) this.markDirty(cx, cz + ez);
+        // Smooth worlds: near a corner, the diagonal chunk's shapes read it too.
+        if (this.smooth && ex && ez) this.markDirty(cx + ex, cz + ez);
+        // Sky light from the edit reaches SKY_MAX blocks — into every neighbour
+        // at any position in a 16-wide chunk. Relight the ones not re-meshed above.
+        for (const [ddx, ddz] of ALL_OFFSETS) {
+            const remeshed = (ex && ddx === ex && ddz === 0) || (ez && ddz === ez && ddx === 0) ||
+                             (this.smooth && ex && ez && ddx === ex && ddz === ez);
+            if (!remeshed) this._requestLight(cx + ddx, cz + ddz);
+        }
     }
 
     // ── Internal ──────────────────────────────────────────────────────────────
@@ -229,24 +307,33 @@ export class ChunkManager {
         return Math.sqrt(dx*dx + dz*dz);
     }
 
+    /**
+     * Load or generate a chunk. Each request carries a token, and a result is
+     * used only if its token is still the key's current one: unloading the
+     * chunk (or a newer request for it) makes an in-flight result stale.
+     * A cancellation set could not tell two requests for one key apart, so
+     * after unload → reload → unload the old reply consumed the one
+     * cancellation and the newer reply installed a chunk outside the render
+     * distance — generated, meshed and uploaded for nothing.
+     */
     async _requestGenerate(cx, cz) {
         const key = WorldState.key(cx, cz);
         if (this._pendingGen.has(key)) return;
-        this._pendingGen.add(key);
+        const token = ++this._genToken;
+        this._pendingGen.set(key, token);
+        const current = () => this._pendingGen.get(key) === token;
 
         // Try to load a saved chunk via WebSocket first.
         if (this.worldId && this.worldClient?.connected) {
             const saved = await this.worldClient.loadChunk(this.worldId, cx, cz);
+            if (!current()) return;           // unloaded while the server answered
             if (saved) {
                 this._pendingGen.delete(key);
-                if (this._cancelledChunks.has(key)) {
-                    this._cancelledChunks.delete(key);
-                    return;
-                }
                 const chunk = ChunkData.deserialize(cx, cz, saved);
                 this._applyPendingChanges(chunk, cx, cz);
                 this.world.setChunk(cx, cz, chunk);
-                this._requestMesh(cx, cz);
+                chunk.dirty = true;
+                this._schedule(cx, cz);
                 this._remeshNeighbors(cx, cz);
                 return;
             }
@@ -254,31 +341,30 @@ export class ChunkManager {
 
         // No saved data — generate via worker (lowest priority: gen waits behind mesh jobs).
         this.pool.dispatch(
-            { type: 'generateChunk', cx, cz },
-            ({ type, voxels }) => {
+            // Checked when a worker frees up: a chunk left behind while its job
+            // waited in the queue is dropped without being generated.
+            () => current() ? { job: { type: 'generateChunk', cx, cz }, xfer: [] } : null,
+            ({ type, palette, indices, minY, maxY }) => {
+                // Stale: the chunk was unloaded, and perhaps requested again,
+                // while this ran. Leave the newer request's state alone.
+                if (!current()) return;
                 this._pendingGen.delete(key);
 
                 // Generation failed in the worker. The key is already cleared,
                 // so update() will pick this column up again on a later frame
                 // rather than leaving a permanent hole.
-                if (type === 'error' || !voxels) {
-                    this._cancelledChunks.delete(key);
-                    return;
-                }
+                if (type === 'error' || !indices) return;
 
-                if (this._cancelledChunks.has(key)) {
-                    this._cancelledChunks.delete(key);
-                    return;
-                }
-
+                // Arrives palette-compressed from the worker: adopting it is free.
                 const chunk = new ChunkData(cx, cz);
-                chunk.loadVoxels(new Uint16Array(voxels));
+                chunk.adoptCompressed(palette, indices, minY, maxY);
                 chunk.generated = true;
                 this._applyPendingChanges(chunk, cx, cz);
 
                 this.world.setChunk(cx, cz, chunk);
 
-                this._requestMesh(cx, cz);
+                chunk.dirty = true;
+                this._schedule(cx, cz);
                 this._remeshNeighbors(cx, cz);
             },
             [],
@@ -286,18 +372,25 @@ export class ChunkManager {
         );
     }
 
+    /**
+     * Chunk (cx, cz) has just arrived: record what each neighbour now needs
+     * and let _schedule decide when to run it (see there).
+     */
     _remeshNeighbors(cx, cz) {
-        for (const [ddx, ddz] of NEIGHBOR_OFFSETS) {
-            const nc = this.world.getChunk(cx + ddx, cz + ddz);
+        for (const [ddx, ddz] of ALL_OFFSETS) {
+            const nx = cx + ddx, nz = cz + ddz;
+            const nc = this.world.getChunk(nx, nz);
             if (!nc?.generated) continue;
-            nc.dirty = true;
-            if (nc.meshed) {
-                // Chunk is already visible — fix the seam immediately with a high-priority
-                // partial re-mesh that only rebuilds the ±X / ±Z side faces.
-                this._requestPartialMesh(cx + ddx, cz + ddz);
+            if (!nc.meshed || this.smooth || ddx === 0 || ddz === 0) {
+                // Not on screen yet: its first mesh will see this chunk. Face
+                // neighbours: the faces on the shared seam change. Smooth worlds:
+                // a diagonal neighbour deforms Mesh voxels near the shared corner.
+                nc.dirty = true;
+            } else {
+                // Blocky diagonal: geometry is unaffected, only its light.
+                nc._needLight = true;
             }
-            // If nc hasn't been rendered yet, update() will dispatch the initial full mesh
-            // later, capturing up-to-date neighbour data at that time.
+            this._schedule(nx, nz);
         }
     }
 
@@ -312,21 +405,32 @@ export class ChunkManager {
         }
 
         this._pendingMesh.add(key);
-        chunk.dirty = false;
+        this._gated.delete(key);
 
-        const xfer      = [];
-        const self      = chunk.snapshot();
-        xfer.push(self.palette.buffer, self.indices.buffer);
-        const neighbors = _collectNeighbors(this.world, cx, cz, xfer);
-
+        // Built when a worker takes the job (see WorkerPool.dispatch), so it
+        // carries the chunk and its neighbours as they are then. Edits made
+        // while it waited are included, which is why `dirty` clears here.
+        let seq = 0;
+        const build = () => {
+            if (this.world.getChunk(cx, cz) !== chunk) return null;
+            chunk.dirty = false;
+            const xfer      = [];
+            const self      = chunk.snapshot();
+            xfer.push(self.palette.buffer, self.indices.buffer);
+            const neighbors = _collectNeighbors(this.world, cx, cz, xfer);
+            const diagonals = _collectDiagonals(this.world, cx, cz, xfer);
+            const corners   = this.smooth ? _collectCorners(this.world, cx, cz, xfer) : undefined;
+            seq = this._lightSeq(chunk);
+            return { job: { type: 'meshChunk', cx, cz, chunk: self, neighbors, diagonals, corners }, xfer };
+        };
         this.pool.dispatch(
-            { type: 'meshChunk', cx, cz, chunk: self, neighbors, partial: false },
-            ({ type, yGeo, xzGeo }) => {
+            build,
+            ({ type, geo, light }) => {
                 this._pendingMesh.delete(key);
 
                 // Meshing failed in the worker — leave the chunk dirty so the
                 // next update() re-queues it instead of leaving it invisible.
-                if (type === 'error' || !yGeo || !xzGeo) {
+                if (type === 'error' || !geo) {
                     if (this.world.getChunk(cx, cz) === chunk) chunk.dirty = true;
                     return;
                 }
@@ -335,66 +439,111 @@ export class ChunkManager {
                 if (this.world.getChunk(cx, cz) !== chunk) return;
 
                 chunk.meshed = true;
-                this.onMeshReady?.(cx, cz, yGeo, xzGeo);
+                this.onMeshReady?.(cx, cz, geo, this._freshLight(chunk, seq, light));
 
-                // Re-run full mesh if dirty was set during this job (e.g. block edit).
-                if (chunk.dirty) this._requestMesh(cx, cz);
+                // Re-run if dirty was set during this job (an edit, or a neighbour
+                // arriving). Through the gate, so arrivals coalesce into one mesh.
+                if (chunk.dirty) this._schedule(cx, cz);
             },
-            xfer,
-            1, // priority: normal — initial chunk appearances
+            [],
+            // A chunk already on screen is showing a stale seam or edit; a new
+            // one is merely not there yet.
+            chunk.meshed ? 0 : 1,
         );
     }
 
-    _requestPartialMesh(cx, cz) {
+    /**
+     * Recompute only the sky light of a chunk already on screen. Chunks not yet
+     * meshed get their light with their first mesh; a chunk with a light job in
+     * flight is relit again when it returns, so the newest state always wins.
+     */
+    _requestLight(cx, cz) {
         const key   = WorldState.key(cx, cz);
         const chunk = this.world.getChunk(cx, cz);
-        // Only relevant for chunks already on screen; unrendered chunks get a full mesh.
         if (!chunk?.generated || !chunk.meshed) return;
-
-        if (this._pendingMesh.has(key)) {
-            // Full mesh already in flight — it will incorporate the latest neighbours.
-            chunk.dirty = true;
-            return;
-        }
-        if (this._pendingMeshXZ.has(key)) {
-            // Another partial is in flight — re-run once it finishes.
-            chunk.dirty = true;
-            return;
-        }
-
-        this._pendingMeshXZ.add(key);
-        chunk.dirty = false;
-
-        const xfer      = [];
-        const self      = chunk.snapshot();
-        xfer.push(self.palette.buffer, self.indices.buffer);
-        const neighbors = _collectNeighbors(this.world, cx, cz, xfer);
-
+        if (this._pendingLight.has(key)) { this._relight.add(key); return; }
+        this._pendingLight.add(key);
+        let seq = 0;
+        const build = () => {
+            if (this.world.getChunk(cx, cz) !== chunk) return null;
+            // Anything asked for before this point is covered by this job.
+            this._relight.delete(key);
+            const xfer      = [];
+            const self      = chunk.snapshot();
+            xfer.push(self.palette.buffer, self.indices.buffer);
+            const neighbors = _collectNeighbors(this.world, cx, cz, xfer);
+            const diagonals = _collectDiagonals(this.world, cx, cz, xfer);
+            seq = this._lightSeq(chunk);
+            return { job: { type: 'lightChunk', cx, cz, chunk: self, neighbors, diagonals }, xfer };
+        };
         this.pool.dispatch(
-            { type: 'meshChunk', cx, cz, chunk: self, neighbors, partial: true },
-            ({ type, xzGeo }) => {
-                this._pendingMeshXZ.delete(key);
-
-                if (type === 'error' || !xzGeo) {
-                    if (this.world.getChunk(cx, cz) === chunk) chunk.dirty = true;
-                    return;
-                }
-
-                if (this.world.getChunk(cx, cz) !== chunk) return;
-
-                this.onPartialMeshReady?.(cx, cz, xzGeo);
-
-                // If more neighbours loaded while this job ran, queue another partial.
-                if (chunk.dirty) this._requestPartialMesh(cx, cz);
+            build,
+            ({ type, light }) => {
+                this._pendingLight.delete(key);
+                if (this.world.getChunk(cx, cz) !== chunk) { this._relight.delete(key); return; }
+                const fresh = type === 'error' ? null : this._freshLight(chunk, seq, light);
+                if (fresh) this.onLightReady?.(cx, cz, fresh);
+                if (this._relight.delete(key) || type === 'error') this._requestLight(cx, cz);
             },
-            xfer,
-            0, // priority: highest — fixes visible seams before new chunks appear
+            [],
+            0, // same as a seam fix: a stale light edge is just as visible
         );
+    }
+
+    /**
+     * Neighbour-driven updates go through here rather than straight to a job.
+     *
+     * A chunk's geometry and light depend on all eight neighbours, so while one
+     * that is due to load (inside the render distance) has not been generated
+     * yet, any job would only have to be redone when it arrives. The chunk is
+     * held in `_gated` instead, and re-examined when a neighbour arrives
+     * (_remeshNeighbors) or the set of chunks to load changes (update). While
+     * flying into new terrain that turns up to eight meshes per chunk — one per
+     * neighbour arriving after it — into one. Neighbours outside the render
+     * distance are not waited for, so chunks at the edge still appear.
+     *
+     * Once released, the cheaper job that covers what is outstanding runs: a
+     * mesh (never meshed, or `dirty`; it carries light), else a light-only job.
+     * Block edits do not come through here: they go straight to their jobs and
+     * show at once.
+     */
+    _schedule(cx, cz) {
+        const key   = WorldState.key(cx, cz);
+        const chunk = this.world.getChunk(cx, cz);
+        if (!chunk?.generated) { this._gated.delete(key); return; }
+        if (this._awaitingNeighbours(cx, cz)) { this._gated.set(key, chunk); return; }
+        this._gated.delete(key);
+
+        if (!chunk.meshed || chunk.dirty) {
+            chunk.dirty = true;
+            chunk._needLight = false;                      // a mesh carries light
+            this._requestMesh(cx, cz);
+        } else if (chunk._needLight) {
+            chunk._needLight = false;
+            this._requestLight(cx, cz);
+        }
+    }
+
+    /** Is a neighbour of (cx, cz) that is due to load not generated yet? */
+    _awaitingNeighbours(cx, cz) {
+        for (const [ddx, ddz] of ALL_OFFSETS) {
+            const key = WorldState.key(cx + ddx, cz + ddz);
+            if (this._neededKeys.has(key) && !this.world.chunks.get(key)?.generated) return true;
+        }
+        return false;
+    }
+
+    /** Number a job that will return light for `chunk`. */
+    _lightSeq(chunk) { return (chunk._lightSeq = (chunk._lightSeq ?? 0) + 1); }
+
+    /** `light` if no newer job's light has already been shown, else null. */
+    _freshLight(chunk, seq, light) {
+        if (!light || seq < (chunk._lightShown ?? 0)) return null;
+        chunk._lightShown = seq;
+        return light;
     }
 
     _unload(key) {
-        if (this._pendingGen.has(key)) this._cancelledChunks.add(key);
-
         // Persist dirty chunks before dropping them from memory so player edits
         // are not lost when a chunk scrolls out of the render distance before
         // the next auto-save fires.
@@ -408,7 +557,9 @@ export class ChunkManager {
 
         this._pendingGen.delete(key);
         this._pendingMesh.delete(key);
-        this._pendingMeshXZ.delete(key);
+        this._pendingLight.delete(key);
+        this._relight.delete(key);
+        this._gated.delete(key);
         this.onChunkUnload?.(key);
         this.world.removeChunkByKey(key);
     }

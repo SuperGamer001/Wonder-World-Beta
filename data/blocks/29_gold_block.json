@@ -1,6 +1,7 @@
 {
   "id": 29,
   "name": "GOLD_BLOCK",
+  "terrainType": "solid",
   "color": [
     0.96,
     0.79,

@@ -1,6 +1,7 @@
 {
   "id": 27,
   "name": "BRICKS",
+  "terrainType": "solid",
   "color": [
     0.62,
     0.27,

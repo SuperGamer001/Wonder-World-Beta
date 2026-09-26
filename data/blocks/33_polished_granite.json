@@ -1,6 +1,7 @@
 {
   "id": 33,
   "name": "POLISHED_GRANITE",
+  "terrainType": "solid",
   "color": [
     0.78,
     0.5,

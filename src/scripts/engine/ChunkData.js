@@ -46,10 +46,74 @@ export function voxelCoords(idx) {
     return { lx, ly, lz };
 }
 
-// Scratch table for loadVoxels: blockId → palette index, or -1 when unseen.
-// A plain typed array beats a Map here because loadVoxels does one lookup per
-// voxel (CHUNK_VOLUME of them) for every chunk that arrives from a worker.
+// Scratch table for compressVoxels: blockId → palette index, or -1 when unseen.
+// A plain typed array beats a Map here: compression looks up a palette index
+// for every run of voxels in every generated chunk.
 const _paletteScratch = new Int16Array(65536).fill(-1);
+
+/**
+ * Palette-compress an expanded chunk and find its filled-Y extent, in one pass.
+ * Runs in the generation worker, so the main thread receives the compact form
+ * (CHUNK_VOLUME bytes instead of twice that) and does no per-voxel work.
+ *
+ * @param {Uint16Array} src  CHUNK_VOLUME block ids
+ * @returns {{ palette: Uint16Array, indices: Uint8Array, minY: number, maxY: number }}
+ *   minY / maxY are 0 for an empty chunk.
+ */
+export function compressVoxels(src, cx = '?', cz = '?') {
+    const pal  = [];
+    const idx  = new Uint8Array(CHUNK_VOLUME);
+    const seen = _paletteScratch;
+
+    let minY = CHUNK_SIZE_Y;
+    let maxY = -1;
+    // Runs of one block are the norm (stone, air), so the last lookup is kept.
+    let lastId = -1, lastPi = 0;
+
+    // Walked in storage order (x fastest, then y, then z), so the level of each
+    // row is known without dividing it back out of the index.
+    let i = 0;
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        for (let ly = 0; ly < CHUNK_SIZE_Y; ly++) {
+            let filled = false;
+            for (let lx = 0; lx < CHUNK_SIZE; lx++, i++) {
+                const id = src[i];
+                if (id !== lastId) {
+                    let pi = seen[id];
+                    if (pi === -1) {
+                        pi = pal.length;
+                        pal.push(id);
+                        seen[id] = pi;
+                    }
+                    lastId = id;
+                    lastPi = pi;
+                }
+                idx[i] = lastPi;
+                if (id !== 0) filled = true;
+            }
+            if (filled) {
+                if (ly < minY) minY = ly;
+                if (ly > maxY) maxY = ly;
+            }
+        }
+    }
+
+    // Reset only the entries we touched, so the scratch table stays reusable
+    // without clearing all 65,536 slots.
+    for (let p = 0; p < pal.length; p++) seen[pal[p]] = -1;
+
+    if (pal.length > MAX_PALETTE) {
+        console.error(`[ChunkData] chunk ${cx},${cz} has ${pal.length} block types; ` +
+                      `only the first ${MAX_PALETTE} are representable`);
+    }
+
+    return {
+        palette: Uint16Array.from(pal),
+        indices: idx,
+        minY: maxY < 0 ? 0 : minY,
+        maxY: maxY < 0 ? 0 : maxY,
+    };
+}
 
 /**
  * Palette-compressed chunk storage for a 16×CHUNK_SIZE_Y×16 column.
@@ -92,6 +156,16 @@ export class ChunkData {
         return this._palette[this._indices[voxelIndex(lx, ly, lz)]];
     }
 
+    /** Local Y of the highest non-air voxel in column (lx, lz), or -1 if it is all air. */
+    columnTop(lx, lz) {
+        const pal = this._palette, ind = this._indices;
+        let idx = voxelIndex(lx, this.maxFilledY, lz);
+        for (let ly = this.maxFilledY; ly >= this.minFilledY; ly--, idx -= CHUNK_SIZE) {
+            if (pal[ind[idx]] !== 0) return ly;
+        }
+        return -1;
+    }
+
     setVoxel(lx, ly, lz, id) {
         let pi = this._palette.indexOf(id);
         if (pi === -1) {
@@ -115,46 +189,24 @@ export class ChunkData {
     }
 
     /**
-     * Load voxel data arriving from a terrain worker (Uint16Array transfer).
-     * Builds the palette and the filled-Y extent in a single O(N) pass.
+     * Load an expanded Uint16Array of block ids (tooling and tests). The game
+     * itself never calls this on the main thread: the generation worker runs
+     * compressVoxels and the result is handed to adoptCompressed.
      */
     loadVoxels(src) {
-        const pal    = [];
-        const idxArr = new Uint8Array(CHUNK_VOLUME);
-        const seen   = _paletteScratch;
+        const c = compressVoxels(src, this.cx, this.cz);
+        this.adoptCompressed(Array.from(c.palette), c.indices, c.minY, c.maxY);
+    }
 
-        let minY = CHUNK_SIZE_Y;
-        let maxY = -1;
-
-        for (let i = 0; i < src.length; i++) {
-            const id = src[i];
-            let pi = seen[id];
-            if (pi === -1) {
-                pi = pal.length;
-                pal.push(id);
-                seen[id] = pi;
-            }
-            idxArr[i] = pi;
-            if (id !== 0) {
-                const ly = ((i / CHUNK_SIZE) | 0) % CHUNK_SIZE_Y;
-                if (ly < minY) minY = ly;
-                if (ly > maxY) maxY = ly;
-            }
-        }
-
-        // Reset only the entries we touched, so the scratch table stays reusable
-        // without clearing all 65,536 slots.
-        for (let p = 0; p < pal.length; p++) seen[pal[p]] = -1;
-
-        if (pal.length > MAX_PALETTE) {
-            console.error(`[ChunkData] chunk ${this.cx},${this.cz} has ${pal.length} block types; ` +
-                          `only the first ${MAX_PALETTE} are representable`);
-        }
-
-        this._palette   = pal;
-        this._indices   = idxArr;
-        this.minFilledY = maxY < 0 ? 0 : minY;
-        this.maxFilledY = maxY < 0 ? 0 : maxY;
+    /**
+     * Take ownership of already-compressed storage — a compressVoxels result
+     * straight from a worker. No copy, no per-voxel work on this thread.
+     */
+    adoptCompressed(palette, indices, minY, maxY) {
+        this._palette   = Array.isArray(palette) ? palette : Array.from(palette);
+        this._indices   = indices;
+        this.minFilledY = minY;
+        this.maxFilledY = maxY;
     }
 
     /**
@@ -165,14 +217,51 @@ export class ChunkData {
      * deliberately NOT toUint16Array(): sending the palette pair moves
      * CHUNK_VOLUME bytes instead of 2x CHUNK_VOLUME, and the palette expansion
      * happens on the worker thread rather than blocking the frame.
+     *
+     * Only the filled band [minY, maxY] is sent — everything outside it is AIR
+     * by this class's invariant — packed as one block per z slice:
+     *   indices[(ly − minY)·CHUNK_SIZE + lx + lz·bandSize],  bandSize = rows·CHUNK_SIZE
+     * The sky above the terrain is most of a column, so this is roughly half the
+     * bytes, and half the allocation, of copying all of _indices. Every mesh or
+     * light job copies nine of these on this thread. Expanded by worldWorker.
      */
     snapshot() {
+        const lo = this.minFilledY, hi = this.maxFilledY;
+        const band = (hi - lo + 1) * CHUNK_SIZE;
+        const SZ = CHUNK_SIZE * CHUNK_SIZE_Y;
+        const src = this._indices;
+        const indices = new Uint8Array(band * CHUNK_SIZE);
+        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+            const from = lz * SZ + lo * CHUNK_SIZE;
+            indices.set(src.subarray(from, from + band), lz * band);
+        }
         return {
             palette: Uint16Array.from(this._palette),
-            indices: this._indices.slice(),
-            minY:    this.minFilledY,
-            maxY:    this.maxFilledY,
+            indices,
+            minY:    lo,
+            maxY:    hi,
         };
+    }
+
+    /**
+     * A size × size block of expanded columns starting at (x0, z0), for a
+     * smooth-terrain mesh job. Smooth surfaces near a chunk corner depend on the
+     * diagonal chunk, but only on the few columns nearest that corner — so that
+     * is all that is sent, rather than four more whole-chunk snapshots.
+     * Layout: out[(bx + bz * size) * CHUNK_SIZE_Y + ly].
+     */
+    cornerBlock(x0, z0, size) {
+        const out = new Uint16Array(size * size * CHUNK_SIZE_Y);
+        const pal = this._palette;
+        const idx = this._indices;
+        for (let bz = 0; bz < size; bz++) {
+            for (let bx = 0; bx < size; bx++) {
+                const src = (x0 + bx) + (z0 + bz) * CHUNK_SIZE * CHUNK_SIZE_Y;
+                const dst = (bx + bz * size) * CHUNK_SIZE_Y;
+                for (let ly = 0; ly < CHUNK_SIZE_Y; ly++) out[dst + ly] = pal[idx[src + ly * CHUNK_SIZE]];
+            }
+        }
+        return out;
     }
 
     /**

@@ -60,6 +60,18 @@ const FALL_DAMAGE_THRESHOLD = -Math.sqrt(2 * -GRAVITY * SAFE_FALL_BLOCKS);  // �
 const FALL_DAMAGE_FACTOR    = 0.2 * Math.sqrt(24 / -GRAVITY);               // ≈0.168
 const DOUBLE_TAP_MS         = 300; // ms window for double-tap
 
+// ── Smooth terrain ────────────────────────────────────────────────────────────
+// Only active in smooth worlds. Axis-separated movement blocks the player on
+// any slope — walking into a ramp is a horizontal move into a surface — so a
+// blocked grounded move may lift the player by up to STEP_HEIGHT. It is below
+// one block on purpose: a full cube (or an un-smoothed one-block cliff) still
+// needs a jump. SNAP_DOWN keeps a grounded player glued to a downward slope
+// instead of launching into a string of tiny falls, which would otherwise
+// flicker onGround and swap in air acceleration.
+const STEP_HEIGHT = 0.6;
+const SNAP_DOWN   = 0.6;
+const STEP_ITERS  = 10;    // binary-search steps — resolves to ~0.0006 blocks
+
 /**
  * Frame-rate independent exponential approach factor.
  * Returns the fraction of the remaining gap to close this frame for a given
@@ -82,6 +94,18 @@ export class PlayerPhysics {
         this._prevFallVel  = 0;  // y-vel just before landing
         this._lastJumpTime = 0;  // ms — double-tap detection
         this._jumpWasDown  = false;
+
+        // SmoothTerrain collider in smooth worlds; null keeps blocky collision.
+        this.smooth = null;
+
+        // Set by the caller from the weather each frame:
+        //   external — velocity the surroundings push the player toward (a
+        //              tornado's pull, a gale); x/z join the walking target,
+        //              y is an upward acceleration (m/s²)
+        //   slip     — 0..1, how icy the ground underfoot is (freezing rain);
+        //              scales down grip, so the player slides
+        this.external = { x: 0, y: 0, z: 0 };
+        this.slip     = 0;
     }
 
     /**
@@ -173,13 +197,16 @@ export class PlayerPhysics {
         // own rate so the player can be given a slightly longer skid than the
         // spin-up without making acceleration feel sluggish.
         const moving = len > 0;
-        const rate = this.inWater ? ACCEL_WATER
-                   : !this.onGround ? ACCEL_AIR
-                   : moving ? ACCEL_GROUND
-                   : ACCEL_STOP;
+        let rate = this.inWater ? ACCEL_WATER
+                 : !this.onGround ? ACCEL_AIR
+                 : moving ? ACCEL_GROUND
+                 : ACCEL_STOP;
+        // Ice: much less grip, so starting, stopping and turning all slide.
+        if (this.onGround && !this.inWater) rate *= 1 - 0.85 * Math.min(1, Math.max(0, this.slip));
         const kh = approach(rate, dt);
-        this.vel.x += (dx * speed - this.vel.x) * kh;
-        this.vel.z += (dz * speed - this.vel.z) * kh;
+        const ext = this.external;
+        this.vel.x += (dx * speed + ext.x - this.vel.x) * kh;
+        this.vel.z += (dz * speed + ext.z - this.vel.z) * kh;
 
         // ── Vertical velocity ────────────────────────────────────────────────
         if (this.inWater) {
@@ -201,22 +228,29 @@ export class PlayerPhysics {
             // back. Standing still therefore flip-flopped onGround every frame,
             // which made air/ground acceleration alternate and let a single-frame
             // jump tap land on a false frame and be dropped.
-            this.vel.y = Math.max(this.vel.y + GRAVITY * dt, TERMINAL_VEL);
+            this.vel.y = Math.max(this.vel.y + (GRAVITY + ext.y) * dt, TERMINAL_VEL);
         }
 
         // Store pre-landing velocity for fall-damage computation
         const prevOnGround = this.onGround;
         if (!this.onGround) this._prevFallVel = this.vel.y;
 
+        // Stepping is for walking on slopes, so it needs footing (or water).
+        const canStep = this.smooth !== null && (prevOnGround || this.inWater);
+
         // Move X
         const nx = pos.x + this.vel.x * dt;
-        if (this._canMoveTo(nx, pos.y, pos.z)) pos.x = nx;
-        else                                    this.vel.x = 0;
+        if (this._canMoveTo(nx, pos.y, pos.z))              pos.x = nx;
+        else if (!(canStep && this._stepUp(pos, nx, pos.z))) this.vel.x = 0;
 
         // Move Z
         const nz = pos.z + this.vel.z * dt;
-        if (this._canMoveTo(pos.x, pos.y, nz)) pos.z = nz;
-        else                                    this.vel.z = 0;
+        if (this._canMoveTo(pos.x, pos.y, nz))              pos.z = nz;
+        else if (!(canStep && this._stepUp(pos, pos.x, nz))) this.vel.z = 0;
+
+        if (this.smooth !== null && prevOnGround && !this.inWater && this.vel.y <= 0) {
+            this._snapDown(pos);
+        }
 
         // Move Y
         const ny = pos.y + this.vel.y * dt;
@@ -263,18 +297,56 @@ export class PlayerPhysics {
 
     _canMoveTo(x, y, z) { return !this._collidesAt(x, y, z); }
 
+    /**
+     * Smooth worlds: try to climb onto what blocked a horizontal move. Succeeds
+     * when the destination is clear at most STEP_HEIGHT higher (with headroom
+     * both here and there), then settles at the lowest clear height.
+     */
+    _stepUp(pos, nx, nz) {
+        const top = pos.y + STEP_HEIGHT;
+        if (!this._canMoveTo(pos.x, top, pos.z) || !this._canMoveTo(nx, top, nz)) return false;
+        let lo = pos.y, hi = top;          // lo blocked, hi clear
+        for (let i = 0; i < STEP_ITERS; i++) {
+            const mid = (lo + hi) * 0.5;
+            if (this._canMoveTo(nx, mid, nz)) hi = mid; else lo = mid;
+        }
+        pos.x = nx; pos.y = hi; pos.z = nz;
+        return true;
+    }
+
+    /**
+     * Smooth worlds: after walking off the high side of a slope, drop straight
+     * onto the surface if it is within SNAP_DOWN. Leaves the player a hair
+     * above it, so gravity's move this frame is what registers the landing.
+     */
+    _snapDown(pos) {
+        const bottom = pos.y - SNAP_DOWN;
+        if (this._canMoveTo(pos.x, bottom, pos.z)) return;   // real drop — fall normally
+        let lo = bottom, hi = pos.y;       // lo blocked, hi clear
+        if (!this._canMoveTo(pos.x, hi, pos.z)) return;
+        for (let i = 0; i < STEP_ITERS; i++) {
+            const mid = (lo + hi) * 0.5;
+            if (this._canMoveTo(pos.x, mid, pos.z)) hi = mid; else lo = mid;
+        }
+        pos.y = hi;
+    }
+
     _collidesAt(x, y, z) {
         const x0 = x - PLAYER_HALF_W, x1 = x + PLAYER_HALF_W - 0.001;
         const y0 = y,                 y1 = y + PLAYER_HEIGHT  - 0.001;
         const z0 = z - PLAYER_HALF_W, z1 = z + PLAYER_HALF_W - 0.001;
 
+        const smooth = this.smooth;
         for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
             for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
                 // Unloaded chunk → treat as solid wall to prevent walking into void
                 if (!this.world.getChunk(bx >> CHUNK_SHIFT, bz >> CHUNK_SHIFT)?.generated) return true;
                 for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
                     const id = this.world.getBlock(bx, by, bz);
-                    if (id > 0 && !this.reg.isNoCollision(id)) return true;
+                    if (id === 0 || this.reg.isNoCollision(id)) continue;
+                    // Mesh blocks collide with their rendered shape, not their cube.
+                    if (smooth === null || !smooth.isMesh(id)) return true;
+                    if (smooth.cellBlocks(bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
                 }
             }
         }

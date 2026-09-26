@@ -1,6 +1,7 @@
 {
   "id": 14,
   "name": "SANDSTONE",
+  "terrainType": "mesh",
   "color": [
     0.78,
     0.72,

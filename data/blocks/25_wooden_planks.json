@@ -1,6 +1,7 @@
 {
   "id": 25,
   "name": "WOODEN_PLANKS",
+  "terrainType": "solid",
   "color": [
     0.72,
     0.55,

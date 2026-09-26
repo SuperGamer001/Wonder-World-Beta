@@ -1,6 +1,7 @@
 {
   "id": 1,
   "name": "GRASS",
+  "terrainType": "mesh",
   "color": [
     0.38,
     0.32,

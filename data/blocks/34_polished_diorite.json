@@ -1,6 +1,7 @@
 {
   "id": 34,
   "name": "POLISHED_DIORITE",
+  "terrainType": "solid",
   "color": [
     0.88,
     0.88,

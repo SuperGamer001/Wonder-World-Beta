@@ -1,6 +1,7 @@
 {
   "id": 4,
   "name": "SAND",
+  "terrainType": "mesh",
   "color": [
     0.85,
     0.8,

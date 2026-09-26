@@ -1,6 +1,7 @@
 {
   "id": 5,
   "name": "WATER",
+  "terrainType": "solid",
   "transparent": true,
   "liquid": true,
   "noCollision": true,

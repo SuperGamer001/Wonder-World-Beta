@@ -1,6 +1,7 @@
 {
   "id": 9,
   "name": "COAL_ORE",
+  "terrainType": "mesh",
   "color": [
     0.3,
     0.3,

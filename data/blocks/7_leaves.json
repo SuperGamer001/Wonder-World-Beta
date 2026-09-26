@@ -1,6 +1,7 @@
 {
   "id": 7,
   "name": "LEAVES",
+  "terrainType": "solid",
   "transparent": true,
   "noCollision": true,
   "color": [

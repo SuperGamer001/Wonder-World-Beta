@@ -109,6 +109,19 @@ const send = (method, params = {}) => new Promise((res, rej) => {
     ws.send(JSON.stringify({ id, method, params }));
 });
 
+// SMOKE_SHOTS=<dir> saves a screenshot of each world, taken from a few blocks
+// above the player so the terrain surface is in view.
+async function screenshot(name) {
+    const dir = process.env.SMOKE_SHOTS;
+    if (!dir) return;
+    await evalJs(`(() => { window.me.position.y += 7; return 1; })()`);
+    await sleep(60);
+    const { data } = await send('Page.captureScreenshot', { format: 'png' });
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${name}.png`), Buffer.from(data, 'base64'));
+    console.log('screenshot:', path.join(dir, `${name}.png`));
+}
+
 const evalJs = async (expr, awaitPromise = false) => {
     const r = await send('Runtime.evaluate', {
         expression: expr, returnByValue: true, awaitPromise, allowUnsafeEvalBlocking: true,
@@ -156,16 +169,15 @@ const env = await evalJs(`(() => {
 console.log('environment:', env);
 
 // ── Create a world through the real API, then start it ───────────────────────
+// Started from the record the server returns, exactly as the create-world
+// screen does, so the world gets the server's default terrain style (smooth).
 const world = await (await fetch(`${base}/api/worlds`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Headless', seed: 2024, gameMode: 'CREATIVE' }),
 })).json();
-console.log('world created:', world.id.slice(0, 8), 'seed', world.seed);
+console.log('world created:', world.id.slice(0, 8), 'seed', world.seed, 'terrain', world.terrainStyle);
 
-await evalJs(`startWorld(${JSON.stringify({
-    id: world.id, seed: world.seed, gameMode: 'CREATIVE',
-    playerPos: { x: 0, y: 100, z: 0 }, name: 'Headless',
-})}); 'started'`);
+await evalJs(`startWorld(${JSON.stringify({ ...world, playerPos: { x: 0, y: 100, z: 0 } })}); 'started'`);
 
 // Let terrain generate + mesh. Software rasterisation is slow, so be generous.
 for (let i = 0; i < 12; i++) {
@@ -182,6 +194,47 @@ const final = await evalJs(`(() => {
     return { debug: r, loadingHidden: document.getElementById('loadingContainer')?.classList.contains('hidden') };
 })()`);
 console.log('final state:', JSON.stringify(final));
+await screenshot('world1-smooth');
+
+// ── Day cycle and weather ────────────────────────────────────────────────────
+// Runs every atmosphere shader path in the real renderer: both skies, both
+// cloud levels, shadows following a moving sun, each kind of precipitation,
+// lightning, a tornado, fog and dust. A shader that fails to compile shows up
+// in the console-error count below; a scene that does not take effect fails
+// atmosOk. SMOKE_SHOTS saves a screenshot of each.
+const dispatch = (name, data) => evalJs(`(() => { const e = new Event('WorldJS_${name}'); e.data = ${JSON.stringify(data)}; document.dispatchEvent(e); return 1; })()`);
+await dispatch('applySettings', { sky: 'pretty', clouds: 'fancy', particles: 'high', shadows: 'medium' });
+const scenes = [
+    ['noon-sunny',          12,   'sunny'],
+    ['sunset-thunderstorm', 18,   'thunderstorm'],
+    ['morning-heavy-snow',  9,    'heavy_snow'],
+    ['night-clear',         23,   'clear'],
+    ['morning-dense-fog',   7,    'dense_fog'],
+    ['afternoon-tornado',   16,   'tornado'],
+    ['noon-dusty',          13,   'dusty'],
+    ['hail',                14,   'hailstorm'],
+    ['simple-sky-rain',     15,   'rain'],
+    ['simple-sky-night',    1,    'mostly_sunny'],
+];
+let atmosOk = true;
+for (const [name, hours, weather] of scenes) {
+    if (name.startsWith('simple')) await dispatch('applySettings', { sky: 'simple', clouds: 'fast', particles: 'medium' });
+    // Snap straight to the weather: software rendering runs at a few frames a
+    // second, far too slow to watch it roll in.
+    await dispatch('setAtmosphere', { hours, weather, immediate: true });
+    await sleep(4000);
+    const a = (await evalJs(`window.__wwDebug ? window.__wwDebug().atmosphere : null`).catch(() => null)) ?? {};
+    const h = parseInt(String(a.time).split(':')[0], 10);
+    // The GPU must see the clouds the weather has (they also place the rain).
+    const ok = a.weather === weather && Math.abs(h - hours) <= 1 && (a.cover < 0.05 || a.gpuClouds);
+    if (!ok) atmosOk = false;
+    console.log(`  ${ok ? 'OK   ' : 'WRONG'} ${name.padEnd(22)} ${a.time} ${a.weatherLabel} cover=${a.cover} wind=${a.wind} sky=${a.sky} clouds=${a.clouds}${a.tornado ? ' tornado' : ''} particles=${JSON.stringify(a.particles)}`);
+    // Headless has no pointer lock, so the pause menu is up; hide it for the shot.
+    await evalJs(`document.getElementById('PauseScreen').style.visibility = 'hidden'`).catch(() => {});
+    await screenshot('atmos-' + name);
+    await evalJs(`document.getElementById('PauseScreen').style.visibility = ''`).catch(() => {});
+}
+await dispatch('setAtmosphere', { weather: 'dynamic', daylightCycle: true });
 
 // ── Quit and re-enter ────────────────────────────────────────────────────────
 // Exercises teardown (EntityManager.dispose, mesh disposal, worker pool
@@ -194,15 +247,19 @@ await sleep(3000);
 const afterQuit = await evalJs(`window.__wwDebug ? window.__wwDebug() : null`);
 console.log('after quit :', JSON.stringify(afterQuit));
 
-console.log('re-entering a second world...');
+// The second world is switched to blocky terrain through the hidden world
+// setting, so one run covers both terrain styles and the switch between them.
+console.log('re-entering a second world (blocky terrain)...');
 const world2 = await (await fetch(`${base}/api/worlds`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name: 'Headless 2', seed: 555, gameMode: 'SURVIVAL' }),
 })).json();
-await evalJs(`startWorld(${JSON.stringify({
-    id: world2.id, seed: world2.seed, gameMode: 'SURVIVAL',
-    playerPos: { x: 0, y: 100, z: 0 }, name: 'Headless 2',
-})}); 'started'`);
+await fetch(`${base}/api/worlds/${world2.id}/settings`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ terrainStyle: 'blocky' }),
+});
+const meta2 = await (await fetch(`${base}/api/worlds/${world2.id}`)).json();
+await evalJs(`startWorld(${JSON.stringify({ ...meta2, playerPos: { x: 0, y: 100, z: 0 } })}); 'started'`);
 for (let i = 0; i < 6; i++) {
     await sleep(2500);
     const s = await evalJs(`window.__wwDebug ? window.__wwDebug() : null`).catch(() => null);
@@ -210,6 +267,15 @@ for (let i = 0; i < 6; i++) {
 }
 const afterReenter = await evalJs(`window.__wwDebug ? window.__wwDebug() : null`);
 console.log('after re-entry:', JSON.stringify(afterReenter));
+await screenshot('world2-blocky');
+
+// New worlds default to smooth, the hidden setting switches one to blocky, and
+// each world must load in that style and produce geometry.
+const styleOk = world.terrainStyle === 'smooth' && meta2.terrainStyle === 'blocky' &&
+                final.debug?.terrainStyle === 'smooth' && afterReenter?.terrainStyle === 'blocky';
+const meshOk  = (final.debug?.meshes ?? 0) > 0 && (afterReenter?.meshes ?? 0) > 0;
+console.log(`terrain styles: ${final.debug?.terrainStyle} -> ${afterReenter?.terrainStyle}  ${styleOk ? 'OK' : 'WRONG'}`);
+console.log(`atmosphere scenes: ${atmosOk ? 'OK' : 'WRONG'}`);
 
 // ── Report ───────────────────────────────────────────────────────────────────
 const errs  = consoleMsgs.filter(m => m.level === 'error');
@@ -234,4 +300,4 @@ for (const w of warns) {
 try { ws.close(); } catch {}
 edge.kill();
 await sleep(500);
-process.exit(errs.length === 0 && pageErrors.length === 0 ? 0 : 1);
+process.exit(errs.length === 0 && pageErrors.length === 0 && styleOk && meshOk && atmosOk ? 0 : 1);

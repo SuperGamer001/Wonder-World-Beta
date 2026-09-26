@@ -1,6 +1,7 @@
 {
   "id": 24,
   "name": "ANVIL",
+  "terrainType": "solid",
   "color": [
     0.35,
     0.35,

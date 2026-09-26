@@ -8,6 +8,9 @@ export class WorldState {
         // Survives chunk unload so edits can be replayed when a chunk regenerates.
         // Cleared per-chunk when that chunk is saved to the server.
         this.pendingChanges = new Map();
+        // Bumped on every block edit and chunk load/unload. Caches derived from
+        // voxel data (smooth-terrain collision shapes) compare against it.
+        this.editVersion = 0;
     }
 
     // ── Chunk access ────────────────────────────────────────────────────────────
@@ -17,7 +20,7 @@ export class WorldState {
     getChunk(cx, cz)           { return this.chunks.get(WorldState.key(cx, cz)); }
     hasChunk(cx, cz)           { return this.chunks.has(WorldState.key(cx, cz)); }
     hasChunkByKey(key)         { return this.chunks.has(key);                     }
-    setChunk(cx, cz, chunk)    { this.chunks.set(WorldState.key(cx, cz), chunk); }
+    setChunk(cx, cz, chunk)    { this.chunks.set(WorldState.key(cx, cz), chunk); this.editVersion++; }
 
     removeChunk(cx, cz) {
         const key   = WorldState.key(cx, cz);
@@ -27,9 +30,10 @@ export class WorldState {
             chunk.transparentMesh = null;
         }
         this.chunks.delete(key);
+        this.editVersion++;
     }
 
-    removeChunkByKey(key) { this.chunks.delete(key); }
+    removeChunkByKey(key) { this.chunks.delete(key); this.editVersion++; }
 
     // ── Block access (world-space coordinates) ───────────────────────────────────
 
@@ -55,6 +59,7 @@ export class WorldState {
         if (!this.pendingChanges.has(key)) this.pendingChanges.set(key, new Map());
         this.pendingChanges.get(key).set(voxelIndex(lx, ly, lz), id);
 
+        this.editVersion++;
         const chunk = this.getChunk(cx, cz);
         if (!chunk) return false;
         chunk.setVoxel(lx, ly, lz, id);

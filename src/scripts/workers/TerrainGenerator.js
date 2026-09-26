@@ -30,12 +30,12 @@ const SEA_LEVEL = 64;
 const BEDROCK_Y = WORLD_MIN_Y;
 
 // Continent noise parameters
-const CONTINENT_FREQ   = 0.00008;
-const CONTINENT_OCTAVE = 5;
+export const CONTINENT_FREQ   = 0.00008;
+export const CONTINENT_OCTAVE = 5;
 
 // Temperature / humidity control biome selection.
-const TEMP_FREQ = 0.00035;
-const HUMI_FREQ = 0.00030;
+export const TEMP_FREQ = 0.00035;
+export const HUMI_FREQ = 0.00030;
 
 // Cave noise parameters.
 const CAVE_FREQ_A  = 0.010;
@@ -52,6 +52,11 @@ const CAVE_MIN_Y   = BEDROCK_Y + 8;
 const LAKE_FREQ       = 0.00045;
 const LAKE_THRESHOLD  = 0.55;
 const LAKE_MAX_DIP    = 18;
+
+// Vein random-walk steps: +X -X +Y -Y +Z -Z.
+const VEIN_DX = [1, -1, 0, 0, 0, 0];
+const VEIN_DY = [0, 0, 1, -1, 0, 0];
+const VEIN_DZ = [0, 0, 0, 0, 1, -1];
 
 export class TerrainGenerator {
     /**
@@ -219,6 +224,10 @@ export class TerrainGenerator {
 
         // ── 4. Ore placement ───────────────────────────────────────────────
         this._placeOres(voxels, cx, cz, worldOriginX, worldOriginZ, blends, heights);
+
+        // Kept for buildColumnData, which the structure pass calls next for
+        // this same chunk.
+        this._lastColumns = { cx, cz, heights, blends };
 
         return voxels;
     }
@@ -400,9 +409,7 @@ export class TerrainGenerator {
                 }
             }
             const step = hashSeed(seed, i, blockId) % 6;
-            const dirs  = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
-            const [dx, dy, dz] = dirs[step];
-            x += dx; y += dy; z += dz;
+            x += VEIN_DX[step]; y += VEIN_DY[step]; z += VEIN_DZ[step];
         }
     }
 
@@ -411,6 +418,12 @@ export class TerrainGenerator {
      * that TerrainGenerator computed, without re-running noise.
      */
     buildColumnData(cx, cz) {
+        // generateChunk has just computed exactly this; recomputing it ran the
+        // continent, climate, biome-blend and height noise a second time per
+        // column. Nothing mutates the arrays, so they can be handed out as-is.
+        const last = this._lastColumns;
+        if (last && last.cx === cx && last.cz === cz) return { heights: last.heights, blends: last.blends };
+
         const ox      = cx * N;
         const oz      = cz * N;
         const heights = new Int16Array(N * N);

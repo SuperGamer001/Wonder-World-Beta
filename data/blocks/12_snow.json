@@ -1,6 +1,7 @@
 {
   "id": 12,
   "name": "SNOW",
+  "terrainType": "mesh",
   "color": [
     0.95,
     0.96,

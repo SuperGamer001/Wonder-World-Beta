@@ -15,6 +15,7 @@ const GRAVITY       = -18;  // m/s²
 const SPAWN_INTERVAL= 8;    // seconds between spawn attempts
 const MAX_MOBS      = 24;   // hard cap per world
 const ITEM_LIFETIME = 300;  // seconds before dropped items expire
+const MOB_STEP      = 0.6;  // smooth worlds: max climb onto a slope (blocks)
 
 let _nextId = 0;
 
@@ -38,6 +39,13 @@ export class EntityManager {
         this._drops   = [];          // { id, pos, vel, itemId, count, mesh, age }
         this._spawnT  = 0;
         this._biomeData = [];        // from gamepack
+
+        // SmoothTerrain collider in smooth worlds; null keeps blocky collision.
+        this.smooth = null;
+
+        // (x, y, z) => 0..1 sky-light brightness at a point, set by world.js, so
+        // mobs are as dark as the cave they stand in. null = always full light.
+        this.lightAt = null;
     }
 
     loadEntityTypes(entities) {
@@ -113,6 +121,16 @@ export class EntityManager {
         const id   = uid();
         const mesh = this._buildMesh(def);
         mesh.position.set(pos.x, pos.y, pos.z);
+        // Render layer 1 = shadow caster (see Shadows.js); mobs cast shadows.
+        // Each mob gets its own copy of the (shared) materials so it can be
+        // dimmed by the light where it stands; the copies are freed in _removeMob.
+        mesh.traverse(o => {
+            o.layers.enable(1);
+            if (o.material) {
+                o.material = o.material.clone();
+                o.userData.baseColor = o.material.color.clone();
+            }
+        });
         this.scene.add(mesh);
 
         this._mobs.set(id, {
@@ -151,6 +169,7 @@ export class EntityManager {
 
             mob.mesh.position.set(mob.pos.x, mob.pos.y, mob.pos.z);
             mob.mesh.rotation.y += dt * 0.5; // gentle idle rotate (temp)
+            this._applyLight(mob);
         }
     }
 
@@ -228,12 +247,12 @@ export class EntityManager {
         // Move X
         const nx = mob.pos.x + mob.vel.x * dt;
         if (!this._collidesAABB(nx, mob.pos.y, mob.pos.z, hw, h)) mob.pos.x = nx;
-        else mob.vel.x = 0;
+        else if (!this._stepUp(mob, nx, mob.pos.z, hw, h)) mob.vel.x = 0;
 
         // Move Z
         const nz = mob.pos.z + mob.vel.z * dt;
         if (!this._collidesAABB(mob.pos.x, mob.pos.y, nz, hw, h)) mob.pos.z = nz;
-        else mob.vel.z = 0;
+        else if (!this._stepUp(mob, mob.pos.x, nz, hw, h)) mob.vel.z = 0;
 
         // Move Y
         const ny = mob.pos.y + mob.vel.y * dt;
@@ -251,12 +270,34 @@ export class EntityManager {
         }
     }
 
+    /** Smooth worlds: climb a grounded mob onto a slope (see PlayerPhysics._stepUp). */
+    _stepUp(mob, nx, nz, hw, h) {
+        if (!this.smooth || !mob.onGround) return false;
+        const top = mob.pos.y + MOB_STEP;
+        if (this._collidesAABB(mob.pos.x, top, mob.pos.z, hw, h) ||
+            this._collidesAABB(nx, top, nz, hw, h)) return false;
+        let lo = mob.pos.y, hi = top;
+        for (let i = 0; i < 8; i++) {
+            const mid = (lo + hi) * 0.5;
+            if (this._collidesAABB(nx, mid, nz, hw, h)) lo = mid; else hi = mid;
+        }
+        mob.pos.x = nx; mob.pos.y = hi; mob.pos.z = nz;
+        return true;
+    }
+
     _collidesAABB(x, y, z, hw, h) {
-        for (let bx = Math.floor(x - hw); bx <= Math.floor(x + hw - 0.001); bx++) {
-            for (let by = Math.floor(y);    by <= Math.floor(y + h - 0.001); by++) {
-                for (let bz = Math.floor(z - hw); bz <= Math.floor(z + hw - 0.001); bz++) {
+        const smooth = this.smooth;
+        const x0 = x - hw, x1 = x + hw - 0.001;
+        const y0 = y,      y1 = y + h  - 0.001;
+        const z0 = z - hw, z1 = z + hw - 0.001;
+        for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
+            for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
+                for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
                     const id = this.world.getBlock(bx, by, bz);
-                    if (id > 0 && !this.blkReg.isNoCollision(id)) return true;
+                    if (id === 0 || this.blkReg.isNoCollision(id)) continue;
+                    // Mesh blocks collide with their rendered shape, not their cube.
+                    if (!smooth || !smooth.isMesh(id)) return true;
+                    if (smooth.cellBlocks(bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
                 }
             }
         }
@@ -346,12 +387,20 @@ export class EntityManager {
         const mob = this._mobs.get(id);
         if (!mob) return;
         this.scene.remove(mob.mesh);
-        // mob.mesh is a THREE.Group, which has no .geometry — the old
-        // `mob.mesh.geometry?.dispose()` here was a silent no-op that leaked the
-        // child geometries and materials on every despawn. Those are now shared
-        // per entity type and released in dispose(), so there is nothing
-        // per-mob left to free; removing it from the scene is enough.
+        // Geometries are shared per entity type and released in dispose(); the
+        // materials are per-mob copies (see _spawnMob), so free those here.
+        mob.mesh.traverse(o => o.material?.dispose());
         this._mobs.delete(id);
+    }
+
+    /** Dim a mob's colours by the sky light at its middle. */
+    _applyLight(mob) {
+        const l = this.lightAt ? this.lightAt(mob.pos.x, mob.pos.y + 0.5, mob.pos.z) : 1;
+        if (mob.light === l) return;
+        mob.light = l;
+        for (const o of mob.mesh.children) {
+            if (o.userData.baseColor) o.material.color.copy(o.userData.baseColor).multiplyScalar(l);
+        }
     }
 
     // ── Dropped items ─────────────────────────────────────────────────────────
@@ -439,7 +488,9 @@ export class EntityManager {
             d.pos.z += d.vel.z * dt;
             const ny = d.pos.y + d.vel.y * dt;
             const below = this.world.getBlock(Math.floor(d.pos.x), Math.floor(ny), Math.floor(d.pos.z));
-            if (below > 0 && !this.blkReg.isNoCollision(below)) {
+            const landed = below > 0 && !this.blkReg.isNoCollision(below) &&
+                (!this.smooth?.isMesh(below) || this.smooth.pointInMesh(d.pos.x, ny, d.pos.z));
+            if (landed) {
                 d.vel.y = Math.abs(d.vel.y) * 0.3;
                 d.vel.x *= 0.6; d.vel.z *= 0.6;
             } else {
@@ -477,8 +528,8 @@ export class EntityManager {
      *
      * Every mob of a given type has identical dimensions and colour, so there is
      * no reason to allocate fresh BoxGeometry and MeshLambertMaterial objects
-     * per spawn. Sharing them also means despawning a mob has nothing to
-     * dispose, which is what makes _removeMob leak-free.
+     * per spawn. Each mob clones the materials (so it can be dimmed by the light
+     * where it stands); _removeMob frees those clones.
      */
     _buildMesh(def) {
         const shared = this._sharedMobParts(def);

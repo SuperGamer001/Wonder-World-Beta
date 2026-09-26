@@ -1,6 +1,7 @@
 {
   "id": 35,
   "name": "MOSSY_STONE",
+  "terrainType": "solid",
   "color": [
     0.42,
     0.5,

@@ -112,6 +112,56 @@
                     <option value="HARD">Hard</option>
                 </select>
             </div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Daylight Cycle</label>
+                <label class="settingsToggle"><input type="checkbox" id="worldSettingsDaylightCycle" checked><span class="track"></span></label>
+            </div>
+            <div class="worldFormRow">
+                <label class="worldFormLabel">Weather</label>
+                <select class="worldFormInput" id="worldSettingsWeather">
+                    <option value="dynamic">Dynamic (changes naturally)</option>
+                    <optgroup label="Clear">
+                        <option value="clear">Fully Clear</option>
+                        <option value="sunny">Sunny</option>
+                        <option value="mostly_sunny">Mostly Sunny</option>
+                        <option value="cloudy">Cloudy</option>
+                    </optgroup>
+                    <optgroup label="Fog">
+                        <option value="misty">Misty</option>
+                        <option value="foggy">Foggy</option>
+                        <option value="dense_fog">Dense Fog</option>
+                    </optgroup>
+                    <optgroup label="Rain">
+                        <option value="rain">Rain</option>
+                        <option value="heavy_rain">Heavy Rain</option>
+                        <option value="stormy">Stormy</option>
+                    </optgroup>
+                    <optgroup label="Lightning">
+                        <option value="rain_lightning">Lightning — Calm Rainstorm</option>
+                        <option value="lightning_storm">Lightning Storm</option>
+                        <option value="dry_lightning">Lightning — No Rain</option>
+                    </optgroup>
+                    <optgroup label="Cold">
+                        <option value="snow">Snow</option>
+                        <option value="heavy_snow">Heavy Snow</option>
+                        <option value="snowstorm">Snowstorm</option>
+                        <option value="sleet">Sleet</option>
+                        <option value="freezing_rain">Freezing Rain</option>
+                    </optgroup>
+                    <optgroup label="Extreme">
+                        <option value="windy">Windy</option>
+                        <option value="gale">Gale</option>
+                        <option value="hailstorm">Hailstorm</option>
+                        <option value="thunderstorm">Thunderstorm</option>
+                        <option value="supercell">Supercell</option>
+                        <option value="tornado">Tornado</option>
+                    </optgroup>
+                    <optgroup label="Biome">
+                        <option value="dusty">Dusty</option>
+                        <option value="ashy">Ashy</option>
+                    </optgroup>
+                </select>
+            </div>
             <div class="menuButton" id="worldSettingsSaveBtn">Save</div>
             <div class="menuButton" id="worldSettingsCancelBtn">Cancel</div>
         </div>
@@ -178,6 +228,16 @@
 
                     <div class="settingsSectionTitle">Video</div>
                     <div class="settingsRow">
+                        <span class="settingsLabel">Graphics</span>
+                        <select class="settingsSelect" id="settingGraphics">
+                            <option value="classic">Classic</option>
+                            <option value="simple">Simple</option>
+                            <option value="normal">Normal</option>
+                            <option value="pro">Pro</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
                         <span class="settingsLabel">Field of View</span>
                         <input type="range" id="settingFov" min="50" max="110" step="1" value="75" class="settingsSlider">
                         <span class="settingsValue" id="settingFovVal">75</span>
@@ -193,9 +253,62 @@
                         <span class="settingsValue" id="settingResScaleVal">100%</span>
                     </div>
                     <div class="settingsRow">
+                        <span class="settingsLabel">Fog Distance</span>
+                        <input type="range" id="settingFogDist" min="0.5" max="0.95" step="0.01" value="0.75" class="settingsSlider">
+                        <span class="settingsValue" id="settingFogDistVal">75%</span>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Shadows</span>
+                        <select class="settingsSelect" id="settingShadows">
+                            <option value="off">Off</option>
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Clouds</span>
+                        <select class="settingsSelect" id="settingClouds">
+                            <option value="fast">Fast</option>
+                            <option value="fancy">Fancy</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Sky</span>
+                        <select class="settingsSelect" id="settingSky">
+                            <option value="simple">Simple</option>
+                            <option value="pretty">Pretty</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Particles</span>
+                        <select class="settingsSelect" id="settingParticles">
+                            <option value="off">Off</option>
+                            <option value="low">Low</option>
+                            <option value="medium">Medium</option>
+                            <option value="high">High</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Max Frame Rate</span>
+                        <select class="settingsSelect" id="settingMaxFps">
+                            <option value="30">30 FPS</option>
+                            <option value="60">60 FPS</option>
+                            <option value="120">120 FPS</option>
+                            <option value="0">Unlimited</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
                         <span class="settingsLabel">Brightness</span>
                         <input type="range" id="settingBrightness" min="0.6" max="1.6" step="0.05" value="1.0" class="settingsSlider">
                         <span class="settingsValue" id="settingBrightnessVal">100%</span>
+                    </div>
+
+                    <div class="settingsSectionTitle">Audio</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Weather Volume</span>
+                        <input type="range" id="settingWeatherVolume" min="0" max="1" step="0.05" value="0.8" class="settingsSlider">
+                        <span class="settingsValue" id="settingWeatherVolumeVal">80%</span>
                     </div>
 
                     <div class="settingsSectionTitle">HUD</div>
@@ -266,6 +379,70 @@
                             <option value="EASY">Easy</option>
                             <option value="NORMAL">Normal</option>
                             <option value="HARD">Hard</option>
+                        </select>
+                    </div>
+                    <div class="settingsSectionTitle">Time &amp; Weather</div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Daylight Cycle</span>
+                        <label class="settingsToggle"><input type="checkbox" id="settingDaylightCycle" checked><span class="track"></span></label>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Time of Day</span>
+                        <select class="settingsSelect" id="settingTimeOfDay">
+                            <option value="">Keep current</option>
+                            <option value="6">Sunrise</option>
+                            <option value="9">Morning</option>
+                            <option value="12">Noon</option>
+                            <option value="15.5">Afternoon</option>
+                            <option value="18">Sunset</option>
+                            <option value="21">Night</option>
+                            <option value="0">Midnight</option>
+                        </select>
+                    </div>
+                    <div class="settingsRow">
+                        <span class="settingsLabel">Weather</span>
+                        <select class="settingsSelect" id="settingWeather">
+                            <option value="dynamic">Dynamic (changes naturally)</option>
+                            <optgroup label="Clear">
+                                <option value="clear">Fully Clear</option>
+                                <option value="sunny">Sunny</option>
+                                <option value="mostly_sunny">Mostly Sunny</option>
+                                <option value="cloudy">Cloudy</option>
+                            </optgroup>
+                            <optgroup label="Fog">
+                                <option value="misty">Misty</option>
+                                <option value="foggy">Foggy</option>
+                                <option value="dense_fog">Dense Fog</option>
+                            </optgroup>
+                            <optgroup label="Rain">
+                                <option value="rain">Rain</option>
+                                <option value="heavy_rain">Heavy Rain</option>
+                                <option value="stormy">Stormy</option>
+                            </optgroup>
+                            <optgroup label="Lightning">
+                                <option value="rain_lightning">Lightning — Calm Rainstorm</option>
+                                <option value="lightning_storm">Lightning Storm</option>
+                                <option value="dry_lightning">Lightning — No Rain</option>
+                            </optgroup>
+                            <optgroup label="Cold">
+                                <option value="snow">Snow</option>
+                                <option value="heavy_snow">Heavy Snow</option>
+                                <option value="snowstorm">Snowstorm</option>
+                                <option value="sleet">Sleet</option>
+                                <option value="freezing_rain">Freezing Rain</option>
+                            </optgroup>
+                            <optgroup label="Extreme">
+                                <option value="windy">Windy</option>
+                                <option value="gale">Gale</option>
+                                <option value="hailstorm">Hailstorm</option>
+                                <option value="thunderstorm">Thunderstorm</option>
+                                <option value="supercell">Supercell</option>
+                                <option value="tornado">Tornado</option>
+                            </optgroup>
+                            <optgroup label="Biome">
+                                <option value="dusty">Dusty</option>
+                                <option value="ashy">Ashy</option>
+                            </optgroup>
                         </select>
                     </div>
                     <div class="settingsRow">

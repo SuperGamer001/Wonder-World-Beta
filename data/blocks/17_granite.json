@@ -1,6 +1,7 @@
 {
   "id": 17,
   "name": "GRANITE",
+  "terrainType": "mesh",
   "color": [
     0.6,
     0.42,

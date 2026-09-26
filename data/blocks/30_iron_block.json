@@ -1,6 +1,7 @@
 {
   "id": 30,
   "name": "IRON_BLOCK",
+  "terrainType": "solid",
   "color": [
     0.83,
     0.83,

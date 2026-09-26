@@ -1,6 +1,7 @@
 {
   "id": 28,
   "name": "GLASS",
+  "terrainType": "solid",
   "color": [
     0.82,
     0.91,

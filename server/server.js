@@ -7,7 +7,8 @@
  *   GET  /api/worlds/:id          get metadata
  *   PUT  /api/worlds/:id/player-state  save full player state
  *   GET  /api/worlds/:id/player-state  load full player state
- *   PUT  /api/worlds/:id/settings      update world settings (gameMode etc.)
+ *   PUT  /api/worlds/:id/settings      update world settings (gameMode, difficulty,
+ *                                      daylightCycle, weather, and the hidden terrainStyle)
  *   POST /api/worlds/:id/duplicate
  *   DEL  /api/worlds/:id
  *   GET  /api/settings            get global player settings
@@ -64,6 +65,24 @@ const PORT         = process.env.PORT != null ? Number(process.env.PORT) : 0;
 // worlds; binding all interfaces published that to every device on the network.
 const HOST         = process.env.HOST ?? '127.0.0.1';
 const REGION_BITS = 3;                 // 2^3 = 8 chunk columns per axis per region
+
+// ── Hidden world setting: terrain style ───────────────────────────────────────
+// 'smooth' — Mesh blocks (see "terrainType" in data/blocks/*.json) deform into
+//            smooth terrain; Solid blocks stay cubes. The default.
+// 'blocky' — the classic cube world.
+//
+// Deliberately absent from every settings screen. Each world stores its own
+// value as "terrainStyle" in user/worlds/<id>/world.json; edit that to switch an
+// existing world, or change TERRAIN_STYLE to pick what new worlds get. It is read
+// only when a world starts loading, so a change applies on the next load.
+//
+// Worlds made before this setting existed have no value and load blocky — that
+// is how they were built (see startWorld in src/main.js).
+//
+// Voxel data and the save format are identical in both styles, so a world can
+// be switched back and forth freely.
+const TERRAIN_STYLES = ['blocky', 'smooth'];
+const TERRAIN_STYLE  = 'smooth';
 
 const gzip   = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -359,6 +378,7 @@ app.post('/api/worlds', (req, res) => {
         format: WORLD_FORMAT,
         worldHeight: CHUNK_SIZE_Y,
         worldMinY: WORLD_MIN_Y,
+        terrainStyle: TERRAIN_STYLE,
     };
     fs.mkdirSync(worldDir(id), { recursive: true });
     writeMeta(id, meta);
@@ -445,9 +465,15 @@ app.get('/api/worlds/:id/player-state', (req, res) => {
 app.put('/api/worlds/:id/settings', (req, res) => {
     const meta = readMeta(req.params.id);
     if (!meta) return res.status(404).json({ error: 'Not found' });
-    const { gameMode, difficulty } = req.body ?? {};
+    const { gameMode, difficulty, terrainStyle, daylightCycle, weather } = req.body ?? {};
     if (gameMode && ['SURVIVAL','CREATIVE','SPECTATOR'].includes(gameMode)) meta.gameMode = gameMode;
     if (difficulty && ['PEACEFUL','EASY','NORMAL','HARD'].includes(difficulty)) meta.difficulty = difficulty;
+    // Time and weather. `weather` is 'dynamic' or a weather type id held fixed;
+    // the client ignores ids it does not know, so only the shape is checked here.
+    if (typeof daylightCycle === 'boolean') meta.daylightCycle = daylightCycle;
+    if (typeof weather === 'string' && /^[a-z_]{2,32}$/.test(weather)) meta.weather = weather;
+    // Hidden — no UI sends this. Takes effect the next time the world loads.
+    if (TERRAIN_STYLES.includes(terrainStyle)) meta.terrainStyle = terrainStyle;
     writeMeta(req.params.id, meta);
     res.json({ ok: true });
 });

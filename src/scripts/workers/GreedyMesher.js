@@ -43,6 +43,7 @@
  */
 
 import { CHUNK_SIZE, CHUNK_SIZE_Y } from '../engine/ChunkData.js';
+import { sunBrightness } from '../engine/Sun.js';
 
 const N_XZ = CHUNK_SIZE;
 const N_Y  = CHUNK_SIZE_Y;
@@ -58,20 +59,10 @@ const DIM = [N_XZ, N_Y, N_XZ];
 // neighbour: treated as solid so the face is culled.
 const SOLID_SENTINEL = 0xFFFF;
 
-const FACE_BRIGHTNESS = [
-    0.70,   // +X
-    0.70,   // -X
-    1.00,   // +Y  (top, brightest)
-    0.45,   // -Y  (bottom, darkest)
-    0.85,   // +Z
-    0.80,   // -Z
-];
-
-const NORMALS = [
-    [ 1, 0, 0], [-1, 0, 0],
-    [ 0, 1, 0], [ 0,-1, 0],
-    [ 0, 0, 1], [ 0, 0,-1],
-];
+// Face brightness under open sky, from the sun's direction (engine/Sun.js):
+// +X -X +Y -Y +Z -Z. Sky light and shadows are applied on top in the shader.
+const FACE_BRIGHTNESS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
+    .map(([x, y, z]) => sunBrightness(x, y, z));
 
 // faceAxis, uAxis, vAxis, isPositive, normalIndex
 const FACE_DEFS = [
@@ -86,6 +77,8 @@ const FACE_DEFS = [
 /**
  * Append-only Float32Array that doubles when full.
  * Replaces `[].push(...)` + `new Float32Array(arr)` in the quad emit path.
+ * Each mesher keeps its buffers across jobs (see _resetSink), so after the
+ * first few chunks they are already big enough and never grow again.
  */
 class F32Buf {
     constructor(cap = 4096) { this.a = new Float32Array(cap); this.n = 0; }
@@ -97,6 +90,8 @@ class F32Buf {
         next.set(this.a.subarray(0, this.n));
         this.a = next;
     }
+    /** Make room for `extra` values and return the backing array to write into from `n`. */
+    reserve(extra)    { this._fit(extra); return this.a; }
     push1(x)          { this._fit(1); this.a[this.n++] = x; }
     push2(x, y)       { this._fit(2); const a = this.a; a[this.n++] = x; a[this.n++] = y; }
     push3(x, y, z)    { this._fit(3); const a = this.a; a[this.n++] = x; a[this.n++] = y; a[this.n++] = z; }
@@ -115,11 +110,17 @@ class U32Buf {
         next.set(this.a.subarray(0, this.n));
         this.a = next;
     }
+    reserve(extra) { this._fit(extra); return this.a; }
     push6(a0, b0, c0, d0, e0, f0) {
         this._fit(6);
         const a = this.a;
         a[this.n++] = a0; a[this.n++] = b0; a[this.n++] = c0;
         a[this.n++] = d0; a[this.n++] = e0; a[this.n++] = f0;
+    }
+    push3(a0, b0, c0) {
+        this._fit(3);
+        const a = this.a;
+        a[this.n++] = a0; a[this.n++] = b0; a[this.n++] = c0;
     }
     trim() { return this.a.slice(0, this.n); }
 }
@@ -129,9 +130,17 @@ function _newSink() {
     return { pos: new F32Buf(), col: new F32Buf(), uv: new F32Buf(), lay: new F32Buf(), idx: new U32Buf() };
 }
 
+function _resetSink(s) {
+    s.pos.n = 0; s.col.n = 0; s.uv.n = 0; s.lay.n = 0; s.idx.n = 0;
+    return s;
+}
+
 function _sinkArrays(s) {
     return { positions: s.pos.trim(), colors: s.col.trim(), uvs: s.uv.trim(), layers: s.lay.trim(), indices: s.idx.trim() };
 }
+
+// Flat-index stride of each axis (X, Y, Z).
+const STRIDE = [1, SY, SZ];
 
 export class GreedyMesher {
     /**
@@ -144,6 +153,14 @@ export class GreedyMesher {
         this.blockFaceMap = blockFaceMap;
 
         this._buildTables();
+
+        // Scratch reused across jobs (a worker meshes one chunk at a time).
+        // Masks hold block ids, which are 16-bit; sized for the largest slice.
+        const maxSlice = N_XZ * N_Y;
+        this._mask   = new Uint16Array(maxSlice);
+        this._maskT  = new Uint16Array(maxSlice);
+        this._opaque = _newSink();
+        this._transp = _newSink();
     }
 
     /**
@@ -205,10 +222,16 @@ export class GreedyMesher {
      * @param {{min:number,max:number}} [yRange] local-Y band that contains blocks.
      *   Faces only exist on solid voxels, so sweeping outside this band can never
      *   produce geometry. Skipping the empty sky is most of a 448-tall column.
+     * @param {object} [smooth] smooth-terrain context from SmoothMesher.prepare():
+     *   { occ, partial, emit }. `occ` replaces the solidity table for the
+     *   neighbour test (Mesh blocks hide faces against them), `partial` marks
+     *   deformed Mesh voxels the greedy pass must leave alone, and `emit(sink)`
+     *   appends their custom geometry to the opaque output. Omitted in blocky
+     *   worlds, where behaviour is exactly as before.
      */
-    meshGroup(voxels, neighbors, faceDefIndices, yRange) {
-        const opaque = _newSink();
-        const transp = _newSink();
+    meshGroup(voxels, neighbors, faceDefIndices, yRange, smooth = null) {
+        const opaque = _resetSink(this._opaque);
+        const transp = _resetSink(this._transp);
 
         const yMin = Math.max(0,       (yRange?.min ?? 0) | 0);
         const yMax = Math.min(N_Y - 1, (yRange?.max ?? (N_Y - 1)) | 0);
@@ -224,9 +247,11 @@ export class GreedyMesher {
 
         if (yMax >= yMin) {
             for (const i of faceDefIndices) {
-                this._sweepFace(FACE_DEFS[i], voxels, nbr, opaque, transp, yMin, yMax);
+                this._sweepFace(FACE_DEFS[i], voxels, nbr, opaque, transp, yMin, yMax, smooth);
             }
         }
+
+        smooth?.emit?.(opaque);
 
         const o = _sinkArrays(opaque);
         const t = _sinkArrays(transp);
@@ -255,22 +280,21 @@ export class GreedyMesher {
     // ── Internal helpers ────────────────────────────────────────────────────────
 
     /**
-     * Read a voxel that may lie one step outside the chunk on X or Z.
-     * `ly` is always within [0, N_Y) at call sites that can cross XZ.
+     * Build the visibility masks for every slice of one face direction and
+     * merge each into quads.
+     *
+     * Voxels are addressed by flat index with per-axis strides rather than
+     * through coordinate arrays. Within a slice every voxel's neighbour in the
+     * face direction lives in the same array at the same index offset — this
+     * chunk for interior slices, one neighbour chunk for the boundary slice —
+     * so that is resolved once per slice and the inner loop is a plain read.
      */
-    _readXZ(voxels, nbr, lx, ly, lz) {
-        if (lx < 0)      { const n = nbr.nx; return n ? n[(lx + N_XZ) + ly * SY + lz * SZ] : SOLID_SENTINEL; }
-        if (lx >= N_XZ)  { const n = nbr.px; return n ? n[(lx - N_XZ) + ly * SY + lz * SZ] : SOLID_SENTINEL; }
-        if (lz < 0)      { const n = nbr.nz; return n ? n[lx + ly * SY + (lz + N_XZ) * SZ] : SOLID_SENTINEL; }
-        if (lz >= N_XZ)  { const n = nbr.pz; return n ? n[lx + ly * SY + (lz - N_XZ) * SZ] : SOLID_SENTINEL; }
-        return voxels[lx + ly * SY + lz * SZ];
-    }
-
-    _sweepFace(fd, voxels, nbr, opaque, transp, yMin, yMax) {
+    _sweepFace(fd, voxels, nbr, opaque, transp, yMin, yMax, smooth) {
         const { faceAxis, uAxis, vAxis, positive, ni } = fd;
-        const normal = NORMALS[ni];
-        const dx = normal[0], dy = normal[1], dz = normal[2];
         const solid = this._solid;
+        // Blocky worlds: the adjacent test uses the same table as the source test.
+        const occ   = smooth ? smooth.occ     : solid;
+        const skip  = smooth ? smooth.partial : null;
 
         const nFace = DIM[faceAxis];
         const nU    = DIM[uAxis];
@@ -284,61 +308,79 @@ export class GreedyMesher {
         const vLo    = vAxis === 1 ? yMin : 0;
         const vHi    = vAxis === 1 ? yMax : nV - 1;
 
-        const mask  = new Int32Array(nU * nV);
-        const maskT = new Int32Array(nU * nV);
+        const sF = STRIDE[faceAxis], sU = STRIDE[uAxis], sV = STRIDE[vAxis];
+        const dir = positive ? 1 : -1;
 
-        const coord  = [0, 0, 0];
-        const coordA = [0, 0, 0];
+        // Fill in memory order: whichever of u / v has the smaller voxel stride
+        // runs innermost. The masks are indexed u·nV + v either way.
+        const vInner = sV < sU;
+        const oLo = vInner ? uLo : vLo, oHi = vInner ? uHi : vHi;
+        const iLo = vInner ? vLo : uLo, iHi = vInner ? vHi : uHi;
+        const oS  = vInner ? sU : sV,   iS  = vInner ? sV : sU;
+        const oC  = vInner ? nV : 1,    iC  = vInner ? 1  : nV;
+
+        const mask = this._mask, maskT = this._maskT;
 
         for (let f = faceLo; f <= faceHi; f++) {
-            mask.fill(0);
-            maskT.fill(0);
-            coord[faceAxis]  = f;
-            coordA[faceAxis] = f + (faceAxis === 0 ? dx : faceAxis === 1 ? dy : dz);
+            // Which array holds this slice's neighbours, and the index shift from
+            // a source voxel to its neighbour in that array.
+            const a = f + dir;
+            let adj = voxels, shift = dir * sF;
+            if (a < 0 || a >= nFace) {
+                // Above or below the world, or toward an unloaded chunk, the
+                // neighbour is SOLID_SENTINEL: it hides every opaque face and is
+                // not air, so no transparent face shows either. Nothing to emit.
+                if (faceAxis === 1) continue;
+                adj = faceAxis === 0 ? (a < 0 ? nbr.nx : nbr.px)
+                                     : (a < 0 ? nbr.nz : nbr.pz);
+                if (adj === null) continue;
+                // Same position on the far side of the neighbouring chunk.
+                shift = (a < 0 ? nFace - 1 : 1 - nFace) * sF;
+            }
 
-            for (let u = uLo; u <= uHi; u++) {
-                coord[uAxis]  = u;
-                coordA[uAxis] = u;
-                const rowBase = u * nV;
-
-                for (let v = vLo; v <= vHi; v++) {
-                    coord[vAxis]  = v;
-                    coordA[vAxis] = v;
-
-                    const lx = coord[0],  ly = coord[1],  lz = coord[2];
-                    const ax = coordA[0], ay = coordA[1], az = coordA[2];
-
-                    // Source voxel is always inside the chunk.
-                    const id = voxels[lx + ly * SY + lz * SZ];
-                    if (id === 0) continue;   // air emits no face in either pass
-
-                    // Adjacent voxel may be vertically out of world or across XZ.
-                    const adjId = (ay < 0 || ay >= N_Y)
-                        ? SOLID_SENTINEL
-                        : this._readXZ(voxels, nbr, ax, ay, az);
-
-                    const solidSrc = solid[id] === 1;
-                    const solidAdj = solid[adjId] === 1;
-
-                    if (solidSrc) {
-                        if (!solidAdj) mask[rowBase + v] = id;
-                    } else if (adjId === 0) {
-                        // Transparent (non-solid, non-air) against air.
-                        maskT[rowBase + v] = id;
+            // Every cell in range is written, so the masks need no clearing.
+            let anyO = 0, anyT = 0;
+            const base = f * sF;
+            for (let o = oLo; o <= oHi; o++) {
+                let src  = base + o * oS + iLo * iS;
+                let cell = o * oC + iLo * iC;
+                for (let i = iLo; i <= iHi; i++, src += iS, cell += iC) {
+                    const id = voxels[src];
+                    let m = 0, mt = 0;
+                    // Air emits no face in either pass; a deformed Mesh voxel is
+                    // drawn by the smooth pass instead.
+                    if (id !== 0 && (skip === null || skip[src] === 0)) {
+                        const adjId = adj[src + shift];
+                        if (solid[id] === 1) {
+                            if (occ[adjId] !== 1) m = id;
+                        } else if (adjId === 0) {
+                            // Transparent (non-solid, non-air) against air.
+                            mt = id;
+                        }
                     }
+                    mask[cell]  = m;
+                    maskT[cell] = mt;
+                    anyO |= m;
+                    anyT |= mt;
                 }
             }
 
-            this._greedyMerge(mask,  f, faceAxis, uAxis, vAxis, nU, nV, uLo, uHi, vLo, vHi, positive, ni, opaque);
-            this._greedyMerge(maskT, f, faceAxis, uAxis, vAxis, nU, nV, uLo, uHi, vLo, vHi, positive, ni, transp);
+            // Most slices have no transparent faces at all, many no opaque ones.
+            if (anyO !== 0) this._greedyMerge(mask,  f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, opaque);
+            if (anyT !== 0) this._greedyMerge(maskT, f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, transp);
         }
     }
 
-    _greedyMerge(mask, depth, faceAxis, uAxis, vAxis, nU, nV, uLo, uHi, vLo, vHi, positive, ni, sink) {
-        const done = this._doneFor(nU * nV);
+    /**
+     * Merge one slice's mask into rectangles and emit a quad for each. Cells a
+     * rectangle consumes are zeroed in the mask itself (it is rebuilt for the
+     * next slice anyway), so no separate "done" table is needed.
+     */
+    _greedyMerge(mask, depth, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, sink) {
         const brightness = FACE_BRIGHTNESS[ni];
         const colors = this._colors;
         const layerTable = ni === 2 ? this._layerTop : ni === 3 ? this._layerBottom : this._layerSide;
+        const faceOffset = positive ? depth + 1 : depth;
 
         const posArr = sink.pos, colArr = sink.col, uvArr = sink.uv, layArr = sink.lay, idxArr = sink.idx;
 
@@ -347,28 +389,26 @@ export class GreedyMesher {
             for (let v = vLo; v <= vHi; v++) {
                 const cell = rowBase + v;
                 const startId = mask[cell];
-                if (!startId || done[cell]) continue;
+                if (startId === 0) continue;
 
                 // Grow rectangle: expand v first, then u
                 let vW = 1;
-                while (v + vW <= vHi &&
-                       mask[cell + vW] === startId &&
-                       !done[cell + vW]) vW++;
+                while (v + vW <= vHi && mask[cell + vW] === startId) vW++;
 
                 let uW = 1;
                 expand_u:
                 while (u + uW <= uHi) {
                     const probe = (u + uW) * nV + v;
                     for (let k = 0; k < vW; k++) {
-                        if (mask[probe + k] !== startId || done[probe + k]) break expand_u;
+                        if (mask[probe + k] !== startId) break expand_u;
                     }
                     uW++;
                 }
 
                 // Mark cells consumed
                 for (let uu = 0; uu < uW; uu++) {
-                    const base = (u + uu) * nV + v;
-                    for (let vv = 0; vv < vW; vv++) done[base + vv] = 1;
+                    const c0 = (u + uu) * nV + v;
+                    for (let vv = 0; vv < vW; vv++) mask[c0 + vv] = 0;
                 }
 
                 const layer = layerTable[startId];
@@ -385,33 +425,42 @@ export class GreedyMesher {
                     b = colors[cbase + 2] * brightness;
                 }
 
-                // Build the 4 quad corners directly into the position buffer.
-                const faceOffset = positive ? depth + 1 : depth;
-                const base = (posArr.n / 3) | 0;
+                // The 4 quad corners, at (u, v) offsets (0,0) (uW,0) (uW,vW) (0,vW).
+                // faceAxis / uAxis / vAxis are a permutation of 0,1,2, so each
+                // lands in its own component slot.
+                const u1 = u + uW, v1 = v + vW;
+                let n = posArr.n;
+                const base = (n / 3) | 0;
+                const pa = posArr.reserve(12);
+                pa[n + faceAxis] = faceOffset; pa[n + uAxis] = u;  pa[n + vAxis] = v;  n += 3;
+                pa[n + faceAxis] = faceOffset; pa[n + uAxis] = u1; pa[n + vAxis] = v;  n += 3;
+                pa[n + faceAxis] = faceOffset; pa[n + uAxis] = u1; pa[n + vAxis] = v1; n += 3;
+                pa[n + faceAxis] = faceOffset; pa[n + uAxis] = u;  pa[n + vAxis] = v1; n += 3;
+                posArr.n = n;
 
-                // Corner (u, v) offsets, in order 0..3
-                const cu = [0, uW, uW, 0];
-                const cv = [0, 0, vW, vW];
-                for (let i = 0; i < 4; i++) {
-                    let px = 0, py = 0, pz = 0;
-                    // faceAxis / uAxis / vAxis are always a permutation of 0,1,2
-                    if (faceAxis === 0) px = faceOffset; else if (faceAxis === 1) py = faceOffset; else pz = faceOffset;
-                    const uVal = u + cu[i], vVal = v + cv[i];
-                    if (uAxis === 0) px = uVal; else if (uAxis === 1) py = uVal; else pz = uVal;
-                    if (vAxis === 0) px = vVal; else if (vAxis === 1) py = vVal; else pz = vVal;
-                    posArr.push3(px, py, pz);
-                    colArr.push3(r, g, b);
-                    layArr.push1(layer);
-                }
+                n = colArr.n;
+                const ca = colArr.reserve(12);
+                for (let i = 0; i < 4; i++, n += 3) { ca[n] = r; ca[n + 1] = g; ca[n + 2] = b; }
+                colArr.n = n;
+
+                n = layArr.n;
+                const la = layArr.reserve(4);
+                la[n] = layer; la[n + 1] = layer; la[n + 2] = layer; la[n + 3] = layer;
+                layArr.n = n + 4;
 
                 // UV: tile once per block across both axes — shader uses fract() for repeating.
                 // For ±X faces (faceAxis=0): uAxis=Y (vertical), vAxis=Z (horizontal).
                 // Swap so UV.x maps to Z (horizontal on face) and UV.y maps to Y (vertical).
+                n = uvArr.n;
+                const ua = uvArr.reserve(8);
                 if (faceAxis === 0) {
-                    uvArr.push2(0, 0); uvArr.push2(0, uW); uvArr.push2(vW, uW); uvArr.push2(vW, 0);
+                    ua[n]     = 0;  ua[n + 1] = 0;  ua[n + 2] = 0;  ua[n + 3] = uW;
+                    ua[n + 4] = vW; ua[n + 5] = uW; ua[n + 6] = vW; ua[n + 7] = 0;
                 } else {
-                    uvArr.push2(0, 0); uvArr.push2(uW, 0); uvArr.push2(uW, vW); uvArr.push2(0, vW);
+                    ua[n]     = 0;  ua[n + 1] = 0;  ua[n + 2] = uW; ua[n + 3] = 0;
+                    ua[n + 4] = uW; ua[n + 5] = vW; ua[n + 6] = 0;  ua[n + 7] = vW;
                 }
+                uvArr.n = n + 8;
 
                 if (positive) {
                     idxArr.push6(base, base + 1, base + 2, base, base + 2, base + 3);
@@ -423,16 +472,6 @@ export class GreedyMesher {
                 v += vW - 1;
             }
         }
-    }
-
-    /** Reusable `done` scratch, grown on demand and cleared per slice. */
-    _doneFor(size) {
-        if (!this._done || this._done.length < size) {
-            this._done = new Uint8Array(size);
-        } else {
-            this._done.fill(0, 0, size);
-        }
-        return this._done;
     }
 
     _faceColor(block, ni) {

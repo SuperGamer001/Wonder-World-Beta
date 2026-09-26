@@ -29,6 +29,12 @@ import { raycast }                           from './engine/Raycast.js';
 import { WaterSimulator }                    from './engine/WaterSimulator.js';
 import { EntityManager }                     from './engine/EntityManager.js';
 import { CraftingSystem }                    from './engine/CraftingSystem.js';
+import { SmoothTerrain }                     from './engine/SmoothShape.js';
+import { ShadowMapper, SHADOW_LAYER, SHADOW_GLSL } from './Shadows.js';
+import { SKY_MAX, SKY_FALLOFF, SKY_MIN, SUN_DIR, SUN_AMBIENT } from './engine/Sun.js';
+import { Particles, PARTICLE_LEVELS }        from './Particles.js';
+import { Atmosphere }                        from './Atmosphere.js';
+import { ATMOS_GLSL }                        from './AtmosGLSL.js';
 
 // The page is served by the game server itself, so derive both URLs from the
 // current origin. The server now binds an OS-assigned port (a fixed 3000 meant
@@ -65,6 +71,15 @@ let _entities    = null;
 let _crafting    = null;
 let _autoSaveTimer = null;
 let _wasLocked     = false;
+
+// Hidden per-world setting: 'smooth' (the default for new worlds) or 'blocky'.
+// Read once from the world's metadata when the world starts loading and fixed
+// for the session — it decides which mesher the workers build and which
+// collision the player uses, neither of which can be swapped under a running
+// world. 'blocky' below is only the no-world / unrecorded fallback; new worlds
+// get their style from TERRAIN_STYLE in server/server.js.
+let _terrainStyle  = 'blocky';
+let _smooth        = null;   // SmoothTerrain collider — smooth worlds only
 
 // ── Materials ─────────────────────────────────────────────────────────────────
 
@@ -150,47 +165,143 @@ const BLOCK_FACE_MAP = {
 // custom ShaderMaterial gets no fog from Three.js automatically, and without it
 // chunks pop in hard at the render-distance edge, which is what forced the very
 // long default view distance.
+//
+// Leaves sway in the wind (uWind, from the weather). The displacement depends
+// only on world position, so corners shared by neighbouring quads move together
+// and the canopy never cracks apart. Chunk meshes are only translated, so the
+// offset can be added to the local position directly. The shadow depth pass
+// does not sway — shadows of leaves stay put, which reads fine.
 const CHUNK_VERT = `
 in vec3  color;
 in float layer;
+uniform vec4  uWind;
+uniform float uTime;
+uniform float uSwayLayer;
 
 out vec3  vColor;
 out vec2  vUV;
 out float vLayer;
 out float vDepth;
+out vec3  vWorldPos;
 
 void main() {
+    vec3 pos = position;
+    vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
+    if (abs(layer - uSwayLayer) < 0.5) {
+        float s = length(uWind.xy);
+        vec2 dir = s > 0.01 ? uWind.xy / s : vec2(0.7071);
+        float lean = min(s / 10.0, 1.0);
+        float ph = dot(vWorldPos, vec3(0.37, 0.21, 0.29));
+        float amp = min(0.025 + 0.012 * s, 0.28) * (1.0 + uWind.z);
+        float wave = sin(uTime * (1.5 + 0.07 * s) + ph) * 0.65 + sin(uTime * 3.3 + ph * 1.7) * 0.35;
+        vec3 off = vec3(dir.x * (wave + 0.6 * lean), wave * 0.3, dir.y * (wave + 0.6 * lean)) * amp;
+        pos += off;
+        vWorldPos += off;
+    }
     vColor  = color;
     vUV     = uv;
     vLayer  = layer;
-    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
     vDepth  = -mv.z;
     gl_Position = projectionMatrix * mv;
 }
 `;
 
-// Shared fragment tail: fog, then the display adjustments that used to be a CSS
-// filter on <body>. Running them here costs a few ALU ops instead of forcing the
-// whole page — canvas included — through an extra compositing pass every frame.
+// Shared fragment tail: lighting (Atmosphere/DayCycle), weather on the surface,
+// fog, then the display adjustments that used to be a CSS filter on <body>.
+// Running those here costs a few ALU ops instead of forcing the whole page —
+// canvas included — through an extra compositing pass every frame.
+const _v3 = (v) => `vec3(${v.map(x => x.toFixed(6)).join(', ')})`;
 const CHUNK_COMMON = `
 precision highp sampler2DArray;
+precision highp sampler3D;
 uniform sampler2DArray uTex;
-uniform vec3  uFogColor;
+uniform sampler3D uLight;        // this chunk's sky light (see _setChunkLight)
+uniform vec3  uLightOrigin;      // world position of the light volume's corner
+uniform vec3  uLightSize;        // its size in blocks
 uniform float uFogNear;
 uniform float uFogFar;
 uniform float uBrightness;
 uniform int   uColorMode;   // 0 none, 1 protanopia, 2 deuteranopia, 3 tritanopia
+${ATMOS_GLSL}
 
 in vec3  vColor;
 in vec2  vUV;
 in float vLayer;
 in float vDepth;
+in vec3  vWorldPos;
 
 out vec4 fragColor;
 
+// Normal of the visible side of the surface, from screen-space derivatives (the
+// chunk meshes carry no normals). Flipped toward the camera, so on double-sided
+// water and leaves it still points into the air the viewer is looking through.
+vec3 surfaceNormal() {
+    vec3 c = cross(dFdx(vWorldPos), dFdy(vWorldPos));
+    // Degenerate at some triangle edges; a NaN here would read garbage light.
+    float len = length(c);
+    vec3 n = len > 1e-10 ? c / len : vec3(0.0, 1.0, 0.0);
+    return dot(n, cameraPosition - vWorldPos) < 0.0 ? -n : n;
+}
+
+// Sky light level (engine/Sun.js), 0..15: read from the air half a block in
+// front of the surface, interpolated between cells.
+float skyLevel(vec3 n) {
+    return texture(uLight, (vWorldPos + n * 0.5 - uLightOrigin) / uLightSize).r * ${SKY_MAX.toFixed(1)};
+}
+
+${SHADOW_GLSL}
+
+// Shadows of the clouds: follow the light up to the cloud base and ask how
+// much cloud is there — the same field the clouds are drawn from, so the
+// shadows drift across the land under the clouds you can see.
+float cloudShade() {
+    if (uCloudThresh > 1.5 || uSunDir.y < 0.05) return 1.0;
+    vec2 xz = vWorldPos.xz + uSunDir.xz * ((uCloudBase - vWorldPos.y) / uSunDir.y);
+    float n = cloudNoise(xz);
+    return 1.0 - cloudCover(n) * (0.55 + 0.4 * cloudThick(n));
+}
+
+// 0 under cover … 1 under open sky; set by lighting(), read by weatherSurface().
+float gExposed = 1.0;
+
+// The light on this fragment. The meshers baked sunBrightness(n) for the fixed
+// sun in engine/Sun.js into the vertex colour; that is divided back out here and
+// the surface is lit by the real light instead: the sky (uAmbient, tinted by
+// time of day and weather) and the sun or moon (uDirect along uSunDir, blocked
+// by shadows and by clouds). At noon under a clear sky this matches the baked
+// shading. Lightning brightens open ground.
+vec3 lighting(vec3 n) {
+    float lvl = skyLevel(n);
+    float sky = max(pow(${SKY_FALLOFF}, ${SKY_MAX.toFixed(1)} - lvl), ${SKY_MIN});
+    gExposed = smoothstep(12.5, 15.0, lvl);
+    float baked = ${SUN_AMBIENT.toFixed(4)} + ${(1 - SUN_AMBIENT).toFixed(4)} * max(dot(n, ${_v3(SUN_DIR)}), 0.0);
+    float facing = max(dot(n, uSunDir), 0.0);
+    float direct = facing > 0.0 ? facing * sunShadow(n) * cloudShade() : 0.0;
+    vec3 L = (${SUN_AMBIENT.toFixed(4)} * uAmbient + ${(1 - SUN_AMBIENT).toFixed(4)} * direct * uDirect) / baked;
+    return L * sky + vec3(0.8, 0.85, 1.0) * uFlash * gExposed;
+}
+
+// Rain darkens open ground and makes it glint; freezing rain glazes it.
+vec3 weatherSurface(vec3 c, vec3 n) {
+    float wet = uWet * gExposed * (0.5 + 0.5 * smoothstep(-0.2, 0.6, n.y));
+    float ice = uIce * gExposed;
+    c *= 1.0 - 0.28 * wet;
+    c = mix(c, c * 0.85 + vec3(0.10, 0.13, 0.17), ice * 0.6);
+    if (wet + ice > 0.01) {
+        vec3 h = normalize(normalize(cameraPosition - vWorldPos) + uSunDir);
+        c += uDirect * pow(max(dot(n, h), 0.0), 60.0) * (wet * 0.35 + ice * 0.6);
+    }
+    return c;
+}
+
+// Render-distance fog (linear, hides the load edge) or weather fog, whichever
+// is thicker, toward the horizon colour in that direction.
 vec3 applyFog(vec3 c) {
+    vec3 r = vWorldPos - cameraPosition;
     float f = clamp((vDepth - uFogNear) / max(uFogFar - uFogNear, 0.001), 0.0, 1.0);
-    return mix(c, uFogColor, f);
+    f = max(f, weatherFog(cameraPosition, r));
+    return mix(c, fogColorFor(normalize(r)), f);
 }
 
 // Cheap saturate + hue-rotate, matching the previous CSS filter values.
@@ -214,24 +325,26 @@ vec3 grade(vec3 c) { return applyColorMode(applyFog(c) * uBrightness); }
 
 const CHUNK_FRAG = CHUNK_COMMON + `
 void main() {
+    vec3 n = surfaceNormal();
     if (vLayer >= 0.0) {
         vec4 t = texture(uTex, vec3(fract(vUV.x), fract(vUV.y), floor(vLayer + 0.5)));
         if (t.a < 0.1) discard;
-        fragColor = vec4(grade(t.rgb * vColor.r), t.a);
+        fragColor = vec4(grade(weatherSurface(t.rgb * vColor.r * lighting(n), n)), t.a);
     } else {
-        fragColor = vec4(grade(vColor), 1.0);
+        fragColor = vec4(grade(weatherSurface(vColor * lighting(n), n)), 1.0);
     }
 }
 `;
 
 const CHUNK_TRANSP_FRAG = CHUNK_COMMON + `
 void main() {
+    vec3 n = surfaceNormal();
     if (vLayer >= 0.0) {
         vec4 t = texture(uTex, vec3(fract(vUV.x), fract(vUV.y), floor(vLayer + 0.5)));
         if (t.a < 0.05) discard;
-        fragColor = vec4(grade(t.rgb * vColor.r), t.a * 0.72);
+        fragColor = vec4(grade(t.rgb * vColor.r * lighting(n)), t.a * 0.72);
     } else {
-        fragColor = vec4(grade(vColor), 0.72);
+        fragColor = vec4(grade(vColor * lighting(n)), 0.72);
     }
 }
 `;
@@ -360,8 +473,9 @@ const SKY_COLOR = 0x87CEEB;
 const CAMERA_FAR = 4096;
 
 // Fog range as a fraction of the loaded radius.
-const FOG_START = 0.75;   // fully clear inside this
+const FOG_START = 0.75;   // fully clear inside this (default; the Fog Distance graphics setting)
 const FOG_END   = 1.00;   // fully fogged at the edge of the loaded area
+let _fogStart   = FOG_START;
 
 // Shared by both chunk materials so a single write updates the whole terrain.
 let chunkUniforms = null;
@@ -372,12 +486,19 @@ function _createChunkMaterials(texArray) {
     _blockTexArray = texArray;
     chunkUniforms = {
         uTex:        { value: texArray },
-        uFogColor:   { value: new THREE.Color(SKY_COLOR) },
         uFogNear:    { value: 160 },
         uFogFar:     { value: 280 },
         uBrightness: { value: 1.0 },
         uColorMode:  { value: 0 },
+        // Texture layer that sways in the wind (leaves).
+        uSwayLayer:  { value: BLOCK_FACE_MAP[7]?.top ?? -10 },
+        // Shared with the shadow mapper, so a Shadows change reaches all terrain.
+        ..._shadows.uniforms,
+        // Shared with the atmosphere: time of day, weather, fog, clouds.
+        ..._atmos.uniforms,
     };
+    // Water and ice never cast shadows.
+    _shadows.setTextures(texArray, [BLOCK_FACE_MAP[5]?.top, BLOCK_FACE_MAP[13]?.top]);
 
     opaqueMaterial = new THREE.ShaderMaterial({
         glslVersion:  THREE.GLSL3,
@@ -417,15 +538,17 @@ function _applyViewDistance() {
     // fade earlier hid a lot of world the player had already paid to generate.
     // Ending it exactly at `blocks` still covers the load boundary, because a
     // chunk's far corners sit past its centre distance.
-    const near = blocks * FOG_START;
+    const near = blocks * Math.min(_fogStart, FOG_END - 0.02);
     const far  = blocks * FOG_END;
 
     if (chunkUniforms) {
         chunkUniforms.uFogNear.value = near;
         chunkUniforms.uFogFar.value  = far;
     }
-    // Entities use Lambert materials and still read scene.fog.
+    // Entities use Lambert materials and still read scene.fog. The atmosphere
+    // pulls it in further each frame when the weather is foggy.
     if (scene?.fog) { scene.fog.near = near; scene.fog.far = far; }
+    if (_atmos) { _atmos.baseFogNear = near; _atmos.baseFogFar = far; }
 
     // camera.far is deliberately NOT touched here. It is a fixed CAMERA_FAR set
     // once at camera creation. Scaling it with render distance clipped the far
@@ -503,7 +626,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('gameCanvas');
 
     scene            = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB);
+    scene.background = new THREE.Color(SKY_COLOR);
     scene.fog        = new THREE.Fog(0x87CEEB, 160, 280);
 
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, CAMERA_FAR);
@@ -544,6 +667,16 @@ document.addEventListener('DOMContentLoaded', () => {
     _selMesh = new THREE.LineSegments(boxEdges, selectionMaterial);
     _selMesh.visible = false;
     scene.add(_selMesh);
+
+    _shadows = new ShadowMapper(renderer, BLOCK_TEX_LAYERS.length);
+    _shadows.setLevel(_gfx.shadows);
+    _atmos = new Atmosphere(scene);
+    _atmos.setSkyMode(_gfx.sky);
+    _atmos.setCloudLevel(_gfx.clouds);
+    _atmos.setParticleScale(PARTICLE_LEVELS[_gfx.particles] ?? 0.6);
+    _atmos.setVolume(_gfx.weatherVolume);
+    _atmos.setReduceMotion(_gfx.reduceMotion);
+    _atmos.onStrike = _onLightningStrike;
 });
 
 // ── World load event ──────────────────────────────────────────────────────────
@@ -551,10 +684,12 @@ document.addEventListener('DOMContentLoaded', () => {
 document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     const {
         gamepackData = {}, worldId = null, worldSeed = null,
-        playerPos = null, gameMode = 'SURVIVAL',
+        playerPos = null, gameMode = 'SURVIVAL', terrainStyle = 'blocky',
+        daylightCycle = true, weather = 'dynamic',
     } = e.data ?? {};
 
     _gameMode = gameMode;
+    _terrainStyle = terrainStyle === 'smooth' ? 'smooth' : 'blocky';
 
     // Reset survivals stats to safe defaults; will be overwritten by saved state below.
     me.health = 100;
@@ -568,7 +703,9 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     worldState = new WorldState();
     if (worldSeed != null) worldState.seed = worldSeed;
 
+    _smooth    = _terrainStyle === 'smooth' ? new SmoothTerrain(worldState, _blockReg) : null;
     _physics   = new PlayerPhysics(worldState, _blockReg);
+    _physics.smooth = _smooth;
     _inventory = new Inventory(100);
     _inventory.setItemRegistry(_itemReg);
 
@@ -577,6 +714,17 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     _crafting.loadRecipes(gamepackData.recipes ?? []);
 
     _entities = new EntityManager(worldState, _blockReg, _itemReg, scene);
+    // Mobs are lit by the sky light where they stand and by the time of day.
+    _entities.lightAt = (x, y, z) => _skyBrightnessAt(x, y, z) * (_atmos?.mobLight ?? 1);
+    _particles = new Particles(scene, (x, y, z) => {
+        const id = worldState?.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) ?? 0;
+        if (id === 0 || _blockReg.isNoCollision(id)) return false;
+        return _smooth?.isMesh(id) ? _smooth.pointInMesh(x, y, z) : true;
+    });
+    _particles.setLevel(_gfx.particles);
+    _particles.wind = _atmos.wind;      // debris blows in the weather's wind
+    _savedAtmos = null;
+    _entities.smooth = _smooth;
     _entities.loadEntityTypes(gamepackData.entities ?? []);
     _entities.setBiomeData(gamepackData.biomes ?? []);
 
@@ -594,12 +742,14 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
         blockRegistry: _blockReg.serialize(),
         biomes:        gamepackData.biomes ?? [],
         blockFaceMap:  BLOCK_FACE_MAP,
+        terrainStyle:  _terrainStyle,
     });
 
     chunkManager = new ChunkManager(worldState, workerPool, _renderDist);
     chunkManager.worldId = worldId;
+    chunkManager.smooth  = _terrainStyle === 'smooth';
     chunkManager.onMeshReady        = _onMeshReady;
-    chunkManager.onPartialMeshReady = _onPartialMeshReady;
+    chunkManager.onLightReady       = _onLightReady;
     chunkManager.onChunkUnload      = _onChunkUnload;
 
     if (worldId) {
@@ -621,11 +771,19 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
             if (res.ok) {
                 const state = await res.json();
                 if (state) _applyPlayerState(state);
+                _savedAtmos = state?.atmosphere ?? null;
             }
         } catch { /* server offline */ }
     }
 
     if (!_physics) return; // guard if quitWorld raced
+
+    // Time of day and weather: carried on from the save, with the world's
+    // Daylight Cycle and Weather settings from its world.json.
+    _atmos.startWorld({
+        seed: worldState.seed, biomes: gamepackData.biomes ?? [], world: worldState, smooth: _smooth,
+        saved: _savedAtmos, daylightCycle, weather,
+    });
 
     // _disposeAll() removes the selection mesh from the scene; re-add it here.
     if (_selMesh && !scene.children.includes(_selMesh)) scene.add(_selMesh);
@@ -656,7 +814,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     chunkManager.ready = true;
 
     console.log('[world] Loaded — seed:', worldState.seed, '— mode:', _gameMode,
-                '— workers:', workerPool.workerCount);
+                '— terrain:', _terrainStyle, '— workers:', workerPool.workerCount);
 });
 
 function _applyPlayerState(state) {
@@ -685,6 +843,9 @@ document.addEventListener('WorldJS_quitWorld', () => {
     // Release mob geometries, sprite materials and item textures before the
     // scene is torn down; these are GPU-side and are not reclaimed by GC alone.
     _entities?.dispose();
+    _particles?.dispose();
+    _particles = null;
+    _atmos?.endWorld();
     _disposeAll();
 
     chunkManager = null;
@@ -701,6 +862,8 @@ document.addEventListener('WorldJS_quitWorld', () => {
     // Do NOT call renderer.dispose() — it destroys the WebGL context and makes
     // the renderer unusable for the next world load in the same session.
     _blockReg = _itemReg = _physics = _inventory = _water = _entities = _crafting = null;
+    _smooth = null;
+    _terrainStyle = 'blocky';
 
     // Drop the HUD's cached handles and last-written values so the next world
     // starts from a clean slate rather than skipping writes that look unchanged.
@@ -718,6 +881,7 @@ document.addEventListener('WorldJS_tick', (e) => {
     if (!_loadGateDone) _reportLoadGate();
 
     const dt = Math.min(e.data?.dt ?? 0.016, 0.1);
+    _paused = !!e.data?.paused;
 
     const isLocked = !!document.pointerLockElement;
     if (_wasLocked && !isLocked) { _saveAll(); _savePlayerState(); }
@@ -755,6 +919,7 @@ document.addEventListener('WorldJS_tick', (e) => {
         rightDir,
     };
 
+    _applyWeatherToPlayer();
     const result = _physics.update(me.position, input, dt, _gameMode, {
         hunger: me.hunger, energy: me.energy,
     });
@@ -766,6 +931,7 @@ document.addEventListener('WorldJS_tick', (e) => {
 
     _checkSuffocation(dt);
     _water.tick(dt, (cx, cz) => chunkManager?.markDirty(cx, cz));
+    _particles?.update(dt);
     _entities.update(dt, me.position, _inventory, _gameMode);
 
     // Raycast for block targeting
@@ -853,6 +1019,20 @@ let _sensMult  = 1.0;
 let _invertY   = false;
 let _baseFov   = 75;
 let _renderDist = 8;
+
+// Graphics settings for the effect modules (Shadows.js, Atmosphere.js, Particles.js).
+// Kept here because the modules are created later than settings first arrive.
+const _gfx = {
+    shadows: 'off', clouds: 'fast', particles: 'medium', sky: 'simple',
+    weatherVolume: 0.8, reduceMotion: false,
+};
+let _shadows   = null;   // ShadowMapper — lives as long as the renderer
+let _atmos     = null;   // Atmosphere (day cycle, weather, sky, clouds) — likewise
+let _particles = null;   // Particles — per world
+let _savedAtmos = null;  // the atmosphere part of the loaded player state
+let _paused    = false;  // the pause menu is up: the clock and the weather stand still
+
+
 document.addEventListener('WorldJS_applySettings', (e) => {
     const s = e.data ?? {};
     if (s.sensitivity != null) _sensMult = s.sensitivity;
@@ -870,6 +1050,29 @@ document.addEventListener('WorldJS_applySettings', (e) => {
     if (s.brightness != null || s.colorblind != null) {
         _applyDisplaySettings(s.brightness, s.colorblind);
     }
+    if (s.shadows != null)   { _gfx.shadows = s.shadows;     _shadows?.setLevel(s.shadows); }
+    if (s.clouds != null)    { _gfx.clouds = s.clouds;       _atmos?.setCloudLevel(s.clouds); }
+    if (s.sky != null)       { _gfx.sky = s.sky;             _atmos?.setSkyMode(s.sky); }
+    if (s.particles != null) {
+        _gfx.particles = s.particles;
+        _particles?.setLevel(s.particles);
+        _atmos?.setParticleScale(PARTICLE_LEVELS[s.particles] ?? PARTICLE_LEVELS.medium);
+    }
+    if (s.weatherVolume != null) { _gfx.weatherVolume = s.weatherVolume; _atmos?.setVolume(s.weatherVolume); }
+    if (s.reduceMotion != null)  { _gfx.reduceMotion = !!s.reduceMotion; _atmos?.setReduceMotion(s.reduceMotion); }
+    if (s.fogStart != null) {
+        _fogStart = s.fogStart;
+        _applyViewDistance();
+    }
+});
+
+// World Settings → Daylight Cycle / Weather / Time of Day, applied live.
+document.addEventListener('WorldJS_setAtmosphere', (e) => {
+    const d = e.data ?? {};
+    if (!_atmos) return;
+    if (d.daylightCycle != null) _atmos.setDaylightCycle(d.daylightCycle);
+    if (d.weather != null)       _atmos.setWeatherMode(d.weather, !!d.immediate);
+    if (Number.isFinite(d.hours)) _atmos.setHours(d.hours);
 });
 
 document.addEventListener('mousedown', (e) => {
@@ -996,6 +1199,11 @@ function _handleBreaking(dt, hit) {
 function _breakBlock(hit, hasCorrectTool = true) {
     if (!worldState || !chunkManager) return;
     const block = _blockReg.get(hit.blockId);
+    // Debris takes the light of the air it flies into, so it is dark in a cave.
+    const lit = _skyBrightnessAt(hit.x + 0.5 + (hit.face?.x ?? 0), hit.y + 0.5 + (hit.face?.y ?? 1), hit.z + 0.5 + (hit.face?.z ?? 0));
+    const rgb = block.topColor ?? block.color ?? [0.5, 0.5, 0.5];
+    const dl = lit * (_atmos?.mobLight ?? 1);
+    _particles?.burst(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, [rgb[0] * dl, rgb[1] * dl, rgb[2] * dl]);
     worldState.setBlock(hit.x, hit.y, hit.z, 0);
     chunkManager.markEdited(hit.x, hit.z);
 
@@ -1226,6 +1434,7 @@ function _mineableHeadBlock() {
     const id = worldState.getBlock(hx, hy, hz);
     if (id <= 0) return null;
     if (_blockReg.isTransparent(id) || _blockReg.isLiquid(id)) return null;
+    if (!_headInside(id)) return null;
     return { x: hx, y: hy, z: hz, blockId: id, face: { x: 0, y: 1, z: 0 } };
 }
 
@@ -1246,7 +1455,8 @@ function _checkSuffocation(dt) {
     const camZ = Math.floor(me.position.z);
     const headId = worldState?.getBlock(camX, camY, camZ) ?? 0;
 
-    const inSolid = headId > 0 && !_blockReg?.isTransparent(headId) && !_blockReg?.isLiquid(headId);
+    const inSolid = headId > 0 && !_blockReg?.isTransparent(headId) && !_blockReg?.isLiquid(headId)
+                 && _headInside(headId);
 
     if (inSolid) {
         if (overlayEl) {
@@ -1269,6 +1479,13 @@ function _checkSuffocation(dt) {
         _suffocateTimer = 0;
         if (overlayEl) overlayEl.classList.add('hidden');
     }
+}
+
+// In a smooth world the head can be in a Mesh block's voxel yet above its
+// sloped surface — only count it when the eye point is inside the shape.
+function _headInside(id) {
+    if (!_smooth?.isMesh(id)) return true;
+    return _smooth.pointInMesh(me.position.x, me.position.y + CAMERA_HEIGHT, me.position.z);
 }
 
 // CSS rgb() string for a block's base colour (fallback when no texture exists).
@@ -1536,48 +1753,119 @@ function _updateCamera() {
 
 // ── Mesh callbacks ─────────────────────────────────────────────────────────────
 
-function _onMeshReady(cx, cz, yGeo, xzGeo) {
+// ── Sky light ────────────────────────────────────────────────────────────────
+// Each chunk's light (workers/Skylight.js) is a small 3D texture, so each chunk
+// has its own pair of materials. They share every other uniform object with
+// chunkUniforms, so fog, brightness and shadows still update all terrain at once.
+const chunkLights = new Map();   // key → { data, y0, h, tex, uniforms, opaque, transparent }
+const LIGHT_W = CHUNK_SIZE + 2;  // the light volume has a one-block border
+
+// Until a chunk's light arrives it is treated as open sky.
+function _fullLightTexture() {
+    const tex = new THREE.Data3DTexture(new Uint8Array([255]), 1, 1, 1);
+    tex.format = THREE.RedFormat;
+    tex.needsUpdate = true;
+    return tex;
+}
+
+function _chunkLight(key, cx, cz) {
+    let e = chunkLights.get(key);
+    if (e) return e;
+    const uniforms = {
+        ...chunkUniforms,
+        uLight:       { value: _fullLightTexture() },
+        uLightOrigin: { value: new THREE.Vector3(cx * CHUNK_SIZE - 1, WORLD_MIN_Y, cz * CHUNK_SIZE - 1) },
+        uLightSize:   { value: new THREE.Vector3(1, 1, 1) },
+    };
+    e = {
+        data: null, y0: 0, h: 0, tex: uniforms.uLight.value, uniforms,
+        opaque: new THREE.ShaderMaterial({
+            glslVersion: THREE.GLSL3, uniforms,
+            vertexShader: CHUNK_VERT, fragmentShader: CHUNK_FRAG,
+        }),
+        transparent: new THREE.ShaderMaterial({
+            glslVersion: THREE.GLSL3, uniforms,
+            vertexShader: CHUNK_VERT, fragmentShader: CHUNK_TRANSP_FRAG,
+            transparent: true, depthWrite: false, side: THREE.DoubleSide,   // see _createChunkMaterials
+        }),
+    };
+    chunkLights.set(key, e);
+    return e;
+}
+
+function _setChunkLight(key, cx, cz, light) {
+    if (!light) return;
+    const e = _chunkLight(key, cx, cz);
+    const tex = new THREE.Data3DTexture(light.data, LIGHT_W, light.h, LIGHT_W);
+    tex.format    = THREE.RedFormat;
+    tex.type      = THREE.UnsignedByteType;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.unpackAlignment = 1;
+    tex.needsUpdate = true;
+    e.tex.dispose();
+    e.tex = tex;
+    e.data = light.data; e.y0 = light.y0; e.h = light.h;
+    e.uniforms.uLight.value = tex;
+    e.uniforms.uLightOrigin.value.y = WORLD_MIN_Y + light.y0;
+    e.uniforms.uLightSize.value.set(LIGHT_W, light.h, LIGHT_W);
+}
+
+function _disposeChunkLight(key) {
+    const e = chunkLights.get(key);
+    if (!e) return;
+    e.tex.dispose(); e.opaque.dispose(); e.transparent.dispose();
+    chunkLights.delete(key);
+}
+
+/**
+ * Brightness of sky light at a world point, 0..1 — for things drawn without the
+ * chunk shader (mobs, debris). Open sky where no light has arrived yet.
+ */
+function _skyBrightnessAt(x, y, z) {
+    const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+    const cx = bx >> 4, cz = bz >> 4;
+    const e = chunkLights.get(WorldState.key(cx, cz));
+    if (!e?.data) return 1;
+    const ly = by - WORLD_MIN_Y - e.y0;
+    if (ly >= e.h) return 1;
+    if (ly < 0) return SKY_MIN;
+    const lx = bx - cx * CHUNK_SIZE + 1, lz = bz - cz * CHUNK_SIZE + 1;
+    const level = e.data[lx + ly * LIGHT_W + lz * LIGHT_W * e.h] / 255 * SKY_MAX;
+    return Math.max(Math.pow(SKY_FALLOFF, SKY_MAX - level), SKY_MIN);
+}
+
+function _onLightReady(cx, cz, light) {
+    _setChunkLight(WorldState.key(cx, cz), cx, cz, light);
+}
+
+// A chunk is one opaque and one transparent mesh (either may be absent), so it
+// costs at most two draw calls — two more with shadows on.
+function _onMeshReady(cx, cz, geo, light) {
     const key    = WorldState.key(cx, cz);
-    const worldX = cx * CHUNK_SIZE;
-    const worldZ = cz * CHUNK_SIZE;
+    _atmos?.invalidateColumn(cx, cz);   // blocks changed: where rain stops has too
     _removeMeshes(key);
-    const entry = { opaqueY: null, opaqueXZ: null, transpY: null, transpXZ: null };
-    _attachGeo(entry, yGeo,  worldX, worldZ, 'Y');
-    _attachGeo(entry, xzGeo, worldX, worldZ, 'XZ');
+    _setChunkLight(key, cx, cz, light);
+    const entry = { opaque: null, transparent: null, key, cx, cz };
+    const mats  = _chunkLight(key, cx, cz);
+    if (geo.positions.length > 0) {
+        entry.opaque = _addChunkMesh(_buildGeometry(geo, false), mats.opaque, cx, cz);
+    }
+    if (geo.transparentPositions.length > 0) {
+        // Leaves cast shadows; water and ice are skipped in the depth pass.
+        entry.transparent = _addChunkMesh(_buildGeometry(geo, true), mats.transparent, cx, cz);
+    }
     chunkMeshes.set(key, entry);
 }
 
-function _onPartialMeshReady(cx, cz, xzGeo) {
-    const key   = WorldState.key(cx, cz);
-    const entry = chunkMeshes.get(key);
-    if (!entry) return;
-    const worldX = cx * CHUNK_SIZE;
-    const worldZ = cz * CHUNK_SIZE;
-    for (const m of [entry.opaqueXZ, entry.transpXZ]) {
-        if (!m) continue;
-        scene.remove(m);
-        m.geometry.dispose();
-    }
-    entry.opaqueXZ = null;
-    entry.transpXZ = null;
-    _attachGeo(entry, xzGeo, worldX, worldZ, 'XZ');
-}
+function _onChunkUnload(key) { _removeMeshes(key); _disposeChunkLight(key); }
 
-function _onChunkUnload(key) { _removeMeshes(key); }
-
-function _attachGeo(entry, geo, worldX, worldZ, suffix) {
-    if (geo.positions.length > 0) {
-        const mesh = new THREE.Mesh(_buildGeometry(geo, false), opaqueMaterial);
-        mesh.position.set(worldX, WORLD_MIN_Y, worldZ);
-        scene.add(mesh);
-        entry[`opaque${suffix}`] = mesh;
-    }
-    if (geo.transparentPositions.length > 0) {
-        const mesh = new THREE.Mesh(_buildGeometry(geo, true), transparentMaterial);
-        mesh.position.set(worldX, WORLD_MIN_Y, worldZ);
-        scene.add(mesh);
-        entry[`transp${suffix}`] = mesh;
-    }
+function _addChunkMesh(geometry, material, cx, cz) {
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(cx * CHUNK_SIZE, WORLD_MIN_Y, cz * CHUNK_SIZE);
+    mesh.layers.enable(SHADOW_LAYER);
+    scene.add(mesh);
+    return mesh;
 }
 
 // Reused scratch so the bounding sphere below allocates nothing per chunk.
@@ -1618,7 +1906,7 @@ function _buildGeometry(geo, transparent) {
 function _removeMeshes(key) {
     const entry = chunkMeshes.get(key);
     if (!entry) return;
-    for (const mesh of [entry.opaqueY, entry.opaqueXZ, entry.transpY, entry.transpXZ]) {
+    for (const mesh of [entry.opaque, entry.transparent]) {
         if (!mesh) continue;
         scene.remove(mesh);
         mesh.geometry.dispose();
@@ -1628,6 +1916,7 @@ function _removeMeshes(key) {
 
 function _disposeAll() {
     for (const key of [...chunkMeshes.keys()]) _removeMeshes(key);
+    for (const key of [...chunkLights.keys()]) _disposeChunkLight(key);
     if (_selMesh) { scene.remove(_selMesh); }
     opaqueMaterial?.dispose();
     transparentMaterial?.dispose();
@@ -1713,6 +2002,12 @@ window.__wwDebug = () => {
         programs:   i.programs?.length ?? 0,
         chunks:     worldState?.chunks.size ?? 0,
         renderDist: _renderDist,
+        shadows:    _shadows?.level ?? 'off',
+        clouds:     _atmos?.clouds.level ?? _gfx.clouds,
+        sky:        _atmos?.skyMode ?? _gfx.sky,
+        atmosphere: _atmos?.info() ?? null,
+        particles:  _particles?.level ?? _gfx.particles,
+        terrainStyle: _terrainStyle,
         pixelRatio: renderer.getPixelRatio(),
         cameraFar:  camera?.far ?? null,
         fogNear:    chunkUniforms?.uFogNear.value ?? null,
@@ -1720,8 +2015,35 @@ window.__wwDebug = () => {
     };
 };
 
+// The atmosphere, for poking at weather from the console and in diagnostics.
+window.__wwAtmos = () => _atmos;
+
 /** Draw the scene, then service a pending screenshot request in the same task. */
+let _lastRenderMs = 0;
+
 function _render() {
+    const now = performance.now();
+    const dt  = _lastRenderMs ? Math.min((now - _lastRenderMs) / 1000, 0.1) : 0;
+    _lastRenderMs = now;
+    if (_atmos) {
+        // Sky and fog follow the sky light where the camera is (eased inside the
+        // atmosphere). Underground the sky cannot be seen, and a bright sky
+        // colour would show through the tiniest gap between triangles and fade
+        // distant tunnels to blue instead of into the dark.
+        _atmos.update(dt, {
+            camera, paused: _paused,
+            px: me.position.x, py: me.position.y, pz: me.position.z,
+            skyLight: worldState ? _skyBrightnessAt(camera.position.x, camera.position.y, camera.position.z) : 1,
+            // Clouds fade out a little beyond the terrain fog, never before it.
+            fade: Math.max(_renderDist * CHUNK_SIZE * 1.6, 160),
+            fog: scene.fog, background: scene.background,
+        });
+        _shadows?.setLightDir(_atmos.state.lightDir);
+    }
+    // No direct light (night between moonrise and moonset, or twilight): no
+    // shadow to cast, so skip the depth pass.
+    const directLight = _atmos ? _atmos.state.directStrength > 0.01 : true;
+    if (_shadows?.enabled && chunkUniforms && directLight) _shadows.update(scene, camera.position);
     renderer.render(scene, camera);
     if (_pendingScreenshotWorldId !== null) {
         const worldId = _pendingScreenshotWorldId;
@@ -1756,6 +2078,7 @@ async function _savePlayerState() {
         hunger:   me.hunger,
         energy:   me.energy,
         inventory: _inventory?.toJSON() ?? null,
+        atmosphere: _atmos?.active ? _atmos.toJSON() : null,
     };
     try {
         await fetch(`${SERVER_URL}/api/worlds/${chunkManager.worldId}/player-state`, {
@@ -1764,6 +2087,38 @@ async function _savePlayerState() {
             body: JSON.stringify(state),
         });
     } catch { /* offline */ }
+}
+
+// ── Weather on the player ─────────────────────────────────────────────────────
+
+/**
+ * What the weather does to the player's movement: a tornado's pull, a gale
+ * leaning on them, and ice from freezing rain underfoot. Only out in the open —
+ * shelter (anything overhead) cuts the wind and keeps the ground dry.
+ */
+function _applyWeatherToPlayer() {
+    const ext = _physics.external, pu = _atmos?.push;
+    ext.x = pu?.x ?? 0; ext.y = pu?.y ?? 0; ext.z = pu?.z ?? 0;
+    _physics.slip = 0;
+    if (!_atmos || _gameMode === 'SPECTATOR') return;
+    const p = me.position;
+    const open = _skyBrightnessAt(p.x, p.y + 1, p.z) >= 0.99;
+    if (!open) return;
+    const w = _atmos.wind, ws = Math.hypot(w[0], w[1]);
+    if (ws > 12) {
+        const k = (ws - 12) / ws * 0.35;
+        ext.x += w[0] * k; ext.z += w[1] * k;
+    }
+    _physics.slip = _atmos.ice;
+}
+
+/** A lightning strike landed at (x, y, z): hurt what is standing next to it. */
+function _onLightningStrike(x, y, z) {
+    if (!worldState || _spawnPending) return;
+    const p = me.position;
+    const d = Math.hypot(p.x - x, (p.y - y) * 0.5, p.z - z);
+    if (d < 4) _applyDamage(4 + Math.round(12 * (1 - d / 4)));
+    _entities?.hitNearest({ x, y, z }, 15, 3);
 }
 
 // ── Direction helpers ─────────────────────────────────────────────────────────

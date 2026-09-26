@@ -236,7 +236,8 @@ function bindEvents() {
     // Settings — every control commits + applies live.
     const settingIds = [
         'settingSensitivity', 'settingInvertY', 'settingFov', 'settingRenderDist',
-        'settingBrightness', 'settingShowCoords', 'settingCrosshair', 'settingShowFps',
+        'settingGraphics', ...Object.values(GRAPHICS_CONTROLS).map(c => c.id),
+        'settingBrightness', 'settingWeatherVolume', 'settingShowCoords', 'settingCrosshair', 'settingShowFps',
         'settingColorblind', 'settingHighContrast', 'settingReduceMotion', 'settingLargeText',
     ];
     for (const id of settingIds) {
@@ -568,17 +569,67 @@ window.addEventListener("beforeunload", (event) => {
 // Player settings are cosmetic / quality-of-life only — they never change game
 // mechanics (those live in per-world settings).
 
+// ── Graphics presets ─────────────────────────────────────────────────────────
+// One choice that sets every graphics-quality option at once. Classic is the
+// game's original look; Custom keeps whatever the player sets by hand, and
+// moving any of these controls switches to it.
+//   fogStart  - fraction of the render distance that stays clear before fog
+//   shadows   - sun shadows: 'off' | 'low' | 'medium' | 'high'   (Shadows.js)
+//   clouds    - 'fast' | 'fancy'                                   (Clouds.js)
+//               No 'off': the weather decides how much cloud there is,
+//               and Fully Clear weather is the cloudless sky.
+//   sky       - 'simple' (flat colour, square sun and moon) | 'pretty' (Sky.js)
+//   particles - 'off' | 'low' | 'medium' | 'high'; also the density of rain,
+//               snow and other weather particles       (Particles.js, Precipitation.js)
+//   maxFps    - frame-rate cap; 0 = unlimited
+const GRAPHICS_PRESETS = {
+    simple:  { renderDistance: 5,  resolutionScale: 0.75, fogStart: 0.65, shadows: 'off',    clouds: 'fast',  sky: 'simple', particles: 'low',    maxFps: 60 },
+    classic: { renderDistance: 8,  resolutionScale: 1.0,  fogStart: 0.75, shadows: 'off',    clouds: 'fast',  sky: 'simple', particles: 'medium', maxFps: 0 },
+    normal:  { renderDistance: 10, resolutionScale: 1.0,  fogStart: 0.80, shadows: 'medium', clouds: 'fast',  sky: 'pretty', particles: 'medium', maxFps: 0 },
+    pro:     { renderDistance: 14, resolutionScale: 1.0,  fogStart: 0.88, shadows: 'high',   clouds: 'fancy', sky: 'pretty', particles: 'high',   maxFps: 0 },
+};
+// The form control for each graphics value, and how to read it. Touching any of
+// them selects Custom. Add a row here (plus its markup) to add an option.
+const GRAPHICS_CONTROLS = {
+    renderDistance:  { id: 'settingRenderDist', type: 'int' },
+    resolutionScale: { id: 'settingResScale',   type: 'num' },
+    fogStart:        { id: 'settingFogDist',    type: 'num' },
+    shadows:         { id: 'settingShadows',    type: 'text' },
+    clouds:          { id: 'settingClouds',     type: 'text' },
+    sky:             { id: 'settingSky',        type: 'text' },
+    particles:       { id: 'settingParticles',  type: 'text' },
+    maxFps:          { id: 'settingMaxFps',     type: 'int' },
+};
+const GRAPHICS_IDS = Object.values(GRAPHICS_CONTROLS).map(c => c.id);
+
+function readGraphicsForm() {
+    const out = {};
+    for (const [key, { id, type }] of Object.entries(GRAPHICS_CONTROLS)) {
+        const raw = document.getElementById(id)?.value;
+        out[key] = type === 'text' ? raw : type === 'int' ? Math.round(parseFloat(raw)) : parseFloat(raw);
+    }
+    return out;
+}
+
+/** The graphics values a settings object selects: a preset, or the custom ones. */
+function resolveGraphics(s) {
+    const g = s.graphics === 'custom'
+        ? { ...GRAPHICS_PRESETS.classic, ...(s.graphicsCustom ?? {}) }
+        : { ...(GRAPHICS_PRESETS[s.graphics] ?? GRAPHICS_PRESETS.classic) };
+    // Custom sets saved while clouds could be turned off.
+    if (g.clouds !== 'fast' && g.clouds !== 'fancy') g.clouds = 'fast';
+    return g;
+}
+
 const DEFAULT_SETTINGS = {
     sensitivity: 1.0,
     invertY: false,
     fov: 75,
-    // 8 chunks rather than 12: chunk fog is now applied in the chunk shader and
-    // scaled to the render distance, so terrain fades out instead of ending in
-    // a hard edge. 8 loads ~2.2x fewer columns and looks better doing it.
-    renderDistance: 8,
-    // Multiplier on the device pixel ratio. Below 1.0 renders fewer pixels and
-    // upscales — the cheapest way to recover frame rate on a high-DPI display.
-    resolutionScale: 1.0,
+    // Render distance and resolution scale now come from the Graphics preset
+    // (GRAPHICS_PRESETS above). Classic keeps the original 8 chunks — fog scales
+    // with render distance, so terrain fades out rather than ending in a hard
+    // edge — and full resolution (below 1.0 renders fewer pixels and upscales,
+    // the cheapest way to recover frame rate on a high-DPI display).
     brightness: 1.0,
     showCoords: true,
     crosshair: true,
@@ -587,17 +638,31 @@ const DEFAULT_SETTINGS = {
     highContrast: false,
     reduceMotion: false,
     largeText: false,
+    graphics: 'classic',    // 'classic' | 'normal' | 'pro' | 'simple' | 'custom'
+    graphicsCustom: null,   // one value per GRAPHICS_CONTROLS key
+    weatherVolume: 0.8,     // rain, wind and thunder (WeatherAudio.js)
 };
 
 function getSettings() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('ww_settings') ?? '{}'); } catch { /* corrupt */ }
+    // Settings saved before the Graphics preset existed: anyone who had changed
+    // render distance or resolution keeps those values, as Custom.
+    if (saved.graphics == null && ((saved.renderDistance != null && saved.renderDistance !== 8) ||
+                                   (saved.resolutionScale != null && saved.resolutionScale !== 1))) {
+        saved.graphics = 'custom';
+        saved.graphicsCustom = { ...GRAPHICS_PRESETS.classic,
+            renderDistance: saved.renderDistance ?? 8, resolutionScale: saved.resolutionScale ?? 1 };
+    }
     return { ...DEFAULT_SETTINGS, ...saved };
 }
 
 function saveSettings(s) {
     localStorage.setItem('ww_settings', JSON.stringify(s));
 }
+
+// Frame-rate cap from the Graphics settings (0 = unlimited); read by gameLoop.
+let _maxFps = 0;
 
 // Apply settings to the page (accessibility/HUD) and forward the gameplay-facing
 // ones (sensitivity, FOV, render distance) to the engine.
@@ -619,14 +684,19 @@ function applyPlayerSettings(s) {
     if (fpsEl) fpsEl.classList.toggle('hidden', !s.showFps);
     _fpsEnabled = !!s.showFps;
 
+    _maxFps = resolveGraphics(s).maxFps || 0;
+
     callWorldJS('applySettings', {
         sensitivity:     s.sensitivity,
         invertY:         s.invertY,
         fov:             s.fov,
-        renderDistance:  s.renderDistance,
-        resolutionScale: s.resolutionScale,
+        ...resolveGraphics(s),   // every GRAPHICS_CONTROLS value
         brightness:      s.brightness,
         colorblind:      s.colorblind,
+        weatherVolume:   s.weatherVolume,
+        // Also damps lightning flashes — rapid bright flicker is a
+        // photosensitivity trigger.
+        reduceMotion:    !!s.reduceMotion,
     });
 }
 
@@ -643,6 +713,7 @@ function openSettings(origin) {
         if (DOM.settingGameMode)  DOM.settingGameMode.value  = activeWorld.gameMode  ?? 'SURVIVAL';
         const diffEl = document.getElementById('settingDifficulty');
         if (diffEl) diffEl.value = activeWorld.difficulty ?? 'NORMAL';
+        _populateAtmosphereControls('setting', activeWorld);
     }
 
     populateSettingsForm();
@@ -678,9 +749,12 @@ function populateSettingsForm() {
     const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
     const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
     set('settingSensitivity', s.sensitivity); chk('settingInvertY', s.invertY);
-    set('settingFov', s.fov);                 set('settingRenderDist', s.renderDistance);
-    set('settingResScale', s.resolutionScale);
+    set('settingFov', s.fov);
+    const g = resolveGraphics(s);
+    set('settingGraphics', s.graphics);
+    for (const [key, { id }] of Object.entries(GRAPHICS_CONTROLS)) set(id, g[key]);
     set('settingBrightness', s.brightness);
+    set('settingWeatherVolume', s.weatherVolume);
     chk('settingShowCoords', s.showCoords);   chk('settingCrosshair', s.crosshair);
     chk('settingShowFps', s.showFps);
     set('settingColorblind', s.colorblind);
@@ -697,20 +771,23 @@ function _updateSettingLabels() {
     t('settingFovVal', v('settingFov'));
     t('settingRenderDistVal', v('settingRenderDist'));
     t('settingResScaleVal', `${Math.round(parseFloat(v('settingResScale')) * 100)}%`);
+    t('settingFogDistVal', `${Math.round(parseFloat(v('settingFogDist')) * 100)}%`);
     t('settingBrightnessVal', `${Math.round(parseFloat(v('settingBrightness')) * 100)}%`);
+    t('settingWeatherVolumeVal', `${Math.round(parseFloat(v('settingWeatherVolume')) * 100)}%`);
 }
 
 // Read the form, persist, and apply live (called on every input change).
-function commitSettingsFromForm() {
+function commitSettingsFromForm(e) {
     const num = id => parseFloat(document.getElementById(id)?.value);
     const on  = id => !!document.getElementById(id)?.checked;
     const s = {
         sensitivity:    num('settingSensitivity'),
         invertY:        on('settingInvertY'),
         fov:            num('settingFov'),
-        renderDistance:  Math.round(num('settingRenderDist')),
-        resolutionScale: num('settingResScale'),
+        graphics:        document.getElementById('settingGraphics')?.value ?? 'classic',
+        graphicsCustom:  getSettings().graphicsCustom,
         brightness:      num('settingBrightness'),
+        weatherVolume:   num('settingWeatherVolume'),
         showCoords:     on('settingShowCoords'),
         crosshair:      on('settingCrosshair'),
         showFps:        on('settingShowFps'),
@@ -719,7 +796,16 @@ function commitSettingsFromForm() {
         reduceMotion:   on('settingReduceMotion'),
         largeText:      on('settingLargeText'),
     };
+    // Graphics: adjusting any quality control means Custom; choosing Custom keeps
+    // what the controls currently show (so it starts from the previous preset);
+    // choosing a preset moves the controls to its values.
+    const id = e?.target?.id;
+    if (GRAPHICS_IDS.includes(id)) s.graphics = 'custom';
+    if (s.graphics === 'custom' && (GRAPHICS_IDS.includes(id) || id === 'settingGraphics' || !s.graphicsCustom)) {
+        s.graphicsCustom = readGraphicsForm();
+    }
     saveSettings(s);
+    if (id === 'settingGraphics' || GRAPHICS_IDS.includes(id)) populateSettingsForm();
     _updateSettingLabels();
     applyPlayerSettings(s);
 }
@@ -730,20 +816,49 @@ function resetSettings() {
     applyPlayerSettings(getSettings());
 }
 
+// ── Time and weather (per world) ──────────────────────────────────────────────
+// Daylight Cycle and Weather are stored in the world's world.json. Time of Day
+// is a one-shot jump applied when the settings are applied; the clock itself is
+// saved with the player state (world.js / Atmosphere.toJSON).
+
+/** Fill the Daylight Cycle / Weather controls (prefix 'setting' or 'worldSettings'). */
+function _populateAtmosphereControls(prefix, world) {
+    const cycle = document.getElementById(prefix + 'DaylightCycle');
+    if (cycle) cycle.checked = world.daylightCycle !== false;
+    const weather = document.getElementById(prefix + 'Weather');
+    if (weather) weather.value = world.weather ?? 'dynamic';
+    const time = document.getElementById(prefix + 'TimeOfDay');
+    if (time) time.value = '';
+}
+
+function _readAtmosphereControls(prefix) {
+    return {
+        daylightCycle: document.getElementById(prefix + 'DaylightCycle')?.checked ?? true,
+        weather: document.getElementById(prefix + 'Weather')?.value || 'dynamic',
+    };
+}
+
 async function applyInGameModeChange() {
     if (!activeWorld) return;
     const mode = DOM.settingGameMode?.value ?? 'SURVIVAL';
     const difficulty = document.getElementById('settingDifficulty')?.value ?? 'NORMAL';
+    const atmos = _readAtmosphereControls('setting');
+    const timeRaw = document.getElementById('settingTimeOfDay')?.value ?? '';
     activeWorld.gameMode   = mode;
     activeWorld.difficulty = difficulty;
+    activeWorld.daylightCycle = atmos.daylightCycle;
+    activeWorld.weather       = atmos.weather;
     try {
         await fetch(`${SERVER_URL}/api/worlds/${activeWorld.id}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameMode: mode, difficulty }),
+            body: JSON.stringify({ gameMode: mode, difficulty, ...atmos }),
         });
     } catch { /* offline */ }
     callWorldJS("setGameMode", { gameMode: mode });
+    callWorldJS("setAtmosphere", { ...atmos, hours: timeRaw === '' ? null : parseFloat(timeRaw) });
+    const time = document.getElementById('settingTimeOfDay');
+    if (time) time.value = '';
 }
 
 // Global settings tab switch
@@ -763,6 +878,7 @@ function openWorldSettingsModal() {
     DOM.worldSettingsGameMode.value = activeWorld.gameMode ?? 'SURVIVAL';
     const diffEl = document.getElementById('worldSettingsDifficulty');
     if (diffEl) diffEl.value = activeWorld.difficulty ?? 'NORMAL';
+    _populateAtmosphereControls('worldSettings', activeWorld);
     DOM.worldDetailModal.classList.add("hidden");
     DOM.worldSettingsModal.classList.remove("hidden");
 }
@@ -771,13 +887,16 @@ async function saveWorldSettings() {
     if (!activeWorld) return;
     const mode = DOM.worldSettingsGameMode.value;
     const difficulty = document.getElementById('worldSettingsDifficulty')?.value ?? 'NORMAL';
+    const atmos = _readAtmosphereControls('worldSettings');
     activeWorld.gameMode   = mode;
     activeWorld.difficulty = difficulty;
+    activeWorld.daylightCycle = atmos.daylightCycle;
+    activeWorld.weather       = atmos.weather;
     try {
         await fetch(`${SERVER_URL}/api/worlds/${activeWorld.id}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameMode: mode, difficulty }),
+            body: JSON.stringify({ gameMode: mode, difficulty, ...atmos }),
         });
     } catch { /* offline */ }
     DOM.worldSettingsModal.classList.add("hidden");
@@ -904,6 +1023,13 @@ function startWorld(world) {
         worldSeed: world.seed,
         playerPos: world.playerPos ?? { x: 0, y: 100, z: 0 },
         gameMode:  world.gameMode  ?? 'SURVIVAL',
+        // Hidden world setting — not on any settings screen. Lives in the
+        // world's world.json; new worlds get TERRAIN_STYLE from server/server.js.
+        // A world with no value predates the setting and was built blocky.
+        terrainStyle: world.terrainStyle ?? 'blocky',
+        // World Settings → Daylight Cycle and Weather ('dynamic' or a held type).
+        daylightCycle: world.daylightCycle !== false,
+        weather: world.weather ?? 'dynamic',
     });
 
     startLoadingTextRotation();
@@ -1839,6 +1965,14 @@ function startLoop() {
 
 function gameLoop(timestamp) {
     if (!gameStarted) { _loopActive = false; return; }
+    // Frame-rate cap: skip this display refresh if the last frame was too
+    // recent. dt below is measured from the last frame actually run. The small
+    // tolerance stops a 60 cap on a 60 Hz display from dropping every other frame.
+    if (_maxFps > 0 && _lastFrameTime && timestamp &&
+        timestamp - _lastFrameTime < 1000 / _maxFps - 2) {
+        requestAnimationFrame(gameLoop);
+        return;
+    }
     // `timestamp` is undefined on the first (manual) call and when _lastFrameTime
     // was reset; in both cases fall back to a nominal frame so dt is never NaN.
     const dt = (_lastFrameTime && timestamp)
@@ -1904,7 +2038,8 @@ function closeGame() {
    WORLD / ENGINE BRIDGE
 ========================================================= */
 
-function worldTick(dt) { callWorldJS("tick", { dt }); }
+// `paused`: the pause menu is up, so the clock and the weather stand still.
+function worldTick(dt) { callWorldJS("tick", { dt, paused }); }
 
 function callWorldJS(eventName, data = {}) {
     const event = new Event("WorldJS_" + eventName);

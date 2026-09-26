@@ -1,6 +1,7 @@
 {
   "id": 22,
   "name": "SMELTER",
+  "terrainType": "solid",
   "color": [
     0.38,
     0.38,

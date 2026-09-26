@@ -1,6 +1,7 @@
 {
   "id": 6,
   "name": "WOOD",
+  "terrainType": "solid",
   "color": [
     0.45,
     0.3,

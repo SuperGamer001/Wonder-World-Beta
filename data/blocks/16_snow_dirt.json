@@ -1,6 +1,7 @@
 {
   "id": 16,
   "name": "SNOW_DIRT",
+  "terrainType": "mesh",
   "color": [
     0.5,
     0.35,

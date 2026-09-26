@@ -1,6 +1,7 @@
 {
   "id": 10,
   "name": "IRON_ORE",
+  "terrainType": "mesh",
   "color": [
     0.56,
     0.46,

@@ -11,6 +11,10 @@
   "subsurfaceBlock": "SAND",
   "stoneBlock": "SANDSTONE",
   "deepBlock": "STONE",
+  "weather": {
+    "precipitation": 0.12,
+    "dusty": 1.0
+  },
   "structures": {
     "tree": {
       "frequency": 0.0002,

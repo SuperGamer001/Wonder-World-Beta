@@ -1,6 +1,7 @@
 {
   "id": 32,
   "name": "WOOL_BLOCK",
+  "terrainType": "solid",
   "color": [
     0.95,
     0.95,

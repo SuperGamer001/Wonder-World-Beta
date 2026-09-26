@@ -20,11 +20,14 @@
  *   • Structures that straddle chunk boundaries appear correctly in all chunks.
  *   • No inter-chunk communication is required during generation.
  *
- * Height accuracy
- * ───────────────
- * When a structure origin falls outside the current chunk, surface Y is computed
- * via terrainGen._blendedHeight so structure bases line up perfectly across
- * chunk boundaries.
+ * Known gap
+ * ─────────
+ * Only structures whose origin lies inside the current chunk are placed: the
+ * spawn frequency is read from the origin column's biome blend, which is only
+ * available for this chunk's own columns. A tree rooted near a border is
+ * therefore clipped at it. Placing the overhanging part would need the origin's
+ * blend and height outside the chunk — _estimateHeight is the start of that —
+ * and would make newly generated chunks disagree with saved neighbours.
  */
 
 import { CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, voxelIndex } from '../engine/ChunkData.js';
@@ -132,6 +135,10 @@ export class StructurePlacer {
         this.biomes     = biomes;
         this.terrainGen = terrainGen ?? null;
 
+        // Wood may replace leaves (a trunk growing through a neighbour's crown).
+        this._woodId   = blockRegistry.getByName('WOOD')?.id;
+        this._leavesId = blockRegistry.getByName('LEAVES')?.id;
+
         this._builtStructures = {};
         for (const [type, builder] of Object.entries(STRUCTURE_BUILDERS)) {
             this._builtStructures[type] = builder(blockRegistry);
@@ -176,15 +183,17 @@ export class StructurePlacer {
 
             const lxO = originX - ox;
             const lzO = originZ - oz;
-            let surfaceY;
 
-            if (lxO >= 0 && lxO < N && lzO >= 0 && lzO < N) {
-                surfaceY = heights[lxO * N + lzO];
-            } else {
-                surfaceY = this._estimateHeight(originX, originZ);
-            }
+            // Only structures rooted in this chunk are placed: the spawn
+            // frequency comes from the origin column's biome blend, which is
+            // known only inside the chunk (_structureFrequency(null) is 0).
+            // Bail out before anything else, so no height is estimated for a
+            // structure that is never placed — that estimate runs the whole
+            // biome + height noise stack.
+            if (lxO < 0 || lxO >= N || lzO < 0 || lzO >= N) continue;
 
-            const originY = surfaceY;
+            const surfaceY = heights[lxO * N + lzO];
+            const originY  = surfaceY;
 
             const blend        = this._blendAt(lxO, lzO, blends);
             const spawnInWater = this._structureFlag(blend, type, 'spawnInWater', true);
@@ -210,10 +219,8 @@ export class StructurePlacer {
 
                 if (lx < 0 || lx >= N || ly < 0 || ly >= N_Y || lz < 0 || lz >= N) continue;
 
-                const idx      = voxelIndex(lx, ly, lz);
-                const woodId   = this.reg.getByName('WOOD')?.id;
-                const leavesId = this.reg.getByName('LEAVES')?.id;
-                if (voxels[idx] === 0 || (blockId === woodId && voxels[idx] === leavesId)) {
+                const idx = voxelIndex(lx, ly, lz);
+                if (voxels[idx] === 0 || (blockId === this._woodId && voxels[idx] === this._leavesId)) {
                     voxels[idx] = blockId;
                 }
             }

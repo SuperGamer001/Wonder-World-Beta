@@ -20,9 +20,10 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/mesher.test.mjs && node test/persistence.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
+    "test": "node test/mesher.test.mjs && node test/smooth.test.mjs && node test/light.test.mjs && node test/weather.test.mjs && node test/worker.test.mjs && node test/chunkmanager.test.mjs && node test/persistence.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
     "test:smoke": "node test/smoke.mjs && node test/update-ui.test.mjs",
-    "bench:load": "node test/loadbench.mjs"
+    "bench:load": "node test/loadbench.mjs",
+    "bench:pipeline": "node test/pipelinebench.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

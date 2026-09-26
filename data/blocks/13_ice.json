@@ -1,6 +1,7 @@
 {
   "id": 13,
   "name": "ICE",
+  "terrainType": "solid",
   "transparent": true,
   "color": [
     0.7,

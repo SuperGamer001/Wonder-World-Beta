@@ -1,6 +1,7 @@
 {
   "id": 11,
   "name": "GOLD_ORE",
+  "terrainType": "mesh",
   "color": [
     0.7,
     0.62,

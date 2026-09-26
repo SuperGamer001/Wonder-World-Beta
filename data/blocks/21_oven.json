@@ -1,6 +1,7 @@
 {
   "id": 21,
   "name": "OVEN",
+  "terrainType": "solid",
   "color": [
     0.45,
     0.45,
