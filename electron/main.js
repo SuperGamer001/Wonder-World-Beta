@@ -25,6 +25,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // the server resolves its data paths at import time.
 process.env.WONDER_DATA_DIR = app.getPath('userData');
 
+// Render on the discrete GPU of a dual-GPU laptop. Chromium otherwise runs
+// WebGL on the integrated GPU even though the game asks for 'high-performance'
+// — measured on an Intel iGPU + RTX 2050 laptop, the discrete GPU ran the
+// Normal preset at ~440 fps instead of ~160, and Pro at ~160 instead of ~105.
+// Ignored on machines with one GPU. Must be set before the app is ready.
+app.commandLine.appendSwitch('force_high_performance_gpu');
+
 let mainWindow   = null;
 let serverOrigin = null;
 

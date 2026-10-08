@@ -16,13 +16,20 @@
  * the same as its neighbour chunk computes it, so there are no seams.
  *
  * Output is the chunk plus a one-block border (the shader interpolates between
- * cells), over the chunk's filled Y band plus a little headroom:
+ * cells), over the chunk's filled Y band plus a little headroom — but starting
+ * no lower than the floor below which nothing is lit (see there):
  *   { data: Uint8Array(18 × h × 18), y0, h }   index x + y·18 + z·18·h
+ * Everything below y0 is level 0. Readers treat it so: the chunk shader's
+ * lookup clamps to the bottom row, which is all 0, and the CPU lookup
+ * (_skyBrightnessAt in world.js) returns the darkest level there.
  * `data` holds level × 17 (0..255) so it uploads directly as a normalised R8
  * texture. Opaque cells hold the brightest neighbouring air cell instead of 0,
  * so interpolating across a surface never pulls it toward black; that also
  * gives smooth-terrain slopes, which cut through opaque cells, the light of the
- * air above them.
+ * air above them. An opaque cell with no air beside it takes what the opaque
+ * cell over it holds (or the one over that): where smooth ground leans, the
+ * surface over a block can be in the block under it, or two under on a steep
+ * slope, and those would otherwise be dark spots.
  */
 
 import { CHUNK_SIZE, CHUNK_SIZE_Y } from '../engine/ChunkData.js';
@@ -175,35 +182,51 @@ export function computeSkylight(views, minY, maxY, opaque) {
     }
 
     // ── Output: chunk + 1-block border ────────────────────────────────────────
-    const h = oy1 - oy0 + 1;
+    // From the floor up. Below it every level is 0, and the row at the floor
+    // is all 0 too (nothing within two blocks of it is lit), so a reader that
+    // clamps to the bottom row sees exactly what the rows left out would hold.
+    // The bedrock floor puts a chunk's filled band at local y 0, so those rows
+    // were about two thirds of every volume: kept on the CPU, uploaded, and
+    // held again on the GPU as a 3D texture, for each loaded chunk.
+    const outLo = Math.max(oy0, yLo);
+    const h = oy1 - outLo + 1;
     const out = new Uint8Array(OUT * h * OUT);
     const scale = 255 / SKY_MAX;
+    // What the opaque cell i at (x, y, z) holds: its brightest open neighbour.
+    const held = (i, x, y, z) => {
+        if (y + 1 > y1) return SKY_MAX;
+        let v = 0;
+        if (x + 1 < R && !opq[i + 1] && light[i + 1] > v) v = light[i + 1];
+        if (x > 0     && !opq[i - 1] && light[i - 1] > v) v = light[i - 1];
+        if (z + 1 < R && !opq[i + R] && light[i + R] > v) v = light[i + R];
+        if (z > 0     && !opq[i - R] && light[i - R] > v) v = light[i - R];
+        if (!opq[i + RR] && light[i + RR] > v) v = light[i + RR];
+        if (y > yLo && !opq[i - RR] && light[i - RR] > v) v = light[i - RR];
+        return v;
+    };
     for (let oz = 0; oz < OUT; oz++) {
         const z = oz + MARGIN - 1;
         for (let ox = 0; ox < OUT; ox++) {
             const x = ox + MARGIN - 1;
             const col = x + z * R;
-            for (let y = Math.max(oy0, yLo); y <= oy1; y++) {   // below yLo: 0, as allocated
+            for (let y = outLo; y <= oy1; y++) {
                 let v;
                 if (y > y1) v = SKY_MAX;
                 else {
                     const i = col + y * RR;
                     if (!opq[i]) v = light[i];
                     else {
-                        // Brightest open neighbour (see header).
-                        v = 0;
-                        if (x + 1 < R && !opq[i + 1] && light[i + 1] > v) v = light[i + 1];
-                        if (x > 0     && !opq[i - 1] && light[i - 1] > v) v = light[i - 1];
-                        if (z + 1 < R && !opq[i + R] && light[i + R] > v) v = light[i + R];
-                        if (z > 0     && !opq[i - R] && light[i - R] > v) v = light[i - R];
-                        if (y + 1 > y1) v = SKY_MAX;
-                        else if (!opq[i + RR] && light[i + RR] > v) v = light[i + RR];
-                        if (y > yLo && !opq[i - RR] && light[i - RR] > v) v = light[i - RR];
+                        v = held(i, x, y, z);
+                        // Shut in: what the cell over it holds (see header).
+                        if (v === 0 && y + 1 <= y1 && opq[i + RR]) {
+                            v = held(i + RR, x, y + 1, z);
+                            if (v === 0 && y + 2 <= y1 && opq[i + 2 * RR]) v = held(i + 2 * RR, x, y + 2, z);
+                        }
                     }
                 }
-                out[ox + (y - oy0) * OUT + oz * OUT * h] = Math.round(v * scale);
+                out[ox + (y - outLo) * OUT + oz * OUT * h] = Math.round(v * scale);
             }
         }
     }
-    return { data: out, y0: oy0, h };
+    return { data: out, y0: outLo, h };
 }

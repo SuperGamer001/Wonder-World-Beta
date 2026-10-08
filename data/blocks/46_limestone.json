@@ -1,0 +1,20 @@
+{
+  "id": 46,
+  "name": "LIMESTONE",
+  "terrainType": "mesh",
+  "color": [
+    0.84,
+    0.81,
+    0.72
+  ],
+  "hardness": 1.2,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "limestone",
+      "count": 1
+    }
+  ],
+  "texture": "Limestone.png",
+  "blend": 13
+}

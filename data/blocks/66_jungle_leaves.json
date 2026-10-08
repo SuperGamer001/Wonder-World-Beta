@@ -1,0 +1,17 @@
+{
+  "id": 66,
+  "name": "JUNGLE_LEAVES",
+  "terrainType": "solid",
+  "transparent": true,
+  "noCollision": true,
+  "leaves": true,
+  "color": [
+    0.15,
+    0.46,
+    0.09
+  ],
+  "hardness": 0.2,
+  "drops": [],
+  "texture": "Jungle_Leaves.png",
+  "render": "cutout"
+}

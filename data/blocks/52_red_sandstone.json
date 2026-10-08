@@ -1,0 +1,20 @@
+{
+  "id": 52,
+  "name": "RED_SANDSTONE",
+  "terrainType": "mesh",
+  "color": [
+    0.7,
+    0.38,
+    0.19
+  ],
+  "hardness": 0.8,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "red_sandstone",
+      "count": 1
+    }
+  ],
+  "texture": "Red_Sandstone.png",
+  "blend": 16
+}

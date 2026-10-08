@@ -7,6 +7,8 @@
  *   GET  /api/worlds/:id          get metadata
  *   PUT  /api/worlds/:id/player-state  save full player state
  *   GET  /api/worlds/:id/player-state  load full player state
+ *   GET  /api/worlds/:id/far-edits     surfaces of the chunks the player has changed
+ *   PUT  /api/worlds/:id/far-edits     … add to them (for far terrain)
  *   PUT  /api/worlds/:id/settings      update world settings (gameMode, difficulty,
  *                                      daylightCycle, weather, and the hidden terrainStyle)
  *   POST /api/worlds/:id/duplicate
@@ -83,6 +85,15 @@ const REGION_BITS = 3;                 // 2^3 = 8 chunk columns per axis per reg
 // be switched back and forth freely.
 const TERRAIN_STYLES = ['blocky', 'smooth'];
 const TERRAIN_STYLE  = 'smooth';
+
+// ── World generator version ───────────────────────────────────────────────────
+// Stamped into each new world as "worldGen" (see TerrainGenerator.js
+// WORLD_GEN). A world keeps generating with the generator it was made with, so
+// unexplored land still matches explored land: worlds without the field
+// predate the current generator and use workers/legacy/. Bump this — and keep
+// the previous generator as legacy — when a change would alter the terrain of
+// existing worlds.
+const WORLD_GEN = 2;
 
 const gzip   = promisify(zlib.gzip);
 const gunzip = promisify(zlib.gunzip);
@@ -361,9 +372,35 @@ app.use(express.static(ROOT));
 // World list
 app.get('/api/worlds', (_req, res) => res.json(listWorlds()));
 
+/**
+ * A Flat world's settings as they are stored: the same checks as the game's
+ * normaliseFlat (src/scripts/engine/FlatWorld.js), which the generator runs
+ * again on what it is given. `mode` 'layers' — the player's own stack, top
+ * first, and one biome — or 'biomes' — biomes by climate, each with its own
+ * ground; `decorations` (trees and plants) and `structures` (buildings).
+ */
+function cleanFlat(raw) {
+    const mode = raw?.mode === 'biomes' ? 'biomes' : 'layers';
+    const layers = [];
+    if (mode === 'layers') {
+        for (const l of Array.isArray(raw?.layers) ? raw.layers.slice(0, 16) : []) {
+            const block = String(l?.block ?? '').toUpperCase().replace(/[^A-Z0-9_]/g, '');
+            const depth = Math.max(1, Math.min(64, Math.round(Number(l?.depth) || 1)));
+            if (block && block !== 'AIR') layers.push({ block, depth });
+        }
+        if (layers.length === 0) layers.push({ block: 'GRASS', depth: 1 }, { block: 'DIRT', depth: 3 }, { block: 'BEDROCK', depth: 1 });
+    }
+    return {
+        mode, layers,
+        biome: mode === 'layers' ? String(raw?.biome ?? 'PLAINS').toUpperCase().replace(/[^A-Z0-9_]/g, '') : null,
+        decorations: raw?.decorations !== false,
+        structures: !!raw?.structures,
+    };
+}
+
 // Create world
 app.post('/api/worlds', (req, res) => {
-    const { name = 'New World', seed, gameMode = 'SURVIVAL', difficulty = 'NORMAL' } = req.body ?? {};
+    const { name = 'New World', seed, gameMode = 'SURVIVAL', difficulty = 'NORMAL', worldType, flat } = req.body ?? {};
     const id  = crypto.randomUUID();
     const now = Date.now();
     const meta = {
@@ -379,7 +416,12 @@ app.post('/api/worlds', (req, res) => {
         worldHeight: CHUNK_SIZE_Y,
         worldMinY: WORLD_MIN_Y,
         terrainStyle: TERRAIN_STYLE,
+        worldGen: WORLD_GEN,
     };
+    // A Flat world: level ground made of what `flat` says (cleanFlat). Fixed
+    // when the world is made, like its seed — the land already generated
+    // would not match anything else.
+    if (worldType === 'flat') { meta.worldType = 'flat'; meta.flat = cleanFlat(flat); }
     fs.mkdirSync(worldDir(id), { recursive: true });
     writeMeta(id, meta);
     res.status(201).json(meta);
@@ -478,6 +520,31 @@ app.put('/api/worlds/:id/settings', (req, res) => {
     res.json({ ok: true });
 });
 
+// What far terrain shows of the chunks the player has changed: for each, the
+// highest block of every column and which block it is, as the client
+// summarised it ("cx,cz" → base64 of 1024 bytes; see world.js). Kept beside
+// the regions so it is copied and deleted with the world.
+function farEditsPath(id) { return path.join(worldDir(id), 'far-edits.json'); }
+function readFarEdits(id) {
+    try { return JSON.parse(fs.readFileSync(farEditsPath(id), 'utf8')); }
+    catch { return {}; }
+}
+
+app.get('/api/worlds/:id/far-edits', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    res.json(readFarEdits(req.params.id));
+});
+
+app.put('/api/worlds/:id/far-edits', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const all = readFarEdits(req.params.id);
+    for (const [key, value] of Object.entries(req.body ?? {})) {
+        if (/^-?\d+,-?\d+$/.test(key) && typeof value === 'string' && value.length <= 2048) all[key] = value;
+    }
+    fs.writeFileSync(farEditsPath(req.params.id), JSON.stringify(all));
+    res.json({ ok: true });
+});
+
 // Global player settings
 function readSettings() {
     try { return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')); }
@@ -554,10 +621,11 @@ app.post('/api/update-install', async (_req, res) => {
     setTimeout(() => { try { _onInstallRequested(); } catch { /* quitting anyway */ } }, 100);
 });
 
-// Data manifest — lists all JSON files in data/blocks/, items/, biomes/, entities/, recipes/
+// Data manifest — lists all JSON files in data/blocks/, items/, biomes/,
+// entities/, recipes/ and terrain/ (world-generation settings: geology.json)
 app.get('/api/data/manifest', (_req, res) => {
     const dataDir = path.join(ROOT, 'data');
-    const cats = ['blocks', 'items', 'biomes', 'entities', 'recipes'];
+    const cats = ['blocks', 'items', 'biomes', 'entities', 'recipes', 'terrain'];
     const manifest = {};
     for (const cat of cats) {
         const dir = path.join(dataDir, cat);

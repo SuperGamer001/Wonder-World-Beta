@@ -1,0 +1,65 @@
+{
+  "name": "BIRCH_FOREST",
+  "category": "land",
+  "temperature": 0.42,
+  "humidity": 0.55,
+  "mapColor": "#307444",
+  "select": {
+    "temperature": [
+      0.34,
+      0.47
+    ],
+    "humidity": [
+      0.42,
+      0.72
+    ],
+    "elevation": [
+      58,
+      128
+    ]
+  },
+  "surface": {
+    "top": "GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "underwaterPatches": [
+      {
+        "block": "CLAY",
+        "scale": 14,
+        "threshold": 0.45
+      },
+      {
+        "block": "SAND",
+        "scale": 20,
+        "threshold": -0.55
+      }
+    ]
+  },
+  "structures": {
+    "birch_tree": {
+      "frequency": 0.032
+    },
+    "oak_tree": {
+      "frequency": 0.002
+    }
+  }
+}

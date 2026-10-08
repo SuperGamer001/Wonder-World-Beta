@@ -1,0 +1,18 @@
+{
+  "id": "torch",
+  "station": "hand",
+  "result": {
+    "itemId": "torch",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "coal",
+      "count": 1
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

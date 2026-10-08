@@ -14,9 +14,7 @@ import { createHash } from 'node:crypto';
 
 import { BlockRegistry }    from '../src/scripts/engine/BlockRegistry.js';
 import { ChunkData, CHUNK_SIZE, CHUNK_SIZE_Y, CHUNK_VOLUME } from '../src/scripts/engine/ChunkData.js';
-import { setSeed }          from '../src/scripts/workers/noise.js';
 import { TerrainGenerator } from '../src/scripts/workers/TerrainGenerator.js';
-import { StructurePlacer }  from '../src/scripts/workers/StructurePlacer.js';
 import { GreedyMesher }     from '../src/scripts/workers/GreedyMesher.js';
 import { SmoothMesher }     from '../src/scripts/workers/SmoothMesher.js';
 import { computeSkylight }  from '../src/scripts/workers/Skylight.js';
@@ -29,15 +27,14 @@ const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const reg = new BlockRegistry();
 for (const f of fs.readdirSync(path.join(root, 'data/blocks')))
     reg.register(JSON.parse(fs.readFileSync(path.join(root, 'data/blocks', f), 'utf8')));
-const biomes = fs.readdirSync(path.join(root, 'data/biomes'))
-    .map(f => JSON.parse(fs.readFileSync(path.join(root, 'data/biomes', f), 'utf8')));
+const readDir = (d) => fs.readdirSync(path.join(root, d)).map(f => JSON.parse(fs.readFileSync(path.join(root, d, f), 'utf8')));
+const biomes = readDir('data/biomes');
+const terrain = readDir('data/terrain');
 // A face map like world.js builds: every block textured, so the layer path runs.
 const faceMap = {};
 for (const b of reg.serialize()) faceMap[b.id] = { top: b.id, side: b.id, bottom: b.id };
 
-setSeed(SEED);
-const gen    = new TerrainGenerator(SEED, reg, biomes);
-const placer = new StructurePlacer(SEED, reg, gen.biomes, gen);
+const gen    = new TerrainGenerator(SEED, reg, biomes, terrain);
 const mesher = new GreedyMesher(reg, faceMap);
 const smooth = new SmoothMesher(reg, mesher);
 
@@ -59,12 +56,7 @@ const key = (cx, cz) => `${cx},${cz}`;
 // ── Generation ──────────────────────────────────────────────────────────────
 const voxels = new Map();
 time('generate + structures', coords.length, () => {
-    for (const [cx, cz] of coords) {
-        const v = gen.generateChunk(cx, cz);
-        const { heights, blends } = gen.buildColumnData(cx, cz);
-        placer.apply(v, cx, cz, heights, blends);
-        voxels.set(key(cx, cz), v);
-    }
+    for (const [cx, cz] of coords) voxels.set(key(cx, cz), gen.generate(cx, cz));
 });
 const hGen = hash();
 for (const [cx, cz] of coords) feed(hGen, voxels.get(key(cx, cz)));
@@ -101,9 +93,9 @@ const job = ([cx, cz]) => {
 const jobs = inner.map(job);
 
 const feedGeo = (h, g) => {
-    for (const k of ['positions', 'colors', 'uvs', 'layers', 'indices',
-                     'transparentPositions', 'transparentColors', 'transparentUVs',
-                     'transparentLayers', 'transparentIndices']) feed(h, g[k]);
+    for (const k of ['positions', 'tints', 'uvs', 'normals', 'indices',
+                     'transparentPositions', 'transparentTints', 'transparentUVs',
+                     'transparentNormals', 'transparentIndices']) feed(h, g[k]);
 };
 
 // All six face directions in one group, as worldWorker meshes a chunk.
@@ -132,6 +124,7 @@ time('mesh smooth', jobs.length, () => {
 console.log(`  ${(tris / jobs.length).toFixed(0)} opaque tris/chunk`);
 
 const hLight = hash();
+let lightRows = 0, bandRows = 0;
 time('sky light', inner.length, () => {
     for (const [cx, cz] of inner) {
         const views = [], minY = [], maxY = [];
@@ -141,8 +134,12 @@ time('sky light', inner.length, () => {
         }
         const L = computeSkylight(views, minY, maxY, mesher._solid);
         feed(hLight, L.data); feed(hLight, new Int32Array([L.y0, L.h]));
+        lightRows += L.h;
+        bandRows  += Math.min(CHUNK_SIZE_Y - 1, maxY[4] + 2) - Math.max(0, minY[4] - 1) + 1;
     }
 });
+// The volume leaves out the levels under the floor nothing is lit below.
+console.log(`  ${(lightRows / inner.length).toFixed(0)} levels a volume (${(bandRows / inner.length).toFixed(0)} in the filled band)`);
 
 console.log('\nhashes');
 for (const [n, h] of [['generate', hGen], ['loadVoxels', hLoad], ['blocky mesh', hBlocky],

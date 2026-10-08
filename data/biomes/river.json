@@ -1,0 +1,53 @@
+{
+  "name": "RIVER",
+  "category": "river",
+  "temperature": 0.5,
+  "humidity": 0.6,
+  "mapColor": "#3f76e4",
+  "select": {
+    "temperature": [
+      0.14,
+      1.2
+    ]
+  },
+  "surface": {
+    "top": "SAND",
+    "layers": [
+      {
+        "block": "SAND",
+        "depth": 2
+      },
+      {
+        "block": "DIRT",
+        "depth": 1
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "underwater": {
+      "top": "SAND",
+      "layers": [
+        {
+          "block": "SAND",
+          "depth": 2
+        },
+        {
+          "block": "GRAVEL",
+          "depth": 1
+        }
+      ]
+    },
+    "underwaterPatches": [
+      {
+        "block": "GRAVEL",
+        "scale": 10,
+        "threshold": 0.2
+      },
+      {
+        "block": "CLAY",
+        "scale": 8,
+        "threshold": 0.62
+      }
+    ]
+  }
+}

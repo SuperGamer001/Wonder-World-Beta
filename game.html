@@ -7,6 +7,7 @@
     <!-- Without this the browser requests /favicon.ico on every load and logs a 404. -->
     <link rel="icon" href="./data/textures/favicon.ico" sizes="any">
     <script src="src/main.js" defer></script>
+    <script src="src/gamepad.js" defer></script>
     <!-- Minified build: three.module.js + three.core.js is ~2 MB of source the
          browser parses at every startup, against ~0.7 MB for the minified pair.
          Swap to three.module.js when you need readable stack traces. -->
@@ -21,19 +22,24 @@
 </head>
 <body>
 
-    <img id="TitleLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 60%; height: auto; margin-top: 8vw;">
+    <img id="TitleLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo">
+
+    <!-- "Controller connected" (gamepad.js) -->
+    <div id="padNotice" class="chip"></div>
 
     <!-- Shared confirm popup -->
-    <div id="confirmPopup" class="popup hidden">
-        <div id="confirmTitle" class="popupTitle">Confirm Action</div>
-        <div id="confirmMessage" class="popupMessage">Are you sure?</div>
-        <div id="confirmButtons" class="popupButtons">
-            <div class="menuButton" id="confirmYes">Yes</div>
-            <div class="menuButton" id="confirmNo" onclick="document.getElementById('confirmPopup').classList.add('hidden');">No</div>
+    <div id="confirmPopup" class="scrim top hidden">
+        <div class="panel popup">
+            <div id="confirmTitle" class="popupTitle">Confirm Action</div>
+            <div id="confirmMessage" class="popupMessage">Are you sure?</div>
+            <div id="confirmButtons" class="popupButtons">
+                <div class="menuButton" id="confirmNo" onclick="document.getElementById('confirmPopup').classList.add('hidden');">No</div>
+                <div class="menuButton primary" id="confirmYes">Yes</div>
+            </div>
         </div>
     </div>
 
-    <!-- Loading bar -->
+    <!-- World loading -->
     <div class="loadingContainer hidden" id="loadingContainer">
         <div id="packName" class="packName hidden">Vanilla Gamepack</div>
         <div class="loadingText" id="loadingTextEl">Welcome to Wonder World Beta!</div>
@@ -52,26 +58,27 @@
 
     <!-- ── Title Screen ────────────────────────────────────────────────────── -->
     <div class="hidden" id="TitleScreen">
-        <div class="menuButton" id="startButton">Play</div>
-        <div class="menuButton" id="titleHowToBtn">How To Play</div>
-        <div class="menuButton" id="titleSettingsBtn">Settings</div>
-        <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
+        <div class="titleMenu">
+            <div class="menuButton primary big" id="startButton">Play</div>
+            <div class="menuButton" id="titleHowToBtn">How to Play</div>
+            <div class="menuButton" id="titleSettingsBtn">Settings</div>
+            <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
+        </div>
 
-        <div id="footerText" style="position:absolute; bottom:1vw; font-size:0.9vw; color:#aaa;">
+        <div id="footerText">
             <span id="versionText">Wonder World Beta v1.0.0</span>
-            
             <span id="copyrightText">Copyright &copy; 2026 Alex Fischer, Interlinked Creations. All rights reserved. Unauthorized copying or distribution is prohibited.</span>
         </div>
     </div>
 
     <!-- ── World List Screen ───────────────────────────────────────────────── -->
     <div class="hidden" id="WorldListScreen">
-        <div id="worldListPanel">
-            <div id="worldListHeader">
-                <span id="worldListTitle">Your Worlds</span>
+        <div id="worldListPanel" class="panel">
+            <div id="worldListHeader" class="panelHeader">
+                <span id="worldListTitle" class="panelTitle">Your Worlds</span>
                 <div class="worldListHeaderBtns">
-                    <div class="menuButton" id="createWorldBtn">+ Create World</div>
-                    <div class="menuButton" id="worldListBackBtn">Close</div>
+                    <div class="menuButton small primary" id="createWorldBtn">+ New World</div>
+                    <div class="menuButton small" id="worldListBackBtn">Back</div>
                 </div>
             </div>
             <div id="worldListContainer"></div>
@@ -79,46 +86,43 @@
     </div>
 
     <!-- ── World Detail Modal ──────────────────────────────────────────────── -->
-    <div class="hidden" id="WorldDetailModal">
-        <div class="popup" style="min-width:30vw;">
+    <div class="scrim hidden" id="WorldDetailModal">
+        <div class="panel popup">
             <div class="popupTitle" id="worldDetailName">World Name</div>
             <div class="popupMessage" id="worldDetailInfo">Seed: 0</div>
-            <div class="menuButton" id="worldPlayBtn">Play World</div>
-            <div class="menuButton" id="worldSettingsBtn">World Settings</div>
-            <div class="menuButton" id="worldDuplicateBtn">Duplicate World</div>
-            <div class="menuButton" id="worldDeleteBtn" style="background:#6b1a1a;">Delete World</div>
-            <div class="menuButton" id="worldDetailCloseBtn" style="margin-top:1vw;">Cancel</div>
+            <div class="menuButton primary" id="worldPlayBtn">Play</div>
+            <div class="popupRow">
+                <div class="menuButton small" id="worldSettingsBtn">Settings</div>
+                <div class="menuButton small" id="worldDuplicateBtn">Duplicate</div>
+                <div class="menuButton small danger" id="worldDeleteBtn">Delete</div>
+            </div>
+            <div class="menuButton small quiet" id="worldDetailCloseBtn">Close</div>
         </div>
     </div>
 
-    <!-- ── World Settings Modal (game mode etc.) ───────────────────────────── -->
-    <div class="hidden" id="WorldSettingsModal">
-        <div class="popup" style="min-width:28vw; gap:1vw;">
+    <!-- ── World Settings Modal ────────────────────────────────────────────── -->
+    <!-- No Save button: what it shows is saved when it closes. -->
+    <div class="scrim hidden" id="WorldSettingsModal">
+        <div class="panel popup wide">
             <div class="popupTitle">World Settings</div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Game Mode</label>
-                <select class="worldFormInput" id="worldSettingsGameMode">
+            <div class="formGrid">
+                <label class="formLabel">Game Mode</label>
+                <select class="settingsSelect seg" id="worldSettingsGameMode">
                     <option value="SURVIVAL">Survival</option>
                     <option value="CREATIVE">Creative</option>
                     <option value="SPECTATOR">Spectator</option>
                 </select>
-            </div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Difficulty</label>
-                <select class="worldFormInput" id="worldSettingsDifficulty">
+                <label class="formLabel">Difficulty</label>
+                <select class="settingsSelect seg" id="worldSettingsDifficulty">
                     <option value="PEACEFUL">Peaceful</option>
                     <option value="EASY">Easy</option>
                     <option value="NORMAL">Normal</option>
                     <option value="HARD">Hard</option>
                 </select>
-            </div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Daylight Cycle</label>
+                <label class="formLabel">Daylight Cycle</label>
                 <label class="settingsToggle"><input type="checkbox" id="worldSettingsDaylightCycle" checked><span class="track"></span></label>
-            </div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Weather</label>
-                <select class="worldFormInput" id="worldSettingsWeather">
+                <label class="formLabel">Weather</label>
+                <select class="settingsSelect" id="worldSettingsWeather">
                     <option value="dynamic">Dynamic (changes naturally)</option>
                     <optgroup label="Clear">
                         <option value="clear">Fully Clear</option>
@@ -162,291 +166,373 @@
                     </optgroup>
                 </select>
             </div>
-            <div class="menuButton" id="worldSettingsSaveBtn">Save</div>
-            <div class="menuButton" id="worldSettingsCancelBtn">Cancel</div>
+            <div class="formNote">Changes are saved when you close this window.</div>
+            <div class="menuButton primary" id="worldSettingsDoneBtn">Done</div>
         </div>
     </div>
 
     <!-- ── Create World Modal ─────────────────────────────────────────────── -->
-    <div class="hidden" id="CreateWorldModal">
-        <div class="popup" style="min-width:30vw; gap:1vw;">
-            <div class="popupTitle">Create New World</div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">World Name</label>
+    <div class="scrim hidden" id="CreateWorldModal">
+        <div class="panel popup wide">
+            <div class="popupTitle">New World</div>
+            <div class="formGrid">
+                <label class="formLabel" for="newWorldName">Name</label>
                 <input class="worldFormInput" id="newWorldName" type="text" placeholder="New World" maxlength="40">
-            </div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Seed</label>
-                <input class="worldFormInput" id="newWorldSeed" type="text" placeholder="(random)" maxlength="20">
-            </div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Game Mode</label>
-                <select class="worldFormInput" id="newWorldGameMode">
+                <label class="formLabel" for="newWorldSeed">Seed</label>
+                <input class="worldFormInput" id="newWorldSeed" type="text" placeholder="Leave empty for a random world" maxlength="20">
+                <label class="formLabel">Game Mode</label>
+                <select class="settingsSelect seg" id="newWorldGameMode">
                     <option value="SURVIVAL">Survival</option>
                     <option value="CREATIVE">Creative</option>
                     <option value="SPECTATOR">Spectator</option>
                 </select>
-            </div>
-            <div class="worldFormRow">
-                <label class="worldFormLabel">Difficulty</label>
-                <select class="worldFormInput" id="newWorldDifficulty">
+                <label class="formLabel">Difficulty</label>
+                <select class="settingsSelect seg" id="newWorldDifficulty">
                     <option value="PEACEFUL">Peaceful</option>
                     <option value="EASY">Easy</option>
                     <option value="NORMAL" selected>Normal</option>
                     <option value="HARD">Hard</option>
                 </select>
+                <label class="formLabel">World Type</label>
+                <select class="settingsSelect seg" id="newWorldType">
+                    <option value="normal">Normal</option>
+                    <option value="flat">Flat</option>
+                </select>
+
+                <!-- A Flat world: level ground, made of the player's own layers
+                     or of each biome's (main.js, updateFlatForm). Each row's
+                     label and control are shown and hidden together. -->
+                <label class="formLabel flatRow hidden">Ground</label>
+                <div class="flatRow hidden">
+                    <select class="settingsSelect seg" id="newFlatMode">
+                        <option value="layers">My own layers</option>
+                        <option value="biomes">Biomes, each with its own</option>
+                    </select>
+                </div>
+                <label class="formLabel flatRow layersRow hidden">Layers<small>top first</small></label>
+                <div class="flatRow layersRow hidden">
+                    <div class="layerTools">
+                        <span class="formNote">Start from</span>
+                        <select class="settingsSelect" id="newFlatPreset"></select>
+                    </div>
+                    <div id="flatLayerList" class="layerList"></div>
+                    <div class="layerTools">
+                        <div class="menuButton small" id="flatAddLayerBtn">+ Add a layer</div>
+                        <span class="formNote" id="flatLayerNote"></span>
+                    </div>
+                </div>
+                <label class="formLabel flatRow layersRow hidden">Biome<small>its weather and plants</small></label>
+                <div class="flatRow layersRow hidden">
+                    <select class="settingsSelect" id="newFlatBiome"></select>
+                </div>
+                <label class="formLabel flatRow hidden">On it</label>
+                <div class="flatRow hidden flatFeatures">
+                    <label class="featureToggle"><span class="settingsToggle"><input type="checkbox" id="newFlatDecor" checked><span class="track"></span></span>Trees and plants</label>
+                    <label class="featureToggle"><span class="settingsToggle"><input type="checkbox" id="newFlatStruct"><span class="track"></span></span>Buildings</label>
+                </div>
             </div>
-            <div class="menuButton" id="createWorldConfirmBtn">Create</div>
-            <div class="menuButton" id="createWorldCancelBtn">Cancel</div>
+            <div class="popupButtons">
+                <div class="menuButton" id="createWorldCancelBtn">Cancel</div>
+                <div class="menuButton primary" id="createWorldConfirmBtn">Create</div>
+            </div>
         </div>
     </div>
 
     <!-- ── Settings Screen ────────────────────────────────────────────────── -->
-    <div class="hidden" id="SettingsScreen">
-        <div id="settingsPanelBox">
-            <div class="settingsHeader">
-                <span>Settings</span>
-                <div class="menuButton" id="settingsBackBtn">Back</div>
+    <!-- A section each, chosen from the list on the left (switchSettingsTab).
+         Every control takes effect as it is moved; the World section is saved
+         when the screen closes. -->
+    <div class="scrim hidden" id="SettingsScreen">
+        <div id="settingsPanelBox" class="panel">
+            <div class="settingsHeader panelHeader">
+                <span class="panelTitle">Settings</span>
+                <div class="menuButton small primary" id="settingsBackBtn">Done</div>
             </div>
-            <div class="settingsTabs">
-                <div class="settingsTab active" id="tabPlayer" onclick="switchSettingsTab('player')">Player</div>
-                <div class="settingsTab" id="tabWorld" onclick="switchSettingsTab('world')">World</div>
-            </div>
-
-            <div class="settingsScroll">
-                <div class="settingsPanel" id="settingsPanelPlayer">
-                    <div class="settingsSectionTitle">Controls</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Mouse Sensitivity</span>
-                        <input type="range" id="settingSensitivity" min="0.2" max="4" step="0.1" value="1.0" class="settingsSlider">
-                        <span class="settingsValue" id="settingSensitivityVal">1.0</span>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Invert Y Axis</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingInvertY"><span class="track"></span></label>
-                    </div>
-
-                    <div class="settingsSectionTitle">Video</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Graphics</span>
-                        <select class="settingsSelect" id="settingGraphics">
-                            <option value="classic">Classic</option>
-                            <option value="simple">Simple</option>
-                            <option value="normal">Normal</option>
-                            <option value="pro">Pro</option>
-                            <option value="custom">Custom</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Field of View</span>
-                        <input type="range" id="settingFov" min="50" max="110" step="1" value="75" class="settingsSlider">
-                        <span class="settingsValue" id="settingFovVal">75</span>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Render Distance</span>
-                        <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="8" class="settingsSlider">
-                        <span class="settingsValue" id="settingRenderDistVal">8</span>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Resolution</span>
-                        <input type="range" id="settingResScale" min="0.5" max="1" step="0.05" value="1" class="settingsSlider">
-                        <span class="settingsValue" id="settingResScaleVal">100%</span>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Fog Distance</span>
-                        <input type="range" id="settingFogDist" min="0.5" max="0.95" step="0.01" value="0.75" class="settingsSlider">
-                        <span class="settingsValue" id="settingFogDistVal">75%</span>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Shadows</span>
-                        <select class="settingsSelect" id="settingShadows">
-                            <option value="off">Off</option>
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Clouds</span>
-                        <select class="settingsSelect" id="settingClouds">
-                            <option value="fast">Fast</option>
-                            <option value="fancy">Fancy</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Sky</span>
-                        <select class="settingsSelect" id="settingSky">
-                            <option value="simple">Simple</option>
-                            <option value="pretty">Pretty</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Particles</span>
-                        <select class="settingsSelect" id="settingParticles">
-                            <option value="off">Off</option>
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Max Frame Rate</span>
-                        <select class="settingsSelect" id="settingMaxFps">
-                            <option value="30">30 FPS</option>
-                            <option value="60">60 FPS</option>
-                            <option value="120">120 FPS</option>
-                            <option value="0">Unlimited</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Brightness</span>
-                        <input type="range" id="settingBrightness" min="0.6" max="1.6" step="0.05" value="1.0" class="settingsSlider">
-                        <span class="settingsValue" id="settingBrightnessVal">100%</span>
-                    </div>
-
-                    <div class="settingsSectionTitle">Audio</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Weather Volume</span>
-                        <input type="range" id="settingWeatherVolume" min="0" max="1" step="0.05" value="0.8" class="settingsSlider">
-                        <span class="settingsValue" id="settingWeatherVolumeVal">80%</span>
-                    </div>
-
-                    <div class="settingsSectionTitle">HUD</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Show Coordinates</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingShowCoords" checked><span class="track"></span></label>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Show Crosshair</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingCrosshair" checked><span class="track"></span></label>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Show FPS</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingShowFps"><span class="track"></span></label>
-                    </div>
-
-                    <div class="settingsSectionTitle">Accessibility</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Colorblind Mode</span>
-                        <select class="settingsSelect" id="settingColorblind">
-                            <option value="none">None</option>
-                            <option value="protanopia">Protanopia (red-weak)</option>
-                            <option value="deuteranopia">Deuteranopia (green-weak)</option>
-                            <option value="tritanopia">Tritanopia (blue-weak)</option>
-                        </select>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">High Contrast UI</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingHighContrast"><span class="track"></span></label>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Reduce Motion</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingReduceMotion"><span class="track"></span></label>
-                    </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Large Text</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingLargeText"><span class="track"></span></label>
-                    </div>
-                    <div class="settingsSectionTitle">Updates</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Game Version</span>
-                        <span class="settingsValue" id="updateCheckStatus"></span>
-                    </div>
-                    <div class="settingsRow">
-                        <div class="menuButton" id="settingCheckUpdates" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Check for Updates</div>
-                    </div>
-
-                    <div class="settingsSectionTitle">Reset</div>
-                    <div class="settingsRow">
-                        <div class="menuButton" id="settingsResetBtn" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Reset to Defaults</div>
-                    </div>
+            <div class="settingsBody">
+                <div class="settingsTabs">
+                    <div class="settingsTab active" data-section="video" onclick="switchSettingsTab('video')">Video</div>
+                    <div class="settingsTab" data-section="controls" onclick="switchSettingsTab('controls')">Controls</div>
+                    <div class="settingsTab" data-section="audio" onclick="switchSettingsTab('audio')">Audio</div>
+                    <div class="settingsTab" data-section="hud" onclick="switchSettingsTab('hud')">Display</div>
+                    <div class="settingsTab" data-section="access" onclick="switchSettingsTab('access')">Accessibility</div>
+                    <div class="settingsTab" data-section="game" onclick="switchSettingsTab('game')">Game</div>
+                    <div class="settingsTab worldTab" id="tabWorld" data-section="world" onclick="switchSettingsTab('world')">This World</div>
                 </div>
 
-                <div class="settingsPanel hidden" id="settingsPanelWorld">
-                    <div class="settingsSectionTitle">This World</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Game Mode</span>
-                        <select class="settingsSelect" id="settingGameMode">
-                            <option value="SURVIVAL">Survival</option>
-                            <option value="CREATIVE">Creative</option>
-                            <option value="SPECTATOR">Spectator</option>
-                        </select>
+                <div class="settingsScroll">
+                    <!-- Video -->
+                    <div class="settingsPanel" data-section="video">
+                        <div class="settingsRow tall">
+                            <span class="settingsLabel">Graphics<small>One choice sets everything below. Change any of them and it becomes Custom.</small></span>
+                            <select class="settingsSelect seg" id="settingGraphics">
+                                <option value="simple">Simple</option>
+                                <option value="classic">Classic</option>
+                                <option value="normal">Normal</option>
+                                <option value="pro">Pro</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                        </div>
+                        <div class="settingsSectionTitle">View</div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Field of View</span>
+                            <input type="range" id="settingFov" min="50" max="110" step="1" value="75" class="settingsSlider">
+                            <span class="settingsValue" id="settingFovVal">75</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Render Distance<small>chunks</small></span>
+                            <input type="range" id="settingRenderDist" min="2" max="16" step="1" value="8" class="settingsSlider">
+                            <span class="settingsValue" id="settingRenderDistVal">8</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Far Terrain<small>simpler land beyond that, in chunks</small></span>
+                            <select class="settingsSelect seg" id="settingFarTerrain">
+                                <option value="0">Off</option>
+                                <option value="16">16</option>
+                                <option value="32">32</option>
+                                <option value="64">64</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Fog Distance</span>
+                            <input type="range" id="settingFogDist" min="0.5" max="0.95" step="0.01" value="0.82" class="settingsSlider">
+                            <span class="settingsValue" id="settingFogDistVal">82%</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Brightness</span>
+                            <input type="range" id="settingBrightness" min="0.6" max="1.6" step="0.05" value="1.0" class="settingsSlider">
+                            <span class="settingsValue" id="settingBrightnessVal">100%</span>
+                        </div>
+                        <div class="settingsSectionTitle">Quality</div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Resolution</span>
+                            <input type="range" id="settingResScale" min="0.5" max="1" step="0.05" value="1" class="settingsSlider">
+                            <span class="settingsValue" id="settingResScaleVal">100%</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Shadows</span>
+                            <select class="settingsSelect seg" id="settingShadows">
+                                <option value="off">Off</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Clouds</span>
+                            <select class="settingsSelect seg" id="settingClouds">
+                                <option value="fast">Fast</option>
+                                <option value="fancy">Fancy</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Sky</span>
+                            <select class="settingsSelect seg" id="settingSky">
+                                <option value="simple">Simple</option>
+                                <option value="pretty">Pretty</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Particles</span>
+                            <select class="settingsSelect seg" id="settingParticles">
+                                <option value="off">Off</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Eye Adaptation<small>exposure follows the light, and bright lights glow</small></span>
+                            <select class="settingsSelect seg" id="settingEyeAdapt">
+                                <option value="off">Off</option>
+                                <option value="on">On</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Max Frame Rate</span>
+                            <select class="settingsSelect seg" id="settingMaxFps">
+                                <option value="30">30</option>
+                                <option value="60">60</option>
+                                <option value="120">120</option>
+                                <option value="0">No limit</option>
+                            </select>
+                        </div>
                     </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Difficulty</span>
-                        <select class="settingsSelect" id="settingDifficulty">
-                            <option value="PEACEFUL">Peaceful</option>
-                            <option value="EASY">Easy</option>
-                            <option value="NORMAL">Normal</option>
-                            <option value="HARD">Hard</option>
-                        </select>
+
+                    <!-- Controls -->
+                    <div class="settingsPanel hidden" data-section="controls">
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Look Sensitivity<small>the mouse, and a controller's right stick</small></span>
+                            <input type="range" id="settingSensitivity" min="0.2" max="4" step="0.1" value="1.0" class="settingsSlider">
+                            <span class="settingsValue" id="settingSensitivityVal">1.0</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Invert Y Axis</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingInvertY"><span class="track"></span></label>
+                        </div>
+                        <div class="settingsSectionTitle">Controls</div>
+                        <div class="keyGrid pad">
+                            <span class="keyHead">To</span><span class="keyHead">Keyboard and mouse</span><span class="keyHead">Controller</span>
+                            <span>Move</span><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span><kbd class="pad">Left stick</kbd></span>
+                            <span>Look around</span><span><kbd>Mouse</kbd></span><span><kbd class="pad">Right stick</kbd></span>
+                            <span>Jump, swim up</span><span><kbd>Space</kbd></span><span><kbd class="pad">A</kbd></span>
+                            <span>Sprint</span><span><kbd>Shift</kbd></span><span>click <kbd class="pad">Left stick</kbd></span>
+                            <span>Sneak, go down</span><span><kbd>Ctrl</kbd> or <kbd>Q</kbd></span><span><kbd class="pad">B</kbd></span>
+                            <span>Mine, attack</span><span><kbd>Left-click</kbd></span><span><kbd class="pad">RT</kbd></span>
+                            <span>Place, use, eat</span><span><kbd>Right-click</kbd></span><span><kbd class="pad">LT</kbd></span>
+                            <span>Hotbar slot</span><span><kbd>1</kbd> – <kbd>0</kbd></span><span><kbd class="pad">LB</kbd> <kbd class="pad">RB</kbd></span>
+                            <span>Inventory</span><span><kbd>E</kbd></span><span><kbd class="pad">Y</kbd></span>
+                            <span>Crafting</span><span><kbd>C</kbd></span><span><kbd class="pad">X</kbd></span>
+                            <span>Pause</span><span><kbd>Esc</kbd></span><span><kbd class="pad">Start</kbd></span>
+                            <span>In a menu</span><span>click, <kbd>Esc</kbd> to go back</span><span><kbd class="pad">D-pad</kbd> <kbd class="pad">A</kbd> choose, <kbd class="pad">B</kbd> back</span>
+                        </div>
                     </div>
-                    <div class="settingsSectionTitle">Time &amp; Weather</div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Daylight Cycle</span>
-                        <label class="settingsToggle"><input type="checkbox" id="settingDaylightCycle" checked><span class="track"></span></label>
+
+                    <!-- Audio -->
+                    <div class="settingsPanel hidden" data-section="audio">
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Weather Volume<small>rain, wind and thunder</small></span>
+                            <input type="range" id="settingWeatherVolume" min="0" max="1" step="0.05" value="0.8" class="settingsSlider">
+                            <span class="settingsValue" id="settingWeatherVolumeVal">80%</span>
+                        </div>
                     </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Time of Day</span>
-                        <select class="settingsSelect" id="settingTimeOfDay">
-                            <option value="">Keep current</option>
-                            <option value="6">Sunrise</option>
-                            <option value="9">Morning</option>
-                            <option value="12">Noon</option>
-                            <option value="15.5">Afternoon</option>
-                            <option value="18">Sunset</option>
-                            <option value="21">Night</option>
-                            <option value="0">Midnight</option>
-                        </select>
+
+                    <!-- Display (HUD) -->
+                    <div class="settingsPanel hidden" data-section="hud">
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Show Coordinates</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingShowCoords" checked><span class="track"></span></label>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Show Crosshair</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingCrosshair" checked><span class="track"></span></label>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Show FPS</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingShowFps"><span class="track"></span></label>
+                        </div>
                     </div>
-                    <div class="settingsRow">
-                        <span class="settingsLabel">Weather</span>
-                        <select class="settingsSelect" id="settingWeather">
-                            <option value="dynamic">Dynamic (changes naturally)</option>
-                            <optgroup label="Clear">
-                                <option value="clear">Fully Clear</option>
-                                <option value="sunny">Sunny</option>
-                                <option value="mostly_sunny">Mostly Sunny</option>
-                                <option value="cloudy">Cloudy</option>
-                            </optgroup>
-                            <optgroup label="Fog">
-                                <option value="misty">Misty</option>
-                                <option value="foggy">Foggy</option>
-                                <option value="dense_fog">Dense Fog</option>
-                            </optgroup>
-                            <optgroup label="Rain">
-                                <option value="rain">Rain</option>
-                                <option value="heavy_rain">Heavy Rain</option>
-                                <option value="stormy">Stormy</option>
-                            </optgroup>
-                            <optgroup label="Lightning">
-                                <option value="rain_lightning">Lightning — Calm Rainstorm</option>
-                                <option value="lightning_storm">Lightning Storm</option>
-                                <option value="dry_lightning">Lightning — No Rain</option>
-                            </optgroup>
-                            <optgroup label="Cold">
-                                <option value="snow">Snow</option>
-                                <option value="heavy_snow">Heavy Snow</option>
-                                <option value="snowstorm">Snowstorm</option>
-                                <option value="sleet">Sleet</option>
-                                <option value="freezing_rain">Freezing Rain</option>
-                            </optgroup>
-                            <optgroup label="Extreme">
-                                <option value="windy">Windy</option>
-                                <option value="gale">Gale</option>
-                                <option value="hailstorm">Hailstorm</option>
-                                <option value="thunderstorm">Thunderstorm</option>
-                                <option value="supercell">Supercell</option>
-                                <option value="tornado">Tornado</option>
-                            </optgroup>
-                            <optgroup label="Biome">
-                                <option value="dusty">Dusty</option>
-                                <option value="ashy">Ashy</option>
-                            </optgroup>
-                        </select>
+
+                    <!-- Accessibility -->
+                    <div class="settingsPanel hidden" data-section="access">
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Colorblind Mode</span>
+                            <select class="settingsSelect" id="settingColorblind">
+                                <option value="none">None</option>
+                                <option value="protanopia">Protanopia (red-weak)</option>
+                                <option value="deuteranopia">Deuteranopia (green-weak)</option>
+                                <option value="tritanopia">Tritanopia (blue-weak)</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">High Contrast Menus</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingHighContrast"><span class="track"></span></label>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Reduce Motion<small>also softens lightning flashes</small></span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingReduceMotion"><span class="track"></span></label>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Large Text</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingLargeText"><span class="track"></span></label>
+                        </div>
                     </div>
-                    <div class="settingsRow">
-                        <div class="menuButton" id="settingGameModeApply" style="width:auto;height:auto;line-height:normal;padding:0.6vw 1.4vw;font-size:1.1vw;margin:0;">Apply to World</div>
+
+                    <!-- Game: updates, reset -->
+                    <div class="settingsPanel hidden" data-section="game">
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Game Version<small id="updateCheckStatus"></small></span>
+                            <div class="menuButton small" id="settingCheckUpdates">Check for Updates</div>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">All Settings<small>put every setting back as it came</small></span>
+                            <div class="menuButton small danger" id="settingsResetBtn">Reset to Defaults</div>
+                        </div>
+                    </div>
+
+                    <!-- This world (in a game only) -->
+                    <div class="settingsPanel hidden" data-section="world">
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Game Mode</span>
+                            <select class="settingsSelect seg" id="settingGameMode">
+                                <option value="SURVIVAL">Survival</option>
+                                <option value="CREATIVE">Creative</option>
+                                <option value="SPECTATOR">Spectator</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Difficulty</span>
+                            <select class="settingsSelect seg" id="settingDifficulty">
+                                <option value="PEACEFUL">Peaceful</option>
+                                <option value="EASY">Easy</option>
+                                <option value="NORMAL">Normal</option>
+                                <option value="HARD">Hard</option>
+                            </select>
+                        </div>
+                        <div class="settingsSectionTitle">Time &amp; Weather</div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Daylight Cycle</span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingDaylightCycle" checked><span class="track"></span></label>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Time of Day<small>jumps there once</small></span>
+                            <select class="settingsSelect" id="settingTimeOfDay">
+                                <option value="">Keep current</option>
+                                <option value="6">Sunrise</option>
+                                <option value="9">Morning</option>
+                                <option value="12">Noon</option>
+                                <option value="15.5">Afternoon</option>
+                                <option value="18">Sunset</option>
+                                <option value="21">Night</option>
+                                <option value="0">Midnight</option>
+                            </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Weather</span>
+                            <select class="settingsSelect" id="settingWeather">
+                                <option value="dynamic">Dynamic (changes naturally)</option>
+                                <optgroup label="Clear">
+                                    <option value="clear">Fully Clear</option>
+                                    <option value="sunny">Sunny</option>
+                                    <option value="mostly_sunny">Mostly Sunny</option>
+                                    <option value="cloudy">Cloudy</option>
+                                </optgroup>
+                                <optgroup label="Fog">
+                                    <option value="misty">Misty</option>
+                                    <option value="foggy">Foggy</option>
+                                    <option value="dense_fog">Dense Fog</option>
+                                </optgroup>
+                                <optgroup label="Rain">
+                                    <option value="rain">Rain</option>
+                                    <option value="heavy_rain">Heavy Rain</option>
+                                    <option value="stormy">Stormy</option>
+                                </optgroup>
+                                <optgroup label="Lightning">
+                                    <option value="rain_lightning">Lightning — Calm Rainstorm</option>
+                                    <option value="lightning_storm">Lightning Storm</option>
+                                    <option value="dry_lightning">Lightning — No Rain</option>
+                                </optgroup>
+                                <optgroup label="Cold">
+                                    <option value="snow">Snow</option>
+                                    <option value="heavy_snow">Heavy Snow</option>
+                                    <option value="snowstorm">Snowstorm</option>
+                                    <option value="sleet">Sleet</option>
+                                    <option value="freezing_rain">Freezing Rain</option>
+                                </optgroup>
+                                <optgroup label="Extreme">
+                                    <option value="windy">Windy</option>
+                                    <option value="gale">Gale</option>
+                                    <option value="hailstorm">Hailstorm</option>
+                                    <option value="thunderstorm">Thunderstorm</option>
+                                    <option value="supercell">Supercell</option>
+                                    <option value="tornado">Tornado</option>
+                                </optgroup>
+                                <optgroup label="Biome">
+                                    <option value="dusty">Dusty</option>
+                                    <option value="ashy">Ashy</option>
+                                </optgroup>
+                            </select>
+                        </div>
+                        <div class="formNote">These apply to this world, when you close Settings.</div>
                     </div>
                 </div>
             </div>
@@ -454,57 +540,70 @@
     </div>
 
     <!-- ── How To Play ────────────────────────────────────────────────────── -->
-    <div class="hidden" id="HowToPlayScreen">
-        <div id="howToBox">
-            <div class="howToHeader">
-                <span>How To Play</span>
-                <div class="menuButton" id="howToBackBtn">Back</div>
+    <div class="scrim hidden" id="HowToPlayScreen">
+        <div id="howToBox" class="panel">
+            <div class="howToHeader panelHeader">
+                <span class="panelTitle">How to Play</span>
+                <div class="menuButton small primary" id="howToBackBtn">Got it</div>
             </div>
             <div class="howToScroll">
                 <div class="howToGoal">
-                    <strong>Wonder World: BETA</strong><br>
+                    <strong>Wonder World: Beta</strong><br>
                     Your goal for now: dig deep, find <strong>Gold</strong>, craft a full set of
                     <strong>Gold Armor</strong> (helmet, chestplate, leggings, boots), and make it
                     back to the <strong>surface</strong> alive.
                 </div>
 
-                <div class="howToSectionTitle">Movement</div>
-                <ul class="howToList">
-                    <li><b>W A S D</b> — move</li>
-                    <li><b>Mouse</b> — look around</li>
-                    <li><b>Space</b> — jump / swim up</li>
-                    <li><b>Shift</b> — sprint</li>
-                    <li><b>Ctrl</b> or <b>Q</b> — sneak / descend</li>
-                </ul>
+                <div class="howToColumns">
+                    <div>
+                        <div class="howToSectionTitle">Moving</div>
+                        <ul class="howToList">
+                            <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</li>
+                            <li><kbd>Mouse</kbd> look around</li>
+                            <li><kbd>Space</kbd> jump, swim up</li>
+                            <li><kbd>Shift</kbd> sprint</li>
+                            <li><kbd>Ctrl</kbd> or <kbd>Q</kbd> sneak, go down</li>
+                        </ul>
 
-                <div class="howToSectionTitle">Interacting</div>
-                <ul class="howToList">
-                    <li><b>Left-click</b> — mine blocks &amp; attack</li>
-                    <li><b>Right-click</b> — use the held item: place a block, eat food, draw a bow, or open a station (crafting table, oven, smelter, chest)</li>
-                    <li>Stuck with your head in a block? Just <b>mine</b> — it digs out the block at your head first</li>
-                </ul>
+                        <div class="howToSectionTitle">Using things</div>
+                        <ul class="howToList">
+                            <li><kbd>Left-click</kbd> mine blocks and attack</li>
+                            <li><kbd>Right-click</kbd> use what you hold: place a block, eat, draw a bow, or open a station (crafting table, oven, smelter, chest)</li>
+                            <li>Stuck with your head in a block? Just <b>mine</b> — it digs out the block at your head first</li>
+                        </ul>
 
-                <div class="howToSectionTitle">Inventory &amp; Crafting</div>
-                <ul class="howToList">
-                    <li><b>E</b> — open inventory &nbsp;·&nbsp; <b>C</b> — crafting / creative menu</li>
-                    <li><b>1–0</b> — select a hotbar slot</li>
-                    <li><b>Crafting Table</b> — tools, armor &amp; blocks &nbsp;·&nbsp; <b>Oven</b> — cook food &nbsp;·&nbsp; <b>Smelter</b> — ingots &amp; glass</li>
-                    <li>Mine ore, smelt it into ingots, then craft armor and tools</li>
-                </ul>
+                        <div class="howToSectionTitle">Menus</div>
+                        <ul class="howToList">
+                            <li><kbd>Esc</kbd> close a menu, or pause</li>
+                            <li>Click the screen to take hold of the mouse again</li>
+                        </ul>
 
-                <div class="howToSectionTitle">Survival</div>
-                <ul class="howToList">
-                    <li>Keep an eye on <b>Health</b>, <b>Hunger</b> and <b>Energy</b></li>
-                    <li>Hold <b>Right-click</b> with food to eat (watch the eat bar)</li>
-                    <li>Don't suffocate inside blocks, and beware fall damage in deep caves</li>
-                    <li>Gold is found near the very bottom of the world — pack food before you dig</li>
-                </ul>
+                        <div class="howToSectionTitle">With a controller</div>
+                        <ul class="howToList">
+                            <li><kbd class="pad">Left stick</kbd> move (click it to sprint) &nbsp;·&nbsp; <kbd class="pad">Right stick</kbd> look</li>
+                            <li><kbd class="pad">A</kbd> jump &nbsp;·&nbsp; <kbd class="pad">B</kbd> sneak &nbsp;·&nbsp; <kbd class="pad">RT</kbd> mine and attack &nbsp;·&nbsp; <kbd class="pad">LT</kbd> place and use</li>
+                            <li><kbd class="pad">LB</kbd> <kbd class="pad">RB</kbd> hotbar &nbsp;·&nbsp; <kbd class="pad">Y</kbd> inventory &nbsp;·&nbsp; <kbd class="pad">X</kbd> crafting &nbsp;·&nbsp; <kbd class="pad">Start</kbd> pause</li>
+                            <li>In menus: <kbd class="pad">D-pad</kbd> to move, <kbd class="pad">A</kbd> to choose, <kbd class="pad">B</kbd> to go back. The full list is in Settings, under Controls.</li>
+                        </ul>
+                    </div>
+                    <div>
+                        <div class="howToSectionTitle">Inventory &amp; crafting</div>
+                        <ul class="howToList">
+                            <li><kbd>E</kbd> inventory &nbsp;·&nbsp; <kbd>C</kbd> crafting, or the creative menu</li>
+                            <li><kbd>1</kbd> – <kbd>0</kbd> pick a hotbar slot</li>
+                            <li><b>Crafting Table</b> tools, armor and blocks &nbsp;·&nbsp; <b>Oven</b> cooks food &nbsp;·&nbsp; <b>Smelter</b> ingots and glass</li>
+                            <li>Mine ore, smelt it into ingots, then craft armor and tools</li>
+                        </ul>
 
-                <div class="howToSectionTitle">Menus</div>
-                <ul class="howToList">
-                    <li><b>Esc</b> — close a menu, or pause the game</li>
-                    <li>The game only responds to movement while the mouse is locked (click the screen to lock)</li>
-                </ul>
+                        <div class="howToSectionTitle">Staying alive</div>
+                        <ul class="howToList">
+                            <li>Keep an eye on <b>Health</b>, <b>Hunger</b> and <b>Energy</b></li>
+                            <li>Hold <kbd>Right-click</kbd> with food to eat (watch the bar)</li>
+                            <li>Don't suffocate inside blocks, and beware long falls in deep caves</li>
+                            <li>Gold is near the very bottom of the world — pack food before you dig</li>
+                        </ul>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -520,20 +619,35 @@
         <div id="suffocateOverlay" class="hidden"></div>
 
         <div id="gameUI">
+            <!-- Health, hunger and energy: a bar each, with the number beside it.
+                 The <img> elements are static; world.js only moves the fills and
+                 rewrites the numbers, so the HUD never re-parses markup. -->
             <div id="playerInfo">
-                <!-- The <img> elements are static; only the adjacent span text is
-                     rewritten each frame, so the HUD never re-parses markup. -->
-                <div id="playerHealth"><img src="./data/textures/UI/Heart.png" width="25"> <span id="playerHealthVal">Health: 100 / 100</span></div>
-                <div id="playerHunger"><img src="./data/textures/UI/Bread.png" width="25"> <span id="playerHungerVal">Hunger: 100 / 100</span></div>
-                <div id="playerEnergy"><img src="./data/textures/UI/Energy1.png" width="25"> <span id="playerEnergyVal">Energy: 100 / 100</span></div>
-                <div id="playerProtection" class="hidden">Protection: 0%</div>
-                <div id="playerArrows" class="hidden">Arrows: 0</div>
+                <div class="meter" id="playerHealth" title="Health">
+                    <img src="./data/textures/UI/Heart.png" alt="">
+                    <div class="meterBar"><div class="meterFill health" id="playerHealthFill"></div></div>
+                    <span class="meterVal" id="playerHealthVal">100</span>
+                </div>
+                <div class="meter" id="playerHunger" title="Hunger">
+                    <img src="./data/textures/UI/Bread.png" alt="">
+                    <div class="meterBar"><div class="meterFill hunger" id="playerHungerFill"></div></div>
+                    <span class="meterVal" id="playerHungerVal">100</span>
+                </div>
+                <div class="meter" id="playerEnergy" title="Energy">
+                    <img src="./data/textures/UI/Energy1.png" alt="">
+                    <div class="meterBar"><div class="meterFill energy" id="playerEnergyFill"></div></div>
+                    <span class="meterVal" id="playerEnergyVal">100</span>
+                </div>
+                <div class="chipRow">
+                    <div id="playerProtection" class="chip hidden">Protection: 0%</div>
+                    <div id="playerArrows" class="chip hidden">Arrows: 0</div>
+                </div>
             </div>
 
             <!-- Player coordinates — top-right -->
-            <div id="playerCoords"></div>
+            <div id="playerCoords" class="chip"></div>
             <!-- FPS counter (toggle in settings) -->
-            <div id="fpsCounter" class="hidden">FPS: 0</div>
+            <div id="fpsCounter" class="chip hidden">FPS: 0</div>
 
             <!-- Attack charge bar -->
             <div id="attackChargeBar">
@@ -541,17 +655,19 @@
             </div>
 
             <div id="hotbar">
-                <div class="hotbarSlot selected" data-slot="0"><img src=""></div>
-                <div class="hotbarSlot" data-slot="1"><img src=""></div>
-                <div class="hotbarSlot" data-slot="2"><img src=""></div>
-                <div class="hotbarSlot" data-slot="3"><img src=""></div>
-                <div class="hotbarSlot" data-slot="4"><img src=""></div>
-                <div class="hotbarSlot" data-slot="5"><img src=""></div>
-                <div class="hotbarSlot" data-slot="6"><img src=""></div>
-                <div class="hotbarSlot" data-slot="7"><img src=""></div>
-                <div class="hotbarSlot" data-slot="8"><img src=""></div>
-                <div class="hotbarSlot" data-slot="9"><img src=""></div>
-                <div class="offhand hotbarSlot"><img src=""></div>
+                <div class="offhand hotbarSlot" data-key="off"><img src=""></div>
+                <div class="hotbarTray">
+                    <div class="hotbarSlot selected" data-slot="0" data-key="1"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="1" data-key="2"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="2" data-key="3"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="3" data-key="4"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="4" data-key="5"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="5" data-key="6"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="6" data-key="7"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="7" data-key="8"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="8" data-key="9"><img src=""></div>
+                    <div class="hotbarSlot" data-slot="9" data-key="0"><img src=""></div>
+                </div>
             </div>
 
             <div id="crosshair"></div>
@@ -569,74 +685,81 @@
 
         <!-- Death screen -->
         <div id="DeathScreen" class="hidden">
-            <div class="deathTitle">You Died!</div>
-            <div class="deathSub">Your items were dropped at your death location.</div>
-            <div class="menuButton" id="respawnBtn">Respawn</div>
+            <div class="deathTitle">You Died</div>
+            <div class="deathSub">Your things are lying where you fell.</div>
+            <div class="menuButton primary" id="respawnBtn">Respawn</div>
         </div>
 
         <!-- Inventory screen (E key) -->
-        <div id="InventoryScreen" class="hidden">
-            <div class="invHeader">
-                <span>Inventory &nbsp;<span id="invWeightLabel" style="font-size:1vw;color:#888;font-weight:normal;"></span></span>
-                <div style="display:flex;gap:0.5vw;align-items:center;">
-                    <div class="menuButton" id="invCraftBtn" style="width:11vw;height:2.5vw;line-height:2.5vw;font-size:1vw;">Open Craft</div>
-                    <div class="menuButton" id="invCloseBtn" style="width:5vw;height:2.5vw;line-height:2.5vw;font-size:1.1vw;">Close</div>
+        <div id="InventoryScreen" class="scrim hidden">
+            <div class="panel invPanel">
+                <div class="invHeader panelHeader">
+                    <span class="panelTitle">Inventory <span id="invWeightLabel"></span></span>
+                    <div class="headerBtns">
+                        <div class="menuButton small" id="invCraftBtn">Crafting</div>
+                        <div class="menuButton small primary" id="invCloseBtn">Close</div>
+                    </div>
                 </div>
-            </div>
-            <div class="invBody">
-                <div class="invEquipCol">
-                    <div class="invSectionTitle">Equipment</div>
-                    <div id="invEquip"></div>
+                <div class="invBody">
+                    <div class="invEquipCol">
+                        <div class="invSectionTitle">Wearing</div>
+                        <div id="invEquip"></div>
+                    </div>
+                    <div class="invItemsCol">
+                        <div class="invSectionTitle">Carrying</div>
+                        <div id="invSlots" class="invSlotsGrid"></div>
+                        <div id="invHotbarRow" class="invHotbarSection"></div>
+                    </div>
                 </div>
-                <div class="invItemsCol">
-                    <div class="invSectionTitle">Items</div>
-                    <div id="invSlots" class="invSlotsGrid"></div>
-                    <div id="invHotbarRow" class="invHotbarSection"></div>
-                </div>
+                <div class="formNote">Click to pick up or put down &nbsp;·&nbsp; Right-click to take half, or put down one</div>
             </div>
         </div>
 
         <!-- Interactive block UI (crafting table, chest, etc.) -->
-        <div id="InteractivePanel" class="hidden">
-            <div class="interactiveHeader">
-                <span id="interactivePanelTitle">Crafting Table</span>
-                <div class="menuButton" id="interactivePanelClose" style="width:6vw;height:3vw;line-height:3vw;font-size:1.2vw;">Close</div>
+        <div id="InteractivePanel" class="panel hidden">
+            <div class="interactiveHeader panelHeader">
+                <span id="interactivePanelTitle" class="panelTitle">Crafting Table</span>
+                <div class="menuButton small primary" id="interactivePanelClose">Close</div>
             </div>
             <div id="craftingContainer">
                 <div id="recipeList"></div>
                 <div id="recipeDetail">
                     <div id="recipeDetailName"></div>
                     <div id="recipeDetailIngredients"></div>
-                    <div class="menuButton" id="craftBtn" style="margin-top:1vw;">Craft</div>
+                    <div class="menuButton primary" id="craftBtn">Craft</div>
                 </div>
             </div>
         </div>
 
         <!-- Creative Inventory (C key in Creative mode) -->
-        <div id="CreativeInventoryPanel" class="hidden">
-            <div class="interactiveHeader">
-                <span>Creative Inventory</span>
-                <div class="menuButton" id="creativeInvClose" style="width:6vw;height:3vw;line-height:3vw;font-size:1.2vw;">Close</div>
-            </div>
-            <div id="creativeInvSearch" style="margin-bottom:0.8vw;">
-                <input id="creativeInvFilter" type="text" placeholder="Search items..." style="width:20vw;padding:0.4vw 0.6vw;background:#1a1a1a;color:#eee;border:1px solid #444;border-radius:4px;font-size:1vw;">
+        <div id="CreativeInventoryPanel" class="panel hidden">
+            <div class="interactiveHeader panelHeader">
+                <span class="panelTitle">Creative Inventory</span>
+                <div class="headerBtns">
+                    <input id="creativeInvFilter" class="worldFormInput" type="text" placeholder="Search…">
+                    <div class="menuButton small primary" id="creativeInvClose">Close</div>
+                </div>
             </div>
             <div id="creativeInvGrid"></div>
+            <div class="formNote">Click something to add it to your hotbar.</div>
         </div>
 
         <div class="hidden" id="PauseScreen">
-            <img id="PauseLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo" style="width: 20%; height: auto; margin-top: -15vw;">
-            <div class="menuButton" onclick="resumeGame()">Resume</div>
-            <div class="menuButton" id="pauseHowToBtn">How To Play</div>
-            <div class="menuButton" id="pauseSettingsBtn">Settings</div>
-            <div class="menuButton" onclick="leaveWorld()">Quit</div>
+            <div class="panel pausePanel">
+                <img id="PauseLogo" src="./data/textures/UI/Logo_Beta.png" class="pauseLogo" alt="Wonder World Logo">
+                <div class="pauseTitle">Paused</div>
+                <div class="menuButton primary" onclick="resumeGame()">Resume</div>
+                <div class="menuButton" id="pauseSettingsBtn">Settings</div>
+                <div class="menuButton" id="pauseHowToBtn">How to Play</div>
+                <div class="menuButton quiet" onclick="leaveWorld()">Save &amp; Quit</div>
+            </div>
         </div>
 
         <canvas id="gameCanvas"></canvas>
     </div>
 
     <!-- "Saving World..." sign — body-level so it shows on every screen -->
-    <div id="savingIndicator" class="hidden">Saving World...</div>
+    <div id="savingIndicator" class="chip hidden">Saving…</div>
 
     <!-- Shown when the renderer comes up on a software rasteriser. -->
     <div id="gpuWarning" class="hidden"></div>

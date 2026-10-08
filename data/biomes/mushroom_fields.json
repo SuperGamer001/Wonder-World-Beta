@@ -1,0 +1,61 @@
+{
+  "name": "MUSHROOM_FIELDS",
+  "category": "land",
+  "priority": 10,
+  "temperature": 0.7,
+  "humidity": 0.9,
+  "mapColor": "#ff00ff",
+  "require": {
+    "island": [
+      0.3,
+      2
+    ],
+    "weirdness": [
+      0.55,
+      10
+    ]
+  },
+  "select": {
+    "temperature": [
+      -1,
+      2
+    ],
+    "humidity": [
+      -1,
+      2
+    ],
+    "elevation": [
+      58,
+      140
+    ]
+  },
+  "surface": {
+    "top": "MYCELIUM",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "MYCELIUM",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    }
+  },
+  "structures": {
+    "huge_mushroom": {
+      "frequency": 0.006
+    }
+  }
+}

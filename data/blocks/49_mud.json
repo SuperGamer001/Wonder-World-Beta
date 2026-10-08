@@ -1,0 +1,19 @@
+{
+  "id": 49,
+  "name": "MUD",
+  "terrainType": "mesh",
+  "color": [
+    0.26,
+    0.21,
+    0.19
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "mud",
+      "count": 1
+    }
+  ],
+  "texture": "Mud.png",
+  "blend": 46
+}

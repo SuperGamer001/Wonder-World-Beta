@@ -1,0 +1,26 @@
+{
+  "id": 42,
+  "name": "HANGING_LANTERN",
+  "terrainType": "solid",
+  "model": "hanging_lantern",
+  "transparent": true,
+  "noCollision": true,
+  "light": 15,
+  "color": [
+    0.95,
+    0.72,
+    0.35
+  ],
+  "hardness": 1,
+  "drops": [
+    {
+      "itemId": "lantern",
+      "count": 1
+    }
+  ],
+  "support": [
+    0,
+    1,
+    0
+  ]
+}

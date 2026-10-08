@@ -1,0 +1,18 @@
+{
+  "id": "lantern",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "lantern",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "iron_ingot",
+      "count": 2
+    },
+    {
+      "itemId": "torch",
+      "count": 1
+    }
+  ]
+}

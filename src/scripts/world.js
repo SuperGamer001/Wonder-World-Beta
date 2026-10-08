@@ -30,11 +30,18 @@ import { WaterSimulator }                    from './engine/WaterSimulator.js';
 import { EntityManager }                     from './engine/EntityManager.js';
 import { CraftingSystem }                    from './engine/CraftingSystem.js';
 import { SmoothTerrain }                     from './engine/SmoothShape.js';
+import { Geography }                         from './workers/Geography.js';
+import { BiomeSet }                          from './workers/Biomes.js';
+import { normaliseFlat }                     from './engine/FlatWorld.js';
 import { ShadowMapper, SHADOW_LAYER, SHADOW_GLSL } from './Shadows.js';
-import { SKY_MAX, SKY_FALLOFF, SKY_MIN, SUN_DIR, SUN_AMBIENT } from './engine/Sun.js';
+import { SKY_MAX, SKY_FALLOFF, SKY_MIN, SUN_AMBIENT, SUN_TOP } from './engine/Sun.js';
+import { MESH_VERT_GLSL, NO_LAYER }          from './engine/MeshFormat.js';
 import { Particles, PARTICLE_LEVELS }        from './Particles.js';
 import { Atmosphere }                        from './Atmosphere.js';
-import { ATMOS_GLSL }                        from './AtmosGLSL.js';
+import { ATMOS_GLSL, OUTPUT_GLSL, CLOUD_VEIL_GLSL } from './AtmosGLSL.js';
+import { PostFX }                            from './PostFX.js';
+import { FarTerrain, MASK as FAR_MASK }      from './FarTerrain.js';
+import { EDIT_EMPTY }                        from './workers/FarTiles.js';
 
 // The page is served by the game server itself, so derive both URLs from the
 // current origin. The server now binds an OS-assigned port (a fixed 3000 meant
@@ -80,13 +87,130 @@ let _wasLocked     = false;
 // get their style from TERRAIN_STYLE in server/server.js.
 let _terrainStyle  = 'blocky';
 let _smooth        = null;   // SmoothTerrain collider — smooth worlds only
+// The world generator version the world was made with (TerrainGenerator.js
+// WORLD_GEN; 1 = workers/legacy/). From the world's world.json.
+let _worldGen      = 1;
 
 // ── Materials ─────────────────────────────────────────────────────────────────
 
-let opaqueMaterial      = null;
-let transparentMaterial = null;
 let selectionMaterial   = null;
 const chunkMeshes = new Map();
+
+// Every chunk mesh hangs under this group, not under the scene itself. Chunks
+// never move, so each mesh's world matrix is set once when it is made
+// (_addChunkMesh) and the group's updateMatrixWorld does nothing: Three.js
+// otherwise walks every mesh in the scene on each render() — twice a frame
+// with shadows on — to find that nothing changed.
+const chunkGroup = new THREE.Group();
+chunkGroup.matrixAutoUpdate = false;
+chunkGroup.updateMatrixWorld = () => {};
+
+// ── What a chunk draw does not need to repeat ────────────────────────────────
+// Every chunk has its own materials (for its light textures), and Three.js
+// uploads a material's whole uniform list whenever the material changes — so
+// each chunk draw re-sent some eighty uniforms of fog, sky, weather and shadow
+// state that are the same for all of them. That was the largest single cost
+// of submitting a frame, ahead of the draw calls themselves.
+//
+// Uniforms belong to the GL program, and all chunk materials of one kind
+// (opaque, transparent) run the same program. So a chunk's materials carry
+// only what differs per chunk, plus the samplers (_chunkLight), and one
+// "primer" mesh per kind — a single degenerate triangle with the full uniform
+// set, sorted ahead of everything else — uploads the shared state once per
+// render() before any chunk of its kind is drawn (_makePrimers).
+//
+// Samplers stay in every chunk material because a sampler takes its texture
+// unit from its place in the material's upload: left out, the shared textures
+// would keep the primer's units while a chunk's light textures took the same
+// ones. _perDrawUniforms picks them out of chunkUniforms by value, so a
+// sampler added to the shared GLSL later is covered without a change here.
+let _perDraw     = null;   // the shared uniforms every chunk material still carries
+let _primers     = [];     // the primer meshes, in the scene while a world is loaded
+let _primerLight = null;   // a light texture for them to bind
+
+/** The uniforms of `uniforms` that must be set on every draw: samplers (a texture, or not set yet). */
+function _perDrawUniforms(uniforms) {
+    const out = {};
+    for (const [name, u] of Object.entries(uniforms)) {
+        if (u.value == null || u.value.isTexture) out[name] = u;
+    }
+    return out;
+}
+
+function _opaqueChunkMaterial(uniforms) {
+    return new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3, uniforms,
+        vertexShader: CHUNK_VERT, fragmentShader: CHUNK_FRAG,
+    });
+}
+
+function _transparentChunkMaterial(uniforms) {
+    return new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3, uniforms,
+        vertexShader: CHUNK_VERT, fragmentShader: CHUNK_TRANSP_FRAG,
+        transparent: true, depthWrite: false,
+        // Front faces only. The mesher puts every face of water and ice in
+        // twice, once facing each way, so the surface is still there from
+        // underneath — and culling the faces turned away is what lets it give
+        // them an order that is back to front from any viewpoint
+        // (GreedyMesher._orderTranslucent). Chunks are ordered in _cullChunks.
+        side: THREE.FrontSide,
+    });
+}
+
+/** A geometry with the chunk meshes' attributes and one triangle: all zeros (nothing drawn) unless `tri`. */
+function _chunkTriangle(tri) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tri ? [0, 0, 0, 1, 0, 0, 0, 0, 1] : 9), 3));
+    geo.setAttribute('tint',     new THREE.BufferAttribute(new Uint8Array(12).fill(255), 4, true));
+    geo.setAttribute('uv',       new THREE.BufferAttribute(new Uint16Array(6), 2, true));
+    geo.setAttribute('nrm',      new THREE.BufferAttribute(new Int8Array([0, 127, 0, 0, 0, 127, 0, 127, 0, 127, 0, 0]), 4, true));
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array([0, 1, 2]), 1));
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1);
+    return geo;
+}
+
+/** The primer meshes for the current chunkUniforms (see above). */
+function _makePrimers() {
+    _primerLight = _emptyLightTexture();
+    const uniforms = {
+        ...chunkUniforms,
+        uLight:    { value: _primerLight },
+        uBlock:    { value: _noBlockLight },
+        uChunk:    { value: _chunkUniform() },
+    };
+    const geo = _chunkTriangle(false);
+    for (const material of [_opaqueChunkMaterial(uniforms), _transparentChunkMaterial(uniforms)]) {
+        const mesh = new THREE.Mesh(geo, material);
+        mesh.frustumCulled = false;
+        // First in its pass: both the opaque sort (see setOpaqueSort) and
+        // Three.js's transparent sort order by renderOrder before depth.
+        mesh.renderOrder = -1e9;
+        scene.add(mesh);
+        _primers.push(mesh);
+    }
+}
+
+function _disposePrimers() {
+    for (const mesh of _primers) { scene.remove(mesh); mesh.material.dispose(); }
+    _primers[0]?.geometry.dispose();
+    _primers = [];
+    _primerLight?.dispose();
+    _primerLight = null;
+    _perDraw = null;
+}
+
+// True inside the main renderer.render() of _render().
+let _viewPass = false;
+
+// The chunk shaders read neither modelViewMatrix nor normalMatrix (CHUNK_VERT
+// works from uChunkRel), but Three.js still composes both for every object it
+// draws. In the view pass a chunk mesh's own two matrices skip that; the
+// shadow pass, whose depth shader does use modelViewMatrix, gets the real ones.
+const _mat4Multiply = THREE.Matrix4.prototype.multiplyMatrices;
+const _mat3Normal   = THREE.Matrix3.prototype.getNormalMatrix;
+function _chunkModelView(a, b) { return _viewPass ? this : _mat4Multiply.call(this, a, b); }
+function _chunkNormalMatrix(m) { return _viewPass ? this : _mat3Normal.call(this, m); }
 
 // ── Block texture atlas ───────────────────────────────────────────────────────
 
@@ -125,6 +249,10 @@ const BLOCK_TEX_LAYERS = [
     'data/textures/blocks/Chest_Front.png',        // 30
     'data/textures/blocks/Chest_Side.png',         // 31
     'data/textures/blocks/Anvil.png',              // 32
+    'data/textures/blocks/Torch.png',              // 33  (model sheet: BlockModels.js)
+    'data/textures/blocks/Lantern.png',            // 34  (model sheet)
+    'data/textures/blocks/Lamp.png',               // 35
+    'data/textures/blocks/SnowDirt_Side.png',      // 36
 ];
 
 // blockId → { top, side, bottom } texture layer index (-1 = vertex color fallback)
@@ -144,7 +272,7 @@ const BLOCK_FACE_MAP = {
     13: { top: 14, side: 14, bottom: 14 },  // ICE
     14: { top: 15, side: 15, bottom: 15 },  // SANDSTONE
     15: { top: 16, side: 16, bottom: 16 },  // CLAY
-    16: { top: 18, side: 18, bottom: 0  },  // SNOW_DIRT
+    16: { top: 18, side: 36, bottom: 0  },  // SNOW_DIRT
     17: { top: 20, side: 20, bottom: 20 },  // GRANITE
     18: { top: 19, side: 19, bottom: 19 },  // DIORITE
     19: { top: 17, side: 17, bottom: 17 },  // BEDROCK
@@ -153,41 +281,120 @@ const BLOCK_FACE_MAP = {
     22: { top: 26, side: 28, bottom: 3  },  // SMELTER
     23: { top: 29, side: 31, bottom: 31 },  // CHEST
     24: { top: 32, side: 32, bottom: 32 },  // ANVIL
+    36: { top: 33, side: 33, bottom: 33 },  // TORCH
+    37: { top: 33, side: 33, bottom: 33 },  // WALL_TORCH_EAST
+    38: { top: 33, side: 33, bottom: 33 },  // WALL_TORCH_WEST
+    39: { top: 33, side: 33, bottom: 33 },  // WALL_TORCH_SOUTH
+    40: { top: 33, side: 33, bottom: 33 },  // WALL_TORCH_NORTH
+    41: { top: 34, side: 34, bottom: 34 },  // LANTERN
+    42: { top: 34, side: 34, bottom: 34 },  // HANGING_LANTERN
+    43: { top: 35, side: 35, bottom: 35 },  // LAMP
 };
+
+// The layers and face map in use for the loaded world: the built-in ones above
+// plus a layer for every texture a block's JSON names ("texture" / "textures",
+// see BlockRegistry) that the built-in map does not already cover. Rebuilt at
+// each world load (_extendBlockTextures) from that world's registry.
+let _texLayers = BLOCK_TEX_LAYERS.slice();
+let _faceMap   = { ...BLOCK_FACE_MAP };
+// Leaves sway in the wind: the built-in leaves layer (uSwayLayer), and the
+// contiguous run of layers added for other blocks flagged `leaves`.
+let _swayRange = [-10, -10];
+
+function _extendBlockTextures(reg) {
+    _texLayers = BLOCK_TEX_LAYERS.slice();
+    _faceMap   = { ...BLOCK_FACE_MAP };
+    const index = new Map(_texLayers.map((p, i) => [p, i]));
+    const layerOf = (file) => {
+        const p = `data/textures/blocks/${file}`;
+        if (!index.has(p)) { index.set(p, _texLayers.length); _texLayers.push(p); }
+        return index.get(p);
+    };
+    const defs = reg.serialize().filter(b => b.textures && !BLOCK_FACE_MAP[b.id]);
+    // Leaves first, so their layers form one run the vertex shader can test.
+    defs.sort((a, b) => (b.leaves ? 1 : 0) - (a.leaves ? 1 : 0));
+    let lo = -10, hi = -10;
+    for (const b of defs) {
+        const face = { top: layerOf(b.textures.top), side: layerOf(b.textures.side), bottom: layerOf(b.textures.bottom) };
+        _faceMap[b.id] = face;
+        if (b.leaves) {
+            if (lo < 0) lo = face.top;
+            hi = Math.max(hi, face.top, face.side, face.bottom);
+        }
+    }
+    _swayRange = [lo, hi];
+}
 
 // GLSL 300 es shaders (Three.js injects the version + built-in uniforms automatically)
 // Three.js automatically injects `position`, `normal`, `uv` before our code,
-// so we only declare our custom attributes here.
-// The mesher does not emit a `normal` attribute — these shaders never read one,
-// because directional brightness is baked into the vertex colour.
+// so we only declare our custom attributes here. The surface normal comes in
+// our own `nrm` (four signed bytes: the normal and the block's glow), not in
+// Three.js's `normal`, which would be three floats.
 //
-// vDepth carries view-space distance so the fragment stage can apply fog. A
-// custom ShaderMaterial gets no fog from Three.js automatically, and without it
-// chunks pop in hard at the render-distance edge, which is what forced the very
-// long default view distance.
+// A custom ShaderMaterial gets no fog from Three.js automatically; the fragment
+// stage applies it from vWorldPos (applyFog). Without it chunks pop in hard at
+// the render-distance edge.
 //
 // Leaves sway in the wind (uWind, from the weather). The displacement depends
 // only on world position, so corners shared by neighbouring quads move together
-// and the canopy never cracks apart. Chunk meshes are only translated, so the
-// offset can be added to the local position directly. The shadow depth pass
-// does not sway — shadows of leaves stay put, which reads fine.
-const CHUNK_VERT = `
-in vec3  color;
-in float layer;
+// and the canopy never cracks apart. The shadow depth pass does not sway —
+// shadows of leaves stay put, which reads fine.
+//
+// Chunk meshes are only ever translated, so instead of Three.js's per-object
+// matrices the shader takes uChunkRel: the chunk's origin relative to the
+// camera, worked out in double precision on the CPU each frame (_viewChunks).
+// The shader never reads modelMatrix or modelViewMatrix, so Three.js uploads
+// neither — two 4×4 matrix uploads per draw were the single largest cost of
+// submitting a frame. Positions stay camera-relative until projection, so this
+// is as precise far from the origin as the matrices were.
+// What differs from chunk to chunk, besides its two light textures, is one
+// uniform: eight floats, one upload per draw. As three uniforms (a vec3 and two
+// vec2) it was up to three GL calls for every chunk drawn. The names the
+// shaders use are kept as macros.
+//   uChunkRel  the chunk's origin relative to the camera (_viewChunks)
+//   uChunkTile the chunk's place in a 64 × 64-chunk tile of the world, as
+//              x + 64·z — see tilePos() in CHUNK_COMMON
+//   uLightY    the sky-light volume's first level (chunk-local y) and height
+//   uBlockY    the block-light volume's; height 0 = none reaches this chunk
+const CHUNK_UNIFORM_GLSL = `
+uniform vec4 uChunk[2];
+#define uChunkRel  (uChunk[0].xyz)
+#define uChunkTile (uChunk[0].w)
+#define uLightY    (uChunk[1].xy)
+#define uBlockY    (uChunk[1].zw)
+`;
+// Offsets into a chunk's uChunk array.
+const U_REL = 0, U_TILE = 3, U_LIGHT_Y0 = 4, U_LIGHT_H = 5, U_BLOCK_Y0 = 6, U_BLOCK_H = 7;
+const TILE_CHUNKS = 64;   // chunks along a side of the tile tilePos() repeats over
+
+/** A uChunk value: no offset, a sky-light volume one level high, no block light. */
+function _chunkUniform() {
+    const u = new Float32Array(8);
+    u[U_LIGHT_H] = 1;
+    return u;
+}
+
+const CHUNK_VERT = MESH_VERT_GLSL + `
+in vec4  nrm;          // xyz surface normal, w glow — signed bytes, normalised by the GPU
+${CHUNK_UNIFORM_GLSL}
 uniform vec4  uWind;
 uniform float uTime;
-uniform float uSwayLayer;
+uniform float uSwayLayer;      // the built-in leaves layer
+uniform vec2  uSwayRange;      // … and the run of layers added for other leaves
 
 out vec3  vColor;
 out vec2  vUV;
 out float vLayer;
-out float vDepth;
 out vec3  vWorldPos;
+out vec3  vLocal;      // chunk-local position, for the light lookup
+out vec4  vNormal;
 
 void main() {
-    vec3 pos = position;
-    vWorldPos = (modelMatrix * vec4(pos, 1.0)).xyz;
-    if (abs(layer - uSwayLayer) < 0.5) {
+    vec3 rel = position + uChunkRel;
+    vWorldPos = rel + cameraPosition;
+    vLocal = position;
+    float layer = tintLayer();
+    if (abs(layer - uSwayLayer) < 0.5 || (layer > uSwayRange.x - 0.5 && layer < uSwayRange.y + 0.5)) {
         float s = length(uWind.xy);
         vec2 dir = s > 0.01 ? uWind.xy / s : vec2(0.7071);
         float lean = min(s / 10.0, 1.0);
@@ -195,59 +402,96 @@ void main() {
         float amp = min(0.025 + 0.012 * s, 0.28) * (1.0 + uWind.z);
         float wave = sin(uTime * (1.5 + 0.07 * s) + ph) * 0.65 + sin(uTime * 3.3 + ph * 1.7) * 0.35;
         vec3 off = vec3(dir.x * (wave + 0.6 * lean), wave * 0.3, dir.y * (wave + 0.6 * lean)) * amp;
-        pos += off;
+        rel += off;
         vWorldPos += off;
+        vLocal += off;
     }
-    vColor  = color;
-    vUV     = uv;
+    vColor  = tint.rgb;
+    vUV     = tileUV();
     vLayer  = layer;
-    vec4 mv = modelViewMatrix * vec4(pos, 1.0);
-    vDepth  = -mv.z;
-    gl_Position = projectionMatrix * mv;
+    vNormal = nrm;
+    vec3 mv = mat3(viewMatrix) * rel;
+    gl_Position = projectionMatrix * vec4(mv, 1.0);
 }
 `;
 
-// Shared fragment tail: lighting (Atmosphere/DayCycle), weather on the surface,
-// fog, then the display adjustments that used to be a CSS filter on <body>.
-// Running those here costs a few ALU ops instead of forcing the whole page —
-// canvas included — through an extra compositing pass every frame.
-const _v3 = (v) => `vec3(${v.map(x => x.toFixed(6)).join(', ')})`;
+// Shared fragment tail: lighting (Atmosphere/DayCycle, block light), weather on
+// the surface, fog, then the display adjustments that used to be a CSS filter on
+// <body>. Running those here costs a few ALU ops instead of forcing the whole
+// page — canvas included — through an extra compositing pass every frame.
 const CHUNK_COMMON = `
 precision highp sampler2DArray;
 precision highp sampler3D;
 uniform sampler2DArray uTex;
 uniform sampler3D uLight;        // this chunk's sky light (see _setChunkLight)
-uniform vec3  uLightOrigin;      // world position of the light volume's corner
-uniform vec3  uLightSize;        // its size in blocks
+uniform sampler3D uBlock;        // this chunk's block light: torches, lanterns, lamps
+${CHUNK_UNIFORM_GLSL}
+uniform vec3  uTorchColor;       // block light at full strength
+uniform float uTorchFlicker;     // 1 = steady
+uniform vec4  uHandLight;        // light the player holds: xyz camera-relative, w its level (0 = none)
+uniform float uGlowBoost;        // how far past white glowing texels go (above 1 with Eye Adaptation)
 uniform float uFogNear;
 uniform float uFogFar;
 uniform float uBrightness;
 uniform int   uColorMode;   // 0 none, 1 protanopia, 2 deuteranopia, 3 tritanopia
 ${ATMOS_GLSL}
+${CLOUD_VEIL_GLSL}
+${OUTPUT_GLSL}
 
 in vec3  vColor;
 in vec2  vUV;
 in float vLayer;
-in float vDepth;
 in vec3  vWorldPos;
+in vec3  vLocal;
+in vec4  vNormal;
 
 out vec4 fragColor;
 
-// Normal of the visible side of the surface, from screen-space derivatives (the
-// chunk meshes carry no normals). Flipped toward the camera, so on double-sided
-// water and leaves it still points into the air the viewer is looking through.
+// The surface normal: the mesher's per-vertex normal, interpolated, so smooth
+// terrain is shaded smoothly across its triangles instead of facet by facet.
+// It is never turned toward the camera: a smooth normal can lean slightly
+// away from it near a silhouette, and flipping it there would blacken the
+// edge. (Water and ice need no turning either: each of their faces is in the
+// mesh once for each side, with that side's normal.)
 vec3 surfaceNormal() {
-    vec3 c = cross(dFdx(vWorldPos), dFdy(vWorldPos));
-    // Degenerate at some triangle edges; a NaN here would read garbage light.
-    float len = length(c);
-    vec3 n = len > 1e-10 ? c / len : vec3(0.0, 1.0, 0.0);
-    return dot(n, cameraPosition - vWorldPos) < 0.0 ? -n : n;
+    float len = length(vNormal.xyz);
+    return len > 1e-4 ? vNormal.xyz / len : vec3(0.0, 1.0, 0.0);
+}
+
+// This fragment's position in the world, repeating every ${TILE_CHUNKS} chunks on x and z
+// (y is chunk-local). For patterns laid over the ground: unlike vWorldPos it is
+// exact however far from the origin the player has walked, because it is put
+// together from the position inside the chunk and the chunk's small place in
+// the tile. Anything read with it must repeat over ${TILE_CHUNKS * CHUNK_SIZE} blocks.
+vec3 tilePos() {
+    float tz = floor(uChunkTile / ${TILE_CHUNKS.toFixed(1)});
+    return vec3(vLocal.x + (uChunkTile - tz * ${TILE_CHUNKS.toFixed(1)}) * ${CHUNK_SIZE.toFixed(1)}, vLocal.y, vLocal.z + tz * ${CHUNK_SIZE.toFixed(1)});
 }
 
 // Sky light level (engine/Sun.js), 0..15: read from the air half a block in
-// front of the surface, interpolated between cells.
+// front of the surface, interpolated between cells. The volume is the chunk
+// plus a one-block border on x and z, over levels uLightY.x … +uLightY.y, so
+// only that pair differs between chunks (one small upload per draw).
 float skyLevel(vec3 n) {
-    return texture(uLight, (vWorldPos + n * 0.5 - uLightOrigin) / uLightSize).r * ${SKY_MAX.toFixed(1)};
+    vec3 p = vLocal + n * 0.5 + vec3(1.0, -uLightY.x, 1.0);
+    return texture(uLight, p / vec3(${(CHUNK_SIZE + 2).toFixed(1)}, uLightY.y, ${(CHUNK_SIZE + 2).toFixed(1)})).r * ${SKY_MAX.toFixed(1)};
+}
+
+// Block light level, 0..15 (workers/Blocklight.js): the same lookup, in this
+// chunk's block-light volume, which only covers the levels light reaches.
+float blockLevel(vec3 n) {
+    if (uBlockY.y < 0.5) return 0.0;
+    vec3 p = vLocal + n * 0.5 + vec3(1.0, -uBlockY.x, 1.0);
+    if (p.y < 0.0 || p.y > uBlockY.y) return 0.0;
+    return texture(uBlock, p / vec3(${(CHUNK_SIZE + 2).toFixed(1)}, uBlockY.y, ${(CHUNK_SIZE + 2).toFixed(1)})).r * ${SKY_MAX.toFixed(1)};
+}
+
+// A torch or lantern in the player's hand: its level, one less per block of
+// distance. It sits at the camera, so every surface the player can see is one
+// it can reach — no light through walls that anyone could notice.
+float handLevel(vec3 n) {
+    if (uHandLight.w <= 0.0) return 0.0;
+    return uHandLight.w - length(vWorldPos - cameraPosition + n * 0.5 - uHandLight.xyz);
 }
 
 ${SHADOW_GLSL}
@@ -256,7 +500,8 @@ ${SHADOW_GLSL}
 // much cloud is there — the same field the clouds are drawn from, so the
 // shadows drift across the land under the clouds you can see.
 float cloudShade() {
-    if (uCloudThresh > 1.5 || uSunDir.y < 0.05) return 1.0;
+    // Peaks above the cloud base are above the clouds' shadow too.
+    if (uCloudThresh > 1.5 || uSunDir.y < 0.05 || vWorldPos.y > uCloudBase) return 1.0;
     vec2 xz = vWorldPos.xz + uSunDir.xz * ((uCloudBase - vWorldPos.y) / uSunDir.y);
     float n = cloudNoise(xz);
     return 1.0 - cloudCover(n) * (0.55 + 0.4 * cloudThick(n));
@@ -265,21 +510,42 @@ float cloudShade() {
 // 0 under cover … 1 under open sky; set by lighting(), read by weatherSurface().
 float gExposed = 1.0;
 
-// The light on this fragment. The meshers baked sunBrightness(n) for the fixed
-// sun in engine/Sun.js into the vertex colour; that is divided back out here and
-// the surface is lit by the real light instead: the sky (uAmbient, tinted by
+// The light on this fragment, from its normal: the sky (uAmbient, tinted by
 // time of day and weather) and the sun or moon (uDirect along uSunDir, blocked
-// by shadows and by clouds). At noon under a clear sky this matches the baked
-// shading. Lightning brightens open ground.
+// by shadows and by clouds), scaled by the sky light that reaches it — so a
+// flat top at noon under a clear sky is exactly 1 (engine/Sun.js SUN_TOP).
+// Lightning brightens open ground.
+//
+// Block light — torches, lanterns, lamps and the light in the player's hand —
+// is warm and does not care about the time of day. It is shaded a little by
+// face direction so blocks keep their shape, and it adds into the headroom the
+// sky leaves: all of it at night, nothing at noon. (A per-channel max of the
+// two instead tinted the edge of every torch's pool lilac against moonlight.)
 vec3 lighting(vec3 n) {
     float lvl = skyLevel(n);
     float sky = max(pow(${SKY_FALLOFF}, ${SKY_MAX.toFixed(1)} - lvl), ${SKY_MIN});
     gExposed = smoothstep(12.5, 15.0, lvl);
-    float baked = ${SUN_AMBIENT.toFixed(4)} + ${(1 - SUN_AMBIENT).toFixed(4)} * max(dot(n, ${_v3(SUN_DIR)}), 0.0);
     float facing = max(dot(n, uSunDir), 0.0);
     float direct = facing > 0.0 ? facing * sunShadow(n) * cloudShade() : 0.0;
-    vec3 L = (${SUN_AMBIENT.toFixed(4)} * uAmbient + ${(1 - SUN_AMBIENT).toFixed(4)} * direct * uDirect) / baked;
-    return L * sky + vec3(0.8, 0.85, 1.0) * uFlash * gExposed;
+    vec3 L = (${SUN_AMBIENT.toFixed(4)} * uAmbient + ${(1 - SUN_AMBIENT).toFixed(4)} * direct * uDirect)
+           * (sky / ${SUN_TOP.toFixed(6)}) + vec3(0.8, 0.85, 1.0) * uFlash * gExposed;
+    float bl = max(blockLevel(n), handLevel(n));
+    if (bl > 0.0) {
+        float b = pow(${SKY_FALLOFF}, ${SKY_MAX.toFixed(1)} - bl) * min(bl, 1.0) * uTorchFlicker;
+        float shade = 0.8 + 0.2 * n.y - 0.1 * n.x * n.x;
+        float room = max(1.0 - dot(L, vec3(0.2126, 0.7152, 0.0722)), 0.0);
+        L += uTorchColor * (b * shade * room);
+    }
+    return L;
+}
+
+// A glowing block (torch, lantern, lamp: the mesher puts its glow in the
+// normal's w) ignores the light around it. With Eye Adaptation its bright texels
+// go past white, so they bloom and pull the exposure down.
+vec3 glow(vec3 c, vec3 n) {
+    float hot = smoothstep(0.55, 0.9, dot(c, vec3(0.2126, 0.7152, 0.0722)));
+    vec3 full = vec3(1.0 + (uGlowBoost - 1.0) * hot);
+    return c * (vNormal.w >= 0.99 ? full : mix(lighting(n), full, vNormal.w));
 }
 
 // Rain darkens open ground and makes it glint; freezing rain glazes it.
@@ -297,9 +563,22 @@ vec3 weatherSurface(vec3 c, vec3 n) {
 
 // Render-distance fog (linear, hides the load edge) or weather fog, whichever
 // is thicker, toward the horizon colour in that direction.
+//
+// The render-distance fog is measured horizontally, as (x⁴ + z⁴)^¼ from the
+// camera: a rounded square, like the square of loaded chunks it hides the edge
+// of. That distance is never less than the larger of |x| and |z|, and the
+// loaded square reaches at least uFogFar that way in every direction, so fog
+// is complete before the load edge whichever way the camera looks — while the
+// corners of the square, which a circle would hide, stay visible. View depth
+// (the old measure) also changed with where the camera pointed, so a turn of
+// the head fogged or unfogged the same hillside.
+float edgeDistance(vec3 r) {
+    vec2 a = r.xz * r.xz;
+    return sqrt(sqrt(dot(a, a)));
+}
 vec3 applyFog(vec3 c) {
     vec3 r = vWorldPos - cameraPosition;
-    float f = clamp((vDepth - uFogNear) / max(uFogFar - uFogNear, 0.001), 0.0, 1.0);
+    float f = clamp((edgeDistance(r) - uFogNear) / max(uFogFar - uFogNear, 0.001), 0.0, 1.0);
     f = max(f, weatherFog(cameraPosition, r));
     return mix(c, fogColorFor(normalize(r)), f);
 }
@@ -317,35 +596,166 @@ vec3 applyColorMode(vec3 c) {
         0.715 - cs * 0.715 - sn * 0.715, 0.715 + cs * 0.285 + sn * 0.140, 0.715 - cs * 0.715 + sn * 0.715,
         0.072 - cs * 0.072 + sn * 0.928, 0.072 - cs * 0.072 - sn * 0.283, 0.072 + cs * 0.928 + sn * 0.072
     );
-    return clamp(hue * c, 0.0, 1.0);
+    return max(hue * c, 0.0);   // no upper clamp: glowing texels stay bright for Eye Adaptation
 }
 
-vec3 grade(vec3 c) { return applyColorMode(applyFog(c) * uBrightness); }
+// Fog, the display settings, and last whatever cloud lies between the camera
+// and this surface (the sky's clouds get neither setting, so the two match).
+vec3 grade(vec3 c) {
+    return cloudVeil(applyColorMode(applyFog(c) * uBrightness), vWorldPos - cameraPosition);
+}
 `;
 
+// How far the ground next door reaches onto this one, in blocks — and how far
+// when it comes from opposite sides at once (a block or a strip of one ground
+// alone among another). There it only frays the edges: the block keeps its own
+// face, where the full reach from every side would leave nothing of it.
+const BLEND_REACH = 0.7;
+const BLEND_REACH_HEMMED = 0.2;
+
+// An untextured face's vertex colour is the block's own; a textured face's
+// colour is its texture, and the three bytes say how it blends with the ground
+// around it instead (engine/MeshFormat.js). All of the light comes from
+// lighting(). The block textures repeat (each is one tile of a layer), so vUV
+// goes to the sampler as it is and picks its own mip level.
+//
+// Cutout blocks (leaves, glass) are in this mesh too: a texel is drawn or it
+// is not, and what is drawn writes depth like any block.
 const CHUNK_FRAG = CHUNK_COMMON + `
+// Natural ground. In a smooth world the ground next to it spreads over its
+// edges: bl.x is that ground's texture layer and bl.y a bit for each of the
+// eight sides it lies on (GreedyMesher.blendCode). It reaches ${BLEND_REACH} of a
+// block in, along a ragged line — a noise decides, not a fade, so it reads as
+// one ground lying over the other — but only ${BLEND_REACH_HEMMED} where it lies on opposite
+// sides, so a single block of another ground is still plainly that ground, with
+// a frayed edge. And a little variation on a scale larger than a block, so a
+// wide stretch of one ground does not look stamped out.
+vec3 ground(vec3 c, vec3 bl, vec2 gx, vec2 gy) {
+    vec3 p = tilePos();
+    if (bl.y > 0.5) {
+        // Where in the voxel: a top face's tile coordinates are (z, x). Pulled
+        // in a hair, so a face one block wide never wraps round at its far edge.
+        vec2 f = fract(vUV * 0.9995 + 0.00025);
+        float x0 = f.y, x1 = 1.0 - f.y, z0 = f.x, z1 = 1.0 - f.x;
+        int m = int(bl.y + 0.5);
+        float d = 9.0;
+        if ((m & 1) != 0)   d = min(d, x0);
+        if ((m & 2) != 0)   d = min(d, x1);
+        if ((m & 4) != 0)   d = min(d, z0);
+        if ((m & 8) != 0)   d = min(d, z1);
+        if ((m & 16) != 0)  d = min(d, length(vec2(x0, z0)));
+        if ((m & 32) != 0)  d = min(d, length(vec2(x1, z0)));
+        if ((m & 64) != 0)  d = min(d, length(vec2(x0, z1)));
+        if ((m & 128) != 0) d = min(d, length(vec2(x1, z1)));
+        // On two opposite sides, or two opposite corners: hemmed in.
+        bool hemmed = (m & 3) == 3 || (m & 12) == 12 || (m & 144) == 144 || (m & 96) == 96;
+        float e = 1.0 - d / (hemmed ? ${BLEND_REACH_HEMMED.toFixed(2)} : ${BLEND_REACH.toFixed(2)});
+        if (e > 0.0) {
+            float n = smoothstep(0.3, 0.7, textureLod(uCloudMap, p.xz * 0.125, 0.0).r);
+            float k = smoothstep(0.42, 0.58, e * 1.25 + (n - 0.5) - 0.1);
+            if (k > 0.0) c = mix(c, textureGrad(uTex, vec3(vUV, bl.x), gx, gy).rgb, k);
+        }
+    }
+    float v = textureLod(uCloudMap, (p.xz + p.y * vec2(0.375, 0.625)) * ${(1 / 64).toFixed(6)}, 0.0).r;
+    return c * (0.88 + 0.24 * v);
+}
+
 void main() {
     vec3 n = surfaceNormal();
+    vec3 c;
     if (vLayer >= 0.0) {
-        vec4 t = texture(uTex, vec3(fract(vUV.x), fract(vUV.y), floor(vLayer + 0.5)));
-        if (t.a < 0.1) discard;
-        fragColor = vec4(grade(weatherSurface(t.rgb * vColor.r * lighting(n), n)), t.a);
+        // Taken before anything can branch: later lookups use them.
+        vec2 gx = dFdx(vUV), gy = dFdy(vUV);
+        vec4 t = texture(uTex, vec3(vUV, floor(vLayer + 0.5)));
+        if (t.a < 0.5) discard;
+        c = t.rgb;
+        vec3 bl = floor(vColor * 255.0 + 0.5);
+        if (bl.z > 0.5) c = ground(c, bl, gx, gy);
     } else {
-        fragColor = vec4(grade(weatherSurface(vColor * lighting(n), n)), 1.0);
+        c = vColor;
     }
+    c = vNormal.w > 0.004 ? glow(c, n) : weatherSurface(c * lighting(n), n);
+    fragColor = displayOut(vec4(grade(c), 1.0));
 }
 `;
 
+// Water and ice, blended over the scene at 0.72 of their texture's opacity.
 const CHUNK_TRANSP_FRAG = CHUNK_COMMON + `
 void main() {
     vec3 n = surfaceNormal();
     if (vLayer >= 0.0) {
-        vec4 t = texture(uTex, vec3(fract(vUV.x), fract(vUV.y), floor(vLayer + 0.5)));
+        vec4 t = texture(uTex, vec3(vUV, floor(vLayer + 0.5)));
         if (t.a < 0.05) discard;
-        fragColor = vec4(grade(t.rgb * vColor.r * lighting(n)), t.a * 0.72);
+        fragColor = displayOut(vec4(grade(t.rgb * lighting(n)), t.a * 0.72));
     } else {
-        fragColor = vec4(grade(vColor * lighting(n)), 0.72);
+        fragColor = displayOut(vec4(grade(vColor * lighting(n)), 0.72));
     }
+}
+`;
+
+// Far terrain (FarTerrain.js): heightfield tiles beyond the chunks. They share
+// the chunk uniforms and fragment tail, so fog, the sun, clouds, weather and
+// the display settings match the chunks exactly; they have no light volume
+// (it is open sky out there) and no texture (the colour is the texture's
+// average). uFarMask marks the chunks on screen: fragments inside them are
+// dropped, and vertices touching them sink under the terrain, which closes the
+// seam where the two meet (see FarTerrain.js). A vertex of a tree or a house
+// asks about the chunk its foot is in (the offset to it is in the vertex's two
+// spare bytes, FarTiles.js), so the whole shape goes when the real one comes.
+const FAR_MASK_GLSL = `
+uniform sampler2D uFarMask;
+uniform vec2  uFarMaskOrigin;
+uniform float uFarSink;
+float farMeshed(vec2 xz) {
+    vec2 c = floor(xz / ${CHUNK_SIZE.toFixed(1)}) - uFarMaskOrigin;
+    if (c.x < 0.0 || c.y < 0.0 || c.x >= ${FAR_MASK.toFixed(1)} || c.y >= ${FAR_MASK.toFixed(1)}) return 0.0;
+    return texelFetch(uFarMask, ivec2(c), 0).r;
+}
+`;
+
+const FAR_VERT = FAR_MASK_GLSL + `
+in vec4 fcol;
+in vec4 nrm;
+out vec3  vColor;
+out vec2  vUV;
+out float vLayer;
+out vec3  vWorldPos;
+out vec3  vLocal;
+out vec4  vNormal;
+
+void main() {
+    // modelViewMatrix is camera-relative (composed in doubles on the CPU), so
+    // this stays precise far from the origin; undo the rotation for the
+    // offset from the camera in world axes.
+    vec3 rel = transpose(mat3(viewMatrix)) * (modelViewMatrix * vec4(position, 1.0)).xyz;
+    // The foot: the vertex itself on the ground (which may be the corner of
+    // four chunks), the middle of its root block for a tree.
+    vec2 xz = rel.xz + cameraPosition.xz + vec2(nrm.w * 127.0, fcol.a * 255.0 - 128.0) / 16.0;
+    float m = max(max(farMeshed(xz + vec2(-0.45, -0.45)), farMeshed(xz + vec2(0.45, -0.45))),
+                  max(farMeshed(xz + vec2(-0.45, 0.45)), farMeshed(xz + vec2(0.45, 0.45))));
+    rel.y -= m * uFarSink;
+    vWorldPos = rel + cameraPosition;
+    vColor  = fcol.rgb;
+    vNormal = vec4(nrm.xyz, 0.0);
+    vUV     = vec2(0.0);
+    vLayer  = -1.0;
+    vLocal  = position;
+    gl_Position = projectionMatrix * vec4(mat3(viewMatrix) * rel, 1.0);
+}
+`;
+
+const FAR_FRAG = CHUNK_COMMON + FAR_MASK_GLSL + `
+// lighting() without the light volume: open sky, no sun shadow this far out.
+vec3 farLighting(vec3 n) {
+    float facing = max(dot(n, uSunDir), 0.0);
+    float direct = facing > 0.0 ? facing * cloudShade() : 0.0;
+    return (${SUN_AMBIENT.toFixed(4)} * uAmbient + ${(1 - SUN_AMBIENT).toFixed(4)} * direct * uDirect) / ${SUN_TOP.toFixed(6)}
+         + vec3(0.8, 0.85, 1.0) * uFlash;
+}
+void main() {
+    if (farMeshed(vWorldPos.xz) > 0.5) discard;
+    vec3 n = surfaceNormal();
+    fragColor = displayOut(vec4(grade(weatherSurface(vColor * farLighting(n), n)), 1.0));
 }
 `;
 
@@ -417,9 +827,13 @@ function _loadImage(url) {
     });
 }
 
+// Texels along a side of a block texture. Textures of another size (the
+// model sheets, a pack's 16-pixel art) are scaled to it, without smoothing.
+const BLOCK_TEX_SIZE = 32;
+
 async function _buildBlockTextureArray() {
-    const SIZE = 16;
-    const N    = BLOCK_TEX_LAYERS.length;
+    const SIZE = BLOCK_TEX_SIZE;
+    const N    = _texLayers.length;
     const data = new Uint8Array(N * SIZE * SIZE * 4);
     const canvas = document.createElement('canvas');
     canvas.width  = SIZE;
@@ -431,7 +845,7 @@ async function _buildBlockTextureArray() {
 
     for (let i = 0; i < N; i++) {
         try {
-            const img = await _loadImage(BLOCK_TEX_LAYERS[i]);
+            const img = await _loadImage(_texLayers[i]);
             ctx.clearRect(0, 0, SIZE, SIZE);
             ctx.drawImage(img, 0, 0, SIZE, SIZE);
             const imgData = ctx.getImageData(0, 0, SIZE, SIZE).data;
@@ -445,16 +859,43 @@ async function _buildBlockTextureArray() {
                 for (let col = 0; col < SIZE * 4; col++) data[dstStart + col] = imgData[srcStart + col];
             }
         } catch {
-            console.warn('[world] Missing block texture:', BLOCK_TEX_LAYERS[i]);
+            console.warn('[world] Missing block texture:', _texLayers[i]);
         }
     }
 
+    // Each layer's average colour (over its opaque texels), for far terrain.
+    _texAverages = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+        let r = 0, g = 0, b = 0, w = 0;
+        for (let p = i * SIZE * SIZE * 4, end = p + SIZE * SIZE * 4; p < end; p += 4) {
+            const a = data[p + 3] / 255;
+            r += data[p] * a; g += data[p + 1] * a; b += data[p + 2] * a; w += a;
+        }
+        if (w > 0) { _texAverages[i * 3] = r / w / 255; _texAverages[i * 3 + 1] = g / w / 255; _texAverages[i * 3 + 2] = b / w / 255; }
+        else _texAverages[i * 3] = _texAverages[i * 3 + 1] = _texAverages[i * 3 + 2] = -1;
+    }
+
+    // A vertex names its texture layer in one byte (engine/MeshFormat.js).
+    if (N > NO_LAYER) {
+        console.error(`[world] ${N} block texture layers; only the first ${NO_LAYER} can be drawn`);
+    }
+
+    // Each layer is one tile of a texture that repeats, so the sampler wraps
+    // it and the shaders hand it tile coordinates as they are. That is what
+    // makes mipmaps possible (wrapping the coordinate by hand, with fract(),
+    // breaks the derivatives they are chosen from at every block edge), and
+    // without them detailed textures crawl and sparkle in the distance. Up
+    // close texels stay crisp (nearest); far off they are averaged.
     const tex = new THREE.DataArrayTexture(data, SIZE, SIZE, N);
     tex.format     = THREE.RGBAFormat;
     tex.type       = THREE.UnsignedByteType;
-    tex.minFilter  = THREE.NearestFilter;
+    tex.wrapS      = THREE.RepeatWrapping;
+    tex.wrapT      = THREE.RepeatWrapping;
+    tex.minFilter  = THREE.LinearMipmapLinearFilter;
     tex.magFilter  = THREE.NearestFilter;
-    tex.generateMipmaps = false;
+    tex.generateMipmaps = true;
+    // Ground seen at a shallow angle — most of it — stays sharp further out.
+    tex.anisotropy = Math.min(4, renderer?.capabilities.getMaxAnisotropy() ?? 1);
     tex.needsUpdate = true;
     return tex;
 }
@@ -472,56 +913,102 @@ const SKY_COLOR = 0x87CEEB;
 // `logarithmicDepthBuffer: true` on the WebGLRenderer, not a bigger far value.
 const CAMERA_FAR = 4096;
 
-// Fog range as a fraction of the loaded radius.
-const FOG_START = 0.75;   // fully clear inside this (default; the Fog Distance graphics setting)
-const FOG_END   = 1.00;   // fully fogged at the edge of the loaded area
+// Fog range as a fraction of the render distance in blocks.
+const FOG_START = 0.82;   // fully clear inside this (default; the Fog Distance graphics setting)
+const FOG_END   = 1.00;   // fully fogged here — the nearest the load edge can be
+const FOG_MIN_FADE = 12;  // blocks; any narrower and the fade reads as a hard edge
 let _fogStart   = FOG_START;
 
 // Shared by both chunk materials so a single write updates the whole terrain.
 let chunkUniforms = null;
 // Held so _disposeAll can release it — it is rebuilt on each world load.
 let _blockTexArray = null;
+// Average colour of each texture layer (r, g, b; −1 for an empty layer).
+let _texAverages = null;
+
+/**
+ * The colour far terrain draws each block id with, 3 floats an id: its top
+ * texture's average where it has one (a textured face is white × texture),
+ * else its top colour. Leaves a little darker: a crown seen from afar is
+ * mostly shade. Sent to the workers at init (farPalette).
+ */
+function _farPalette(reg) {
+    const defs = reg.serialize();
+    const max = defs.reduce((m, d) => Math.max(m, d.id), 0);
+    const P = new Float32Array((max + 1) * 3);
+    for (const d of defs) {
+        const layer = _faceMap[d.id]?.top ?? -1;
+        let c = d.topColor ?? d.color ?? [0.5, 0.5, 0.5];
+        if (layer >= 0 && _texAverages && _texAverages[layer * 3] >= 0) {
+            c = [_texAverages[layer * 3], _texAverages[layer * 3 + 1], _texAverages[layer * 3 + 2]];
+        }
+        const k = d.leaves || /LEAVES/.test(d.name) ? 0.8 : 1;
+        P[d.id * 3] = c[0] * k; P[d.id * 3 + 1] = c[1] * k; P[d.id * 3 + 2] = c[2] * k;
+    }
+    return P;
+}
+
+/** The far-terrain material (FarTerrain.js), on the shared chunk uniforms. */
+function _makeFarMaterial(farUniforms) {
+    return new THREE.ShaderMaterial({
+        glslVersion: THREE.GLSL3,
+        uniforms: { ...chunkUniforms, ...farUniforms },
+        vertexShader: FAR_VERT, fragmentShader: FAR_FRAG,
+    });
+}
+
+// Far terrain: how many chunks of it lie beyond the render distance (0 = off,
+// the Far Terrain graphics setting), and the tiles for the current world.
+let _farExtra = 0;
+let _far = null;
+// Block light for chunks that have none (almost all of them): never sampled,
+// since uBlockY's height is 0, but a sampler3D needs something bound.
+let _noBlockLight = null;
+
+// Block light's colour at full strength: warm firelight.
+const TORCH_COLOR = [1.0, 0.7, 0.4];
+// With Eye Adaptation, how far past white the bright texels of glowing blocks
+// go (display value) — a torch flame, a lantern's glass, a lamp's panes.
+const GLOW_HDR = 2.6;
 
 function _createChunkMaterials(texArray) {
     _blockTexArray = texArray;
+    _noBlockLight = _emptyLightTexture(0);
     chunkUniforms = {
         uTex:        { value: texArray },
         uFogNear:    { value: 160 },
         uFogFar:     { value: 280 },
         uBrightness: { value: 1.0 },
         uColorMode:  { value: 0 },
+        uTorchColor:   { value: new THREE.Vector3(...TORCH_COLOR) },
+        uTorchFlicker: { value: 1 },
+        uHandLight:    { value: new THREE.Vector4(0, 0, 0, 0) },
+        uGlowBoost:    { value: 1 },
         // Texture layer that sways in the wind (leaves).
         uSwayLayer:  { value: BLOCK_FACE_MAP[7]?.top ?? -10 },
+        uSwayRange:  { value: new THREE.Vector2(_swayRange[0], _swayRange[1]) },
         // Shared with the shadow mapper, so a Shadows change reaches all terrain.
         ..._shadows.uniforms,
         // Shared with the atmosphere: time of day, weather, fog, clouds.
         ..._atmos.uniforms,
     };
+    _perDraw = _perDrawUniforms(chunkUniforms);
+    _makePrimers();
     // Water and ice never cast shadows.
-    _shadows.setTextures(texArray, [BLOCK_FACE_MAP[5]?.top, BLOCK_FACE_MAP[13]?.top]);
-
-    opaqueMaterial = new THREE.ShaderMaterial({
-        glslVersion:  THREE.GLSL3,
-        uniforms:     chunkUniforms,
-        vertexShader:   CHUNK_VERT,
-        fragmentShader: CHUNK_FRAG,
-    });
-
-    transparentMaterial = new THREE.ShaderMaterial({
-        glslVersion:  THREE.GLSL3,
-        uniforms:     chunkUniforms,
-        vertexShader:   CHUNK_VERT,
-        fragmentShader: CHUNK_TRANSP_FRAG,
-        transparent:  true,
-        depthWrite:   false,
-        // Must stay DoubleSide: the mesher only emits the outward-facing shell of
-        // a transparent volume, so culling backfaces would make the water surface
-        // vanish when the camera is underneath it.
-        side:         THREE.DoubleSide,
-    });
+    _shadows.setTextures(texArray, _blockReg.serialize().filter(b => b.render === 'translucent').map(b => _faceMap[b.id]?.top));
+    // The materials themselves are per chunk (_chunkLight), built on these uniforms.
 
     _applyViewDistance();
 }
+
+/**
+ * How far the view reaches, in chunks: the render distance, and the far
+ * terrain beyond it while that is on. FarTerrain covers the square out to one
+ * chunk past this from the player's chunk, so from anywhere in that chunk it
+ * reaches at least this far along both axes — the same guarantee the chunks
+ * give without it, which the fog below relies on.
+ */
+function _viewChunksOut() { return _renderDist + (_far?.active ? _farExtra : 0); }
 
 /**
  * Derive fog and the camera far plane from the render distance.
@@ -533,13 +1020,17 @@ function _createChunkMaterials(texArray) {
  * what makes a cheaper default viable.
  */
 function _applyViewDistance() {
-    const blocks = _renderDist * CHUNK_SIZE;
-    // Fade only across the outermost quarter of the loaded area. Starting the
-    // fade earlier hid a lot of world the player had already paid to generate.
-    // Ending it exactly at `blocks` still covers the load boundary, because a
-    // chunk's far corners sit past its centre distance.
-    const near = blocks * Math.min(_fogStart, FOG_END - 0.02);
+    // With far terrain the view reaches past the chunks, to the end of it.
+    const blocks = _viewChunksOut() * CHUNK_SIZE;
+    // ChunkManager loads every chunk within the render distance of the
+    // player's chunk on both axes, so from anywhere inside that chunk the
+    // loaded square reaches at least `blocks` along x and z. The chunk shader
+    // measures fog so that it is complete by then in every direction
+    // (edgeDistance), which shows everything loaded without ever showing its
+    // edge. Only the last stretch fades: starting earlier hid world the player
+    // had already paid to generate.
     const far  = blocks * FOG_END;
+    const near = Math.min(blocks * _fogStart, far - FOG_MIN_FADE);
 
     if (chunkUniforms) {
         chunkUniforms.uFogNear.value = near;
@@ -613,6 +1104,11 @@ const _camFwd = new THREE.Vector3();
 
 const MOUSE = { left: false, right: false };
 let _rightJust  = false;
+// The controller's two triggers stand in for the two mouse buttons (see _padButtons).
+let _padBreak = false, _padUse = false;
+// How fast the right stick turns the camera when pushed all the way, in
+// radians a second, at Look Sensitivity 1.0.
+const PAD_LOOK_RATE = 2.6;
 let _bowDrawing = false;
 let _bowCharge  = 0;      // 0..1, fills while holding right-click with bow
 
@@ -651,6 +1147,14 @@ document.addEventListener('DOMContentLoaded', () => {
     _applyPixelRatio();
     _warnIfSoftwareRenderer();
 
+    // Opaque objects front to back. Three.js sorts by material before depth, to
+    // save material switches — but every chunk has its own material (for its
+    // light texture), so that order was just the order chunks were created in.
+    // Nearest first lets the GPU reject hidden fragments before shading them,
+    // and the chunk fragment shader is the expensive part of a frame.
+    renderer.setOpaqueSort((a, b) =>
+        (a.groupOrder - b.groupOrder) || (a.renderOrder - b.renderOrder) || (a.z - b.z) || (a.id - b.id));
+
     ambientLight = new THREE.AmbientLight(0xffffff, 0.45);
     scene.add(ambientLight);
 
@@ -658,8 +1162,8 @@ document.addEventListener('DOMContentLoaded', () => {
     sunLight.position.set(0.6, 1.0, 0.4).normalize();
     scene.add(sunLight);
 
-    // opaqueMaterial and transparentMaterial are created in startWorldLoad
-    // after the block texture atlas is built.
+    // Chunk materials are created per chunk once the block texture atlas is
+    // built (startWorldLoad → _createChunkMaterials, then _chunkLight).
     selectionMaterial = new THREE.LineBasicMaterial({ color: 0x000000 });
 
     // Selection outline (block highlight box, hidden until targeting a block)
@@ -667,9 +1171,11 @@ document.addEventListener('DOMContentLoaded', () => {
     _selMesh = new THREE.LineSegments(boxEdges, selectionMaterial);
     _selMesh.visible = false;
     scene.add(_selMesh);
+    scene.add(chunkGroup);
 
-    _shadows = new ShadowMapper(renderer, BLOCK_TEX_LAYERS.length);
+    _shadows = new ShadowMapper(renderer);
     _shadows.setLevel(_gfx.shadows);
+    _shadows.onCull = _cullChunks;   // chunks inside the shadow box, not the view
     _atmos = new Atmosphere(scene);
     _atmos.setSkyMode(_gfx.sky);
     _atmos.setCloudLevel(_gfx.clouds);
@@ -677,6 +1183,9 @@ document.addEventListener('DOMContentLoaded', () => {
     _atmos.setVolume(_gfx.weatherVolume);
     _atmos.setReduceMotion(_gfx.reduceMotion);
     _atmos.onStrike = _onLightningStrike;
+    _post = new PostFX(renderer);
+    _post.setEnabled(_gfx.eyeAdaptation);
+    if (_gfx.eyeAdaptation && !_post.supported) console.warn('[world] Eye Adaptation needs float render targets; off');
 });
 
 // ── World load event ──────────────────────────────────────────────────────────
@@ -685,11 +1194,12 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     const {
         gamepackData = {}, worldId = null, worldSeed = null,
         playerPos = null, gameMode = 'SURVIVAL', terrainStyle = 'blocky',
-        daylightCycle = true, weather = 'dynamic',
+        daylightCycle = true, weather = 'dynamic', worldGen = 1, flat = null,
     } = e.data ?? {};
 
     _gameMode = gameMode;
     _terrainStyle = terrainStyle === 'smooth' ? 'smooth' : 'blocky';
+    _worldGen = worldGen;
 
     // Reset survivals stats to safe defaults; will be overwritten by saved state below.
     me.health = 100;
@@ -697,6 +1207,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     me.energy = 100;
 
     _blockReg = buildRegistryFromGamePack(gamepackData);
+    _extendBlockTextures(_blockReg);
     _itemReg  = buildItemRegistryFromGamePack(gamepackData);
     _itemToBlock = _buildItemToBlock(gamepackData.blocks ?? []);
 
@@ -715,7 +1226,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
 
     _entities = new EntityManager(worldState, _blockReg, _itemReg, scene);
     // Mobs are lit by the sky light where they stand and by the time of day.
-    _entities.lightAt = (x, y, z) => _skyBrightnessAt(x, y, z) * (_atmos?.mobLight ?? 1);
+    _entities.lightAt = _lightAt;
     _particles = new Particles(scene, (x, y, z) => {
         const id = worldState?.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) ?? 0;
         if (id === 0 || _blockReg.isNoCollision(id)) return false;
@@ -725,6 +1236,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     _particles.wind = _atmos.wind;      // debris blows in the weather's wind
     _savedAtmos = null;
     _entities.smooth = _smooth;
+    await _entities.loadModels();   // mob textures, so the first mob of a kind does not wait for them
     _entities.loadEntityTypes(gamepackData.entities ?? []);
     _entities.setBiomeData(gamepackData.biomes ?? []);
 
@@ -741,8 +1253,12 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
         seed:          worldState.seed,
         blockRegistry: _blockReg.serialize(),
         biomes:        gamepackData.biomes ?? [],
-        blockFaceMap:  BLOCK_FACE_MAP,
+        blockFaceMap:  _faceMap,
         terrainStyle:  _terrainStyle,
+        terrain:       gamepackData.terrain ?? [],
+        worldGen:      _worldGen,
+        farPalette:    _farPalette(_blockReg),
+        flat,                                    // a Flat world's settings, or null
     });
 
     chunkManager = new ChunkManager(worldState, workerPool, _renderDist);
@@ -778,15 +1294,24 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
 
     if (!_physics) return; // guard if quitWorld raced
 
+    // Low-detail land beyond the chunks (Graphics → Far Terrain).
+    _far = new FarTerrain(scene, workerPool, _makeFarMaterial);
+    _far.setDistance(_farExtra);
+    _applyViewDistance();
+    _farEditsOut = new Map();
+    if (worldId) _loadFarEdits(worldId);
+
     // Time of day and weather: carried on from the save, with the world's
     // Daylight Cycle and Weather settings from its world.json.
     _atmos.startWorld({
-        seed: worldState.seed, biomes: gamepackData.biomes ?? [], world: worldState, smooth: _smooth,
-        saved: _savedAtmos, daylightCycle, weather,
+        seed: worldState.seed, biomes: gamepackData.biomes ?? [], world: worldState,
+        saved: _savedAtmos, daylightCycle, weather, worldGen: _worldGen, flat,
     });
 
     // _disposeAll() removes the selection mesh from the scene; re-add it here.
     if (_selMesh && !scene.children.includes(_selMesh)) scene.add(_selMesh);
+    _warmShaders();
+    _post?.resetAdaptation();
 
     const spawnPos = playerPos ?? { x: 0, y: 80, z: 0 };
     _worldSpawn   = null;
@@ -796,8 +1321,16 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
         // Returning player — keep their saved position.
         me.position = { x: me.position.x, y: me.position.y, z: me.position.z };
     } else {
-        // Fresh spawn — drop onto the ground once terrain loads.
-        _beginGroundSpawn(spawnPos.x, spawnPos.z);
+        // Fresh spawn — drop onto the ground once terrain loads. The current
+        // generator has real oceans, so start from the nearest good land
+        // rather than wherever (0, 0) happens to be (the ground search after
+        // loading only looks a couple of dozen blocks around).
+        let { x, z } = spawnPos;
+        if (_worldGen >= 2) {
+            ({ x, z } = new Geography(worldState.seed, new BiomeSet(gamepackData.biomes ?? []), normaliseFlat(flat))
+                .findSpawn(Math.floor(x), Math.floor(z)));
+        }
+        _beginGroundSpawn(x, z);
     }
     camera.position.set(me.position.x, me.position.y + CAMERA_HEIGHT, me.position.z);
     camera.rotation.set(0, 0, 0);
@@ -816,6 +1349,77 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     console.log('[world] Loaded — seed:', worldState.seed, '— mode:', _gameMode,
                 '— terrain:', _terrainStyle, '— workers:', workerPool.workerCount);
 });
+
+/**
+ * Draw, while the loading screen is up, everything the world can show later,
+ * so every shader is ready before it is needed. A shader is only finished —
+ * ANGLE turns it into a Direct3D shader — on the first draw that uses it, and
+ * that took 100–550 ms on integrated graphics: a frozen frame the first time
+ * the player looked at a block (the selection outline), a mob appeared, an
+ * item dropped, or it rained, struck lightning or formed a tornado. Compiling
+ * ahead (renderer.compile) is not enough; it has to be a real draw. Hidden
+ * objects are shown and empty instanced ones given one instance for a single
+ * render clipped to one pixel, then everything is put back.
+ */
+function _warmShaders() {
+    if (!renderer) return;
+    const undo = [];
+    const set = (obj, prop, value) => { undo.push([obj, prop, obj[prop]]); obj[prop] = value; };
+    const extra = [...(_entities?.warmupObjects() ?? []), ..._warmChunkMeshes(), ...(_far?.warmupObjects() ?? [])];
+    for (const o of extra) scene.add(o);
+    scene.traverse((o) => {
+        if (!o.material) return;
+        if (!o.visible) set(o, 'visible', true);
+        if (o.frustumCulled) set(o, 'frustumCulled', false);   // wherever it is, draw it
+        // Nothing is drawn for zero instances, which would leave the shader cold.
+        if (o.isInstancedMesh && o.count === 0) set(o, 'count', 1);
+        if (o.geometry?.isInstancedBufferGeometry && o.geometry.instanceCount === 0) set(o.geometry, 'instanceCount', 1);
+    });
+    // With Eye Adaptation the scene is drawn into PostFX's linear target, and
+    // Three.js's own materials compile differently for a target than for the
+    // canvas — so warm them for the one they will really draw into.
+    const post = !!_post?.active;
+    try {
+        if (post) {
+            _post.begin();
+            _post.target.scissor.set(0, 0, 1, 1);
+            _post.target.scissorTest = true;
+            renderer.setRenderTarget(_post.target);   // picks up the target's scissor
+        }
+        if (_atmos) _atmos.uniforms.uLinearOut.value = post;
+        renderer.setScissorTest(true);
+        renderer.setScissor(0, 0, 1, 1);
+        renderer.render(scene, camera);
+    } finally {
+        renderer.setScissorTest(false);
+        if (post) { _post.target.scissorTest = false; renderer.setRenderTarget(null); }
+        if (_atmos) _atmos.uniforms.uLinearOut.value = false;
+        for (let i = undo.length - 1; i >= 0; i--) { const [obj, prop, value] = undo[i]; obj[prop] = value; }
+        for (const o of extra) {
+            scene.remove(o);
+            if (o.userData.warmupGeometry) o.geometry.dispose();
+        }
+    }
+    _atmos?.warm(renderer, camera);
+    _post?.warm();
+}
+
+/**
+ * One triangle each with the opaque and transparent chunk materials, laid out
+ * like a real chunk mesh, so the chunk shaders are warmed too — the transparent
+ * one in particular would otherwise first draw whenever
+ * water or leaves first come into view. The materials are kept in chunkLights
+ * under a private key, so they live until the world is left and Three.js never
+ * drops the programs in between.
+ */
+function _warmChunkMeshes() {
+    if (!chunkUniforms) return [];
+    const mats = _chunkLight('__warmup');
+    const geo = _chunkTriangle(true);
+    const meshes = [new THREE.Mesh(geo, mats.opaque), new THREE.Mesh(geo, mats.transparent)];
+    for (const m of meshes) m.userData.warmupGeometry = true;   // freed after the warm-up draw
+    return meshes;
+}
 
 function _applyPlayerState(state) {
     if (state.position) {
@@ -846,6 +1450,8 @@ document.addEventListener('WorldJS_quitWorld', () => {
     _particles?.dispose();
     _particles = null;
     _atmos?.endWorld();
+    _far?.dispose();
+    _far = null;
     _disposeAll();
 
     chunkManager = null;
@@ -864,6 +1470,7 @@ document.addEventListener('WorldJS_quitWorld', () => {
     _blockReg = _itemReg = _physics = _inventory = _water = _entities = _crafting = null;
     _smooth = null;
     _terrainStyle = 'blocky';
+    _worldGen = 1;
 
     // Drop the HUD's cached handles and last-written values so the next world
     // starts from a clean slate rather than skipping writes that look unchanged.
@@ -903,8 +1510,20 @@ document.addEventListener('WorldJS_tick', (e) => {
 
     // Build input object for physics. Movement keys are only honoured while the
     // pointer is locked to the game — when paused or in a menu the character
-    // must not respond to WASD / Space.
-    const controlsActive = document.pointerLockElement === document.getElementById('GameScreen');
+    // must not respond to WASD / Space. A controller needs no lock: while it
+    // is the device in use and the game is being played, gamepad.js says so
+    // (`play`) and gives what its sticks and buttons ask for.
+    const pad = window.__wwPad;
+    const padPlay = !!pad?.play;
+    const controlsActive = padPlay || document.pointerLockElement === document.getElementById('GameScreen');
+    if (padPlay) {
+        // The right stick turns at a rate, so unlike the mouse it is scaled by dt.
+        const rate = PAD_LOOK_RATE * _sensMult * dt;
+        yaw   -= pad.lookX * rate;
+        pitch -= pad.lookY * rate * (_invertY ? -1 : 1);
+        pitch  = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, pitch));
+    }
+    _padButtons(padPlay && pad.breakHeld, padPlay && pad.useHeld);
     const fwd      = _horizontalForward();
     const rightDir = { x: fwd.z, z: -fwd.x };
     const input = {
@@ -912,9 +1531,11 @@ document.addEventListener('WorldJS_tick', (e) => {
         backward: controlsActive && !!KEYS['KeyS'],
         left:     controlsActive && !!KEYS['KeyA'],
         right:    controlsActive && !!KEYS['KeyD'],
-        jump:     controlsActive && !!KEYS['Space'],
-        sneak:    controlsActive && (!!KEYS['ControlLeft'] || !!KEYS['KeyQ']),
-        sprint:   controlsActive && !!KEYS['ShiftLeft'],
+        jump:     controlsActive && (!!KEYS['Space'] || (padPlay && pad.jump)),
+        sneak:    controlsActive && (!!KEYS['ControlLeft'] || !!KEYS['KeyQ'] || (padPlay && pad.sneak)),
+        sprint:   controlsActive && (!!KEYS['ShiftLeft'] || (padPlay && pad.sprint)),
+        moveF:    padPlay ? pad.moveF : 0,
+        moveR:    padPlay ? pad.moveR : 0,
         fwd,
         rightDir,
     };
@@ -932,6 +1553,8 @@ document.addEventListener('WorldJS_tick', (e) => {
     _checkSuffocation(dt);
     _water.tick(dt, (cx, cz) => chunkManager?.markDirty(cx, cz));
     _particles?.update(dt);
+    // Mobs are shaded by the same sun or moon as the terrain.
+    if (_atmos) _entities.lightDir = _atmos.state.lightDir;
     _entities.update(dt, me.position, _inventory, _gameMode);
 
     // Raycast for block targeting
@@ -1024,10 +1647,11 @@ let _renderDist = 8;
 // Kept here because the modules are created later than settings first arrive.
 const _gfx = {
     shadows: 'off', clouds: 'fast', particles: 'medium', sky: 'simple',
-    weatherVolume: 0.8, reduceMotion: false,
+    weatherVolume: 0.8, reduceMotion: false, eyeAdaptation: false,
 };
 let _shadows   = null;   // ShadowMapper — lives as long as the renderer
 let _atmos     = null;   // Atmosphere (day cycle, weather, sky, clouds) — likewise
+let _post      = null;   // PostFX (Eye Adaptation + bloom) — likewise
 let _particles = null;   // Particles — per world
 let _savedAtmos = null;  // the atmosphere part of the loaded player state
 let _paused    = false;  // the pause menu is up: the clock and the weather stand still
@@ -1041,6 +1665,11 @@ document.addEventListener('WorldJS_applySettings', (e) => {
     if (s.renderDistance != null) {
         _renderDist = s.renderDistance;
         if (chunkManager) chunkManager.renderDistance = _renderDist;
+        _applyViewDistance();
+    }
+    if (s.farTerrain != null) {
+        _farExtra = Math.max(0, s.farTerrain | 0);
+        _far?.setDistance(_farExtra);
         _applyViewDistance();
     }
     if (s.resolutionScale != null) {
@@ -1063,6 +1692,16 @@ document.addEventListener('WorldJS_applySettings', (e) => {
     if (s.fogStart != null) {
         _fogStart = s.fogStart;
         _applyViewDistance();
+    }
+    if (s.eyeAdaptation != null) {
+        const on = s.eyeAdaptation === true || s.eyeAdaptation === 'on';
+        if (on !== _gfx.eyeAdaptation) {
+            _gfx.eyeAdaptation = on;
+            _post?.setEnabled(on);
+            // Materials now draw into a different kind of target: compile them
+            // for it now rather than on the first frame.
+            if (worldState && chunkUniforms) _warmShaders();
+        }
     }
 });
 
@@ -1089,6 +1728,36 @@ document.addEventListener('mouseup', (e) => {
         _bowDrawing = false;
         _bowCharge  = 0;
     }
+});
+
+/**
+ * The controller's triggers as the mouse buttons: the right one breaks and
+ * attacks, the left one places, uses, eats and draws a bow. Called every tick
+ * with whether each is held; a change does what the mouse button going down or
+ * coming up does above.
+ */
+function _padButtons(breakHeld, useHeld) {
+    if (breakHeld !== _padBreak) {
+        _padBreak = breakHeld;
+        MOUSE.left = breakHeld;
+        if (!breakHeld) { _breakTarget = null; _breakProgress = 0; }
+    }
+    if (useHeld !== _padUse) {
+        _padUse = useHeld;
+        MOUSE.right = useHeld;
+        if (useHeld) _rightJust = true;
+        else {
+            if (_bowDrawing) _fireBow();
+            _bowDrawing = false;
+            _bowCharge  = 0;
+        }
+    }
+}
+
+// The controller's shoulder buttons: one hotbar slot along, either way.
+window.addEventListener('ww_padHotbar', (e) => {
+    _hotbarSlot = (_hotbarSlot + (e.detail?.step ?? 1) + 10) % 10;
+    window.dispatchEvent(new CustomEvent('ww_hotbarChange', { detail: { slot: _hotbarSlot } }));
 });
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
@@ -1200,12 +1869,12 @@ function _breakBlock(hit, hasCorrectTool = true) {
     if (!worldState || !chunkManager) return;
     const block = _blockReg.get(hit.blockId);
     // Debris takes the light of the air it flies into, so it is dark in a cave.
-    const lit = _skyBrightnessAt(hit.x + 0.5 + (hit.face?.x ?? 0), hit.y + 0.5 + (hit.face?.y ?? 1), hit.z + 0.5 + (hit.face?.z ?? 0));
+    const dl = _lightAt(hit.x + 0.5 + (hit.face?.x ?? 0), hit.y + 0.5 + (hit.face?.y ?? 1), hit.z + 0.5 + (hit.face?.z ?? 0));
     const rgb = block.topColor ?? block.color ?? [0.5, 0.5, 0.5];
-    const dl = lit * (_atmos?.mobLight ?? 1);
     _particles?.burst(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5, [rgb[0] * dl, rgb[1] * dl, rgb[2] * dl]);
     worldState.setBlock(hit.x, hit.y, hit.z, 0);
     chunkManager.markEdited(hit.x, hit.z);
+    _breakUnsupported(hit.x, hit.y, hit.z);
 
     // Creative players don't collect broken blocks.
     if (_gameMode === 'CREATIVE') return;
@@ -1213,8 +1882,43 @@ function _breakBlock(hit, hasCorrectTool = true) {
     // Blocks with requiresTool drop nothing if broken with the wrong tool
     if (block.requiresTool && !hasCorrectTool) return;
 
-    // Drop items
-    const dropPos = { x: hit.x + 0.5, y: hit.y + 0.5, z: hit.z + 0.5 };
+    _dropBlockItems(block, { x: hit.x + 0.5, y: hit.y + 0.5, z: hit.z + 0.5 });
+
+    // Refresh the hotbar so collected blocks / updated stack counts show up.
+    window.dispatchEvent(new CustomEvent('ww_itemPickup'));
+}
+
+/**
+ * The block at (x, y, z) is gone: anything resting on it or hanging from it
+ * (BlockRegistry `support` — torches, lanterns) comes down too, and drops.
+ */
+function _breakUnsupported(x, y, z) {
+    for (const [dx, dy, dz] of NEIGHBOURS_6) {
+        const nx = x + dx, ny = y + dy, nz = z + dz;
+        const id = worldState.getBlock(nx, ny, nz);
+        const sup = id > 0 ? _blockReg.get(id).support : null;
+        if (!sup || nx + sup[0] !== x || ny + sup[1] !== y || nz + sup[2] !== z) continue;
+        const def = _blockReg.get(id);
+        worldState.setBlock(nx, ny, nz, 0);
+        chunkManager.markEdited(nx, nz);
+        if (_gameMode !== 'CREATIVE') _dropItems(def, { x: nx + 0.5, y: ny + 0.3, z: nz + 0.5 });
+    }
+}
+const NEIGHBOURS_6 = [[0, 1, 0], [0, -1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]];
+
+/** A broken block's drops, as dropped items in the world (they are not collected). */
+function _dropItems(block, pos) {
+    const drops = block.drops?.length ? block.drops
+        : (_itemReg?.hasItem(block.name.toLowerCase()) ? [{ itemId: block.name.toLowerCase(), count: 1 }] : []);
+    for (const drop of drops) {
+        if (Math.random() > (drop.chance ?? 1)) continue;
+        const itemId = drop.itemId ?? drop.item;
+        if (itemId) _entities?.dropItem(pos, itemId, drop.count ?? 1);
+    }
+}
+
+/** A mined block's drops, into the inventory (overflow is dropped at `dropPos`). */
+function _dropBlockItems(block, dropPos) {
     if (block.drops && block.drops.length > 0) {
         for (const drop of block.drops) {
             if (Math.random() > (drop.chance ?? 1)) continue;
@@ -1232,9 +1936,6 @@ function _breakBlock(hit, hasCorrectTool = true) {
             if (overflow > 0) _entities?.dropItem(dropPos, itemId, overflow);
         }
     }
-
-    // Refresh the hotbar so collected blocks / updated stack counts show up.
-    window.dispatchEvent(new CustomEvent('ww_itemPickup'));
 }
 
 // ── Block placement / interaction ─────────────────────────────────────────────
@@ -1264,12 +1965,15 @@ function _handlePlacement(hit) {
 
     // Resolve which block this item places (by block name, then reverse of the
     // block's drop list). Returns null for non-block items (tools, ingots, …).
-    const blockDef = _itemToBlock.get(held.itemId);
+    // Torches and lanterns then pick a variant by the face clicked.
+    const blockDef = _placementFor(_itemToBlock.get(held.itemId), hit);
     if (!blockDef) return;
 
     const px = hit.x + hit.face.x;
     const py = hit.y + hit.face.y;
     const pz = hit.z + hit.face.z;
+    // A torch or lantern cannot go into water (or lava, one day).
+    if (blockDef.model && _blockReg.isLiquid(worldState.getBlock(px, py, pz))) return;
 
     // Don't place inside player
     const pw = 0.3;
@@ -1287,6 +1991,22 @@ function _handlePlacement(hit) {
         _inventory.removeItem(held.itemId, 1);
         window.dispatchEvent(new CustomEvent('ww_itemPickup'));
     }
+}
+
+/**
+ * Which block actually goes down when `def` is placed against `hit`'s face:
+ * itself, unless it has a `placement` table (BlockRegistry) — then the entry for
+ * that face (a wall torch facing away from the wall, a hanging lantern under a
+ * ceiling), or null if it cannot go there. It must hang on something that
+ * can hold it: not a liquid, not another torch or lantern.
+ */
+function _placementFor(def, hit) {
+    if (!def?.placement) return def ?? null;
+    const f = hit.face;
+    const side = f.y > 0 ? 'floor' : f.y < 0 ? 'ceiling' : f.x > 0 ? 'east' : f.x < 0 ? 'west' : f.z > 0 ? 'south' : 'north';
+    const name = def.placement[side];
+    if (!name || _blockReg.hasModel(hit.blockId) || _blockReg.isLiquid(hit.blockId)) return null;
+    return _blockReg.getByName(name) ?? null;
 }
 
 // item id → block def. Built once per world load from the block list: a block's
@@ -1460,8 +2180,8 @@ function _checkSuffocation(dt) {
 
     if (inSolid) {
         if (overlayEl) {
-            const layer = BLOCK_FACE_MAP[headId]?.side ?? BLOCK_FACE_MAP[headId]?.top;
-            const path  = layer != null ? BLOCK_TEX_LAYERS[layer] : null;
+            const layer = _faceMap[headId]?.side ?? _faceMap[headId]?.top;
+            const path  = layer != null ? _texLayers[layer] : null;
             // Fully opaque texture fill of the block the head is inside.
             overlayEl.style.backgroundImage = path
                 ? `url('${path}')`
@@ -1590,6 +2310,7 @@ function _tryGroundSpawn() {
 }
 
 function _finishGroundSpawn(x, y, z) {
+    _post?.resetAdaptation();
     me.position = { x, y, z };
     if (_physics?.vel) _physics.vel = { x: 0, y: 0, z: 0 };
     if (!_worldSpawn) _worldSpawn = { x: Math.floor(x), z: Math.floor(z) };  // lock world spawn
@@ -1651,6 +2372,7 @@ const _hud = { ready: false, el: {}, last: {} };
 function _hudInit() {
     const ids = [
         'playerCoords', 'playerInfo', 'playerHealthVal', 'playerHungerVal', 'playerEnergyVal',
+        'playerHealthFill', 'playerHungerFill', 'playerEnergyFill',
         'playerProtection', 'playerArrows', 'attackChargeFill', 'mineProgressBar',
         'mineProgressFill', 'eatProgressBar', 'eatProgressFill', 'damageVignette', 'actionLines',
     ];
@@ -1675,6 +2397,15 @@ function _hudStyle(id, prop, value) {
     if (el) el.style[prop] = value;
 }
 
+/** A status bar: its number and how full it is, out of 100. */
+function _hudMeter(valId, fillId, value) {
+    const v = Math.max(0, Math.min(100, Math.ceil(value)));
+    if (_hud.last[valId] === v) return;
+    _hud.last[valId] = v;
+    if (_hud.el[valId]) _hud.el[valId].textContent = String(v);
+    if (_hud.el[fillId]) _hud.el[fillId].style.width = v + '%';
+}
+
 function _hudClass(id, cls, on) {
     const k = id + '#' + cls;
     if (_hud.last[k] === on) return;
@@ -1695,9 +2426,10 @@ function _updateHUD() {
     _hudClass('playerInfo', 'hidden', !showStats);
 
     if (showStats) {
-        _hudText('playerHealthVal', `Health: ${Math.ceil(me.health)} / 100`);
-        _hudText('playerHungerVal', `Hunger: ${Math.ceil(me.hunger)} / 100`);
-        _hudText('playerEnergyVal', `Energy: ${Math.ceil(me.energy)} / 100`);
+        // A bar each, out of 100, and the number beside it.
+        _hudMeter('playerHealthVal', 'playerHealthFill', me.health);
+        _hudMeter('playerHungerVal', 'playerHungerFill', me.hunger);
+        _hudMeter('playerEnergyVal', 'playerEnergyFill', me.energy);
     }
 
     const hasArmor = _inventory?.hasAnyArmor ?? false;
@@ -1760,42 +2492,17 @@ function _updateCamera() {
 const chunkLights = new Map();   // key → { data, y0, h, tex, uniforms, opaque, transparent }
 const LIGHT_W = CHUNK_SIZE + 2;  // the light volume has a one-block border
 
-// Until a chunk's light arrives it is treated as open sky.
-function _fullLightTexture() {
-    const tex = new THREE.Data3DTexture(new Uint8Array([255]), 1, 1, 1);
+// Until a chunk's light arrives it is treated as open sky (255); a chunk with
+// no block light binds a 0.
+function _emptyLightTexture(v = 255) {
+    const tex = new THREE.Data3DTexture(new Uint8Array([v]), 1, 1, 1);
     tex.format = THREE.RedFormat;
     tex.needsUpdate = true;
     return tex;
 }
 
-function _chunkLight(key, cx, cz) {
-    let e = chunkLights.get(key);
-    if (e) return e;
-    const uniforms = {
-        ...chunkUniforms,
-        uLight:       { value: _fullLightTexture() },
-        uLightOrigin: { value: new THREE.Vector3(cx * CHUNK_SIZE - 1, WORLD_MIN_Y, cz * CHUNK_SIZE - 1) },
-        uLightSize:   { value: new THREE.Vector3(1, 1, 1) },
-    };
-    e = {
-        data: null, y0: 0, h: 0, tex: uniforms.uLight.value, uniforms,
-        opaque: new THREE.ShaderMaterial({
-            glslVersion: THREE.GLSL3, uniforms,
-            vertexShader: CHUNK_VERT, fragmentShader: CHUNK_FRAG,
-        }),
-        transparent: new THREE.ShaderMaterial({
-            glslVersion: THREE.GLSL3, uniforms,
-            vertexShader: CHUNK_VERT, fragmentShader: CHUNK_TRANSP_FRAG,
-            transparent: true, depthWrite: false, side: THREE.DoubleSide,   // see _createChunkMaterials
-        }),
-    };
-    chunkLights.set(key, e);
-    return e;
-}
-
-function _setChunkLight(key, cx, cz, light) {
-    if (!light) return;
-    const e = _chunkLight(key, cx, cz);
+/** A light volume (sky or block: the same layout) as a filtered R8 texture. */
+function _lightTexture(light) {
     const tex = new THREE.Data3DTexture(light.data, LIGHT_W, light.h, LIGHT_W);
     tex.format    = THREE.RedFormat;
     tex.type      = THREE.UnsignedByteType;
@@ -1803,18 +2510,54 @@ function _setChunkLight(key, cx, cz, light) {
     tex.magFilter = THREE.LinearFilter;
     tex.unpackAlignment = 1;
     tex.needsUpdate = true;
+    return tex;
+}
+
+function _chunkLight(key) {
+    let e = chunkLights.get(key);
+    if (e) return e;
+    // Only what differs per chunk, and the samplers: the rest of chunkUniforms
+    // reaches the program through the primers.
+    const uniforms = {
+        ..._perDraw,
+        uLight:       { value: _emptyLightTexture() },
+        uBlock:       { value: _noBlockLight },
+        uChunk:       { value: _chunkUniform() },       // its offset is set each frame by _viewChunks
+    };
+    e = {
+        data: null, y0: 0, h: 0, tex: uniforms.uLight.value, uniforms,
+        block: null, blockTex: null,   // block light (torches), when any reaches this chunk
+        opaque:      _opaqueChunkMaterial(uniforms),
+        transparent: _transparentChunkMaterial(uniforms),
+    };
+    chunkLights.set(key, e);
+    return e;
+}
+
+function _setChunkLight(key, light) {
+    if (!light) return;
+    const e = _chunkLight(key);
+    const tex = _lightTexture(light);
     e.tex.dispose();
     e.tex = tex;
     e.data = light.data; e.y0 = light.y0; e.h = light.h;
     e.uniforms.uLight.value = tex;
-    e.uniforms.uLightOrigin.value.y = WORLD_MIN_Y + light.y0;
-    e.uniforms.uLightSize.value.set(LIGHT_W, light.h, LIGHT_W);
+    const u = e.uniforms.uChunk.value;
+    u[U_LIGHT_Y0] = light.y0; u[U_LIGHT_H] = light.h;
+
+    // Block light rides along; null means none reaches this chunk.
+    e.blockTex?.dispose();
+    const b = light.block ?? null;
+    e.block = b;
+    e.blockTex = b ? _lightTexture(b) : null;
+    e.uniforms.uBlock.value = e.blockTex ?? _noBlockLight;
+    u[U_BLOCK_Y0] = b ? b.y0 : 0; u[U_BLOCK_H] = b ? b.h : 0;
 }
 
 function _disposeChunkLight(key) {
     const e = chunkLights.get(key);
     if (!e) return;
-    e.tex.dispose(); e.opaque.dispose(); e.transparent.dispose();
+    e.tex.dispose(); e.blockTex?.dispose(); e.opaque.dispose(); e.transparent.dispose();
     chunkLights.delete(key);
 }
 
@@ -1835,57 +2578,301 @@ function _skyBrightnessAt(x, y, z) {
     return Math.max(Math.pow(SKY_FALLOFF, SKY_MAX - level), SKY_MIN);
 }
 
+/** Block light level (0..15) at a world point, from the chunk's block-light volume. */
+function _blockLevelAt(x, y, z) {
+    const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+    const cx = bx >> 4, cz = bz >> 4;
+    const b = chunkLights.get(WorldState.key(cx, cz))?.block;
+    if (!b) return 0;
+    const ly = by - WORLD_MIN_Y - b.y0;
+    if (ly < 0 || ly >= b.h) return 0;
+    const lx = bx - cx * CHUNK_SIZE + 1, lz = bz - cz * CHUNK_SIZE + 1;
+    return b.data[lx + ly * LIGHT_W + lz * LIGHT_W * b.h] / 255 * SKY_MAX;
+}
+
+/**
+ * How lit a world point is, 0..1+, for things drawn without the chunk shader
+ * (mobs, debris): the sky (by time of day and weather), plus block light —
+ * including the light in the player's hand — in the room the sky leaves.
+ */
+function _lightAt(x, y, z) {
+    const sky = _skyBrightnessAt(x, y, z) * (_atmos?.mobLight ?? 1);
+    let lvl = _blockLevelAt(x, y, z);
+    if (_handLevel > 0) {
+        const c = camera.position;
+        lvl = Math.max(lvl, _handLevel - Math.hypot(x - c.x, y - c.y - HAND_OFFSET_Y, z - c.z));
+    }
+    if (lvl <= 0) return sky;
+    // As the chunk shader: block light fills the headroom the sky leaves.
+    return sky + Math.pow(SKY_FALLOFF, SKY_MAX - lvl) * Math.min(lvl, 1) * _torchFlicker * Math.max(1 - sky, 0);
+}
+
 function _onLightReady(cx, cz, light) {
-    _setChunkLight(WorldState.key(cx, cz), cx, cz, light);
+    const key = WorldState.key(cx, cz);
+    _setChunkLight(key, light);
+    // A mesh still waiting in the upload queue carries an older light than this.
+    const queued = _meshQueue.get(key);
+    if (queued) queued.light = null;
+}
+
+// ── Mesh upload queue ────────────────────────────────────────────────────────
+// Worker results arrive in bursts — several chunks can finish in the same
+// frame while new terrain streams in — and each one is a geometry upload, a
+// light texture upload and, for a new chunk, two new materials. Installing
+// them all at once turned a burst into a visible hitch. Results wait here and
+// are installed a few per frame, nearest first (_drainMeshQueue). Chunks right
+// around the player skip the queue, so a block edit shows at once.
+const _meshQueue = new Map();       // key → { cx, cz, geo, light }
+const MESH_UPLOADS_PER_FRAME = 4;   // at least this many; more when a backlog builds
+const MESH_IMMEDIATE_CHUNKS  = 2;   // chunks this close to the player are never queued
+
+function _onMeshReady(cx, cz, geo, light) {
+    const key  = WorldState.key(cx, cz);
+    // A newer result for a chunk still in the queue replaces it. ChunkManager
+    // passes null light when a newer light has already gone out; if that was the
+    // queued result's, it is still the newest, so it is kept.
+    const item = { cx, cz, geo, light: light ?? _meshQueue.get(key)?.light ?? null };
+    const pcx = Math.floor(me.position.x) >> CHUNK_SHIFT, pcz = Math.floor(me.position.z) >> CHUNK_SHIFT;
+    if (Math.max(Math.abs(cx - pcx), Math.abs(cz - pcz)) <= MESH_IMMEDIATE_CHUNKS) {
+        _meshQueue.delete(key);
+        _installMesh(key, item, true);
+    } else {
+        _meshQueue.set(key, item);
+    }
+}
+
+/** Install queued meshes: all of them while the loading screen is up, else a few, nearest first. */
+function _drainMeshQueue() {
+    const n = _meshQueue.size;
+    if (n === 0) return;
+    const budget = _loadGateDone ? Math.max(MESH_UPLOADS_PER_FRAME, Math.ceil(n / 8)) : n;
+    if (budget >= n) {
+        for (const [key, item] of _meshQueue) _installMesh(key, item);
+        _meshQueue.clear();
+        return;
+    }
+    const px = me.position.x / CHUNK_SIZE, pz = me.position.z / CHUNK_SIZE;
+    const order = [..._meshQueue].sort(([, a], [, b]) =>
+        ((a.cx + 0.5 - px) ** 2 + (a.cz + 0.5 - pz) ** 2) - ((b.cx + 0.5 - px) ** 2 + (b.cz + 0.5 - pz) ** 2));
+    for (let i = 0; i < budget; i++) {
+        const [key, item] = order[i];
+        _meshQueue.delete(key);
+        _installMesh(key, item);
+    }
 }
 
 // A chunk is one opaque and one transparent mesh (either may be absent), so it
-// costs at most two draw calls — two more with shadows on.
-function _onMeshReady(cx, cz, geo, light) {
-    const key    = WorldState.key(cx, cz);
-    _atmos?.invalidateColumn(cx, cz);   // blocks changed: where rain stops has too
+// costs at most two draw calls — two more with shadows on. `urgent`: next to
+// the player (an edit, most likely), so its shadow updates on the next frame.
+function _installMesh(key, { cx, cz, geo, light }, urgent = false) {
+    _atmos?.setColumnHeights(cx, cz, geo.rain);   // blocks changed: where rain stops has too
     _removeMeshes(key);
-    _setChunkLight(key, cx, cz, light);
-    const entry = { opaque: null, transparent: null, key, cx, cz };
-    const mats  = _chunkLight(key, cx, cz);
+    _setChunkLight(key, light);
+    const mats  = _chunkLight(key);
+    // Where the chunk is in the tile tilePos() repeats over (CHUNK_COMMON).
+    const wrap = (c) => ((c % TILE_CHUNKS) + TILE_CHUNKS) % TILE_CHUNKS;
+    mats.uniforms.uChunk.value[U_TILE] = wrap(cx) + wrap(cz) * TILE_CHUNKS;
+    const entry = {
+        opaque: null, transparent: null, key, cx, cz,
+        box: _chunkBox(cx, cz, geo), rel: mats.uniforms.uChunk.value,
+        bytes: _geoBytes(geo),   // on the GPU (diagnostics)
+    };
     if (geo.positions.length > 0) {
         entry.opaque = _addChunkMesh(_buildGeometry(geo, false), mats.opaque, cx, cz);
     }
     if (geo.transparentPositions.length > 0) {
-        // Leaves cast shadows; water and ice are skipped in the depth pass.
+        // Water and ice: skipped in the shadow depth pass by their texture.
         entry.transparent = _addChunkMesh(_buildGeometry(geo, true), mats.transparent, cx, cz);
     }
     chunkMeshes.set(key, entry);
+    _shadows?.invalidate(entry.box, urgent);
+    _far?.chunksChanged();
 }
 
-function _onChunkUnload(key) { _removeMeshes(key); _disposeChunkLight(key); }
+/** Bytes of vertex and index data in a worker's geometry result. */
+function _geoBytes(geo) {
+    let n = 0;
+    for (const k in geo) if (geo[k]?.byteLength && k !== 'rain') n += geo[k].byteLength;
+    return n;
+}
+
+// ── What far terrain shows of land the player has changed ───────────────────
+// Far terrain is drawn from the generator, which knows nothing of what has
+// been built or dug. So a chunk that has been changed leaves a summary of its
+// surface behind — the highest block of each column, and which block it is —
+// when it is saved or unloaded: FarTerrain lays those over its tiles
+// (setEdit), and the server keeps them with the world (far-edits.json), so
+// they are there the next time the world is opened, from however far away.
+const FAR_EDIT_BYTES = CHUNK_SIZE * CHUNK_SIZE * 4;
+let _farEditsOut = new Map();   // summaries not sent to the server yet: key → bytes
+
+/** Summarise chunk `key` for far terrain, if it was edited since its last summary. */
+function _summariseEdited(key) {
+    if (!worldState?.edited.delete(key)) return;
+    const chunk = worldState.chunks.get(key);
+    if (!chunk?.generated) return;
+    const bytes = new Uint8Array(FAR_EDIT_BYTES);
+    const heights = new Int16Array(bytes.buffer, 0, CHUNK_SIZE * CHUNK_SIZE);
+    const ids = new Uint16Array(bytes.buffer, CHUNK_SIZE * CHUNK_SIZE * 2, CHUNK_SIZE * CHUNK_SIZE);
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+            const ly = chunk.columnTop(lx, lz), k = lx + lz * CHUNK_SIZE;
+            heights[k] = ly < 0 ? EDIT_EMPTY : WORLD_MIN_Y + ly;
+            ids[k] = ly < 0 ? 0 : chunk.getVoxel(lx, ly, lz);
+        }
+    }
+    _far?.setEdit(chunk.cx, chunk.cz, heights, ids);
+    _farEditsOut.set(key, bytes);
+}
+
+/** Send the summaries made since the last save to the server. */
+function _saveFarEdits() {
+    if (!chunkManager?.worldId || _farEditsOut.size === 0) return;
+    const body = {};
+    for (const [key, bytes] of _farEditsOut) body[key] = btoa(String.fromCharCode(...bytes));
+    _farEditsOut = new Map();
+    fetch(`${SERVER_URL}/api/worlds/${chunkManager.worldId}/far-edits`, {
+        method: 'PUT', keepalive: JSON.stringify(body).length < 60000,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    }).catch(() => { /* offline */ });
+}
+
+/** The summaries the server holds for this world, into far terrain. */
+async function _loadFarEdits(worldId) {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/worlds/${worldId}/far-edits`);
+        if (!res.ok || !_far) return;
+        for (const [key, b64] of Object.entries(await res.json())) {
+            const [cx, cz] = key.split(',').map(Number);
+            const raw = atob(b64);
+            if (raw.length !== FAR_EDIT_BYTES || !Number.isInteger(cx) || !Number.isInteger(cz)) continue;
+            const bytes = Uint8Array.from(raw, c => c.charCodeAt(0));
+            _far?.setEdit(cx, cz, new Int16Array(bytes.buffer, 0, CHUNK_SIZE * CHUNK_SIZE),
+                          new Uint16Array(bytes.buffer, CHUNK_SIZE * CHUNK_SIZE * 2, CHUNK_SIZE * CHUNK_SIZE));
+        }
+    } catch { /* offline, or a world from before this */ }
+}
+
+function _onChunkUnload(key) {
+    _summariseEdited(key);
+    _meshQueue.delete(key);
+    _atmos?.dropColumns(key);
+    _removeMeshes(key);
+    _disposeChunkLight(key);
+}
 
 function _addChunkMesh(geometry, material, cx, cz) {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(cx * CHUNK_SIZE, WORLD_MIN_Y, cz * CHUNK_SIZE);
+    // Chunks never move: compose the matrices once, here. Nothing updates them
+    // afterwards (chunkGroup).
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    mesh.matrixWorld.copy(mesh.matrix);
+    // Culled by _cullChunks against the chunk's box instead of Three.js's test
+    // against the bounding sphere (see there).
+    mesh.frustumCulled = false;
     mesh.layers.enable(SHADOW_LAYER);
-    scene.add(mesh);
+    // Not composed in the view pass (_chunkModelView).
+    mesh.modelViewMatrix.multiplyMatrices = _chunkModelView;
+    mesh.normalMatrix.getNormalMatrix     = _chunkNormalMatrix;
+    chunkGroup.add(mesh);
     return mesh;
 }
+
+// ── Chunk culling ────────────────────────────────────────────────────────────
+// A chunk column's geometry runs from its cave floors to its peaks — often two
+// hundred blocks for a sixteen-block footprint — so its bounding sphere is
+// about a hundred blocks across. Three.js culls with that sphere, which let
+// through most chunks beside and behind the camera and most of the world
+// outside the shadow box, each costing a draw call and its vertices. Testing
+// the chunk's actual box is exact and cheap, and runs once per pass: for the
+// shadow camera (ShadowMapper.onCull) and then the view.
+const _cullFrustum = new THREE.Frustum();
+const _cullMatrix  = new THREE.Matrix4();
+const CULL_MARGIN  = 1;   // blocks; covers leaves swaying in the wind (CHUNK_VERT)
+
+function _chunkBox(cx, cz, geo) {
+    const x0 = cx * CHUNK_SIZE, z0 = cz * CHUNK_SIZE;
+    const y0 = WORLD_MIN_Y + (geo.yMin ?? 0);
+    const y1 = WORLD_MIN_Y + (geo.yMax ?? (CHUNK_SIZE_Y - 1)) + 1;
+    return new THREE.Box3(
+        new THREE.Vector3(x0 - CULL_MARGIN, y0 - CULL_MARGIN, z0 - CULL_MARGIN),
+        new THREE.Vector3(x0 + CHUNK_SIZE + CULL_MARGIN, y1 + CULL_MARGIN, z0 + CHUNK_SIZE + CULL_MARGIN));
+}
+
+/**
+ * Show exactly the chunks whose box `cam` can see. `cam`'s matrices must be
+ * current. With `relTo` (the view camera's position), each visible chunk also
+ * gets its origin relative to it — see _viewChunks — and its water its place
+ * in the draw order.
+ *
+ * Water and ice are blended, so chunks of them must be drawn far to near.
+ * Three.js would order them by the depth of each mesh's origin, which for a
+ * chunk is a corner at the bottom of the world: looking down, that puts them
+ * in the wrong order. Chunks are columns on a grid, and for those the right
+ * order is simply by how many chunks away they are, counted along x plus
+ * along z — a line of sight from the camera's chunk never comes back toward
+ * it on either axis. renderOrder carries it (lower is drawn first); within a
+ * chunk the mesher has ordered the faces (GreedyMesher._orderTranslucent).
+ */
+function _cullChunks(cam, relTo = null) {
+    _cullMatrix.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    _cullFrustum.setFromProjectionMatrix(_cullMatrix, cam.coordinateSystem, cam.reversedDepth);
+    const pcx = relTo ? Math.floor(relTo.x / CHUNK_SIZE) : 0, pcz = relTo ? Math.floor(relTo.z / CHUNK_SIZE) : 0;
+    for (const e of chunkMeshes.values()) {
+        const vis = _cullFrustum.intersectsBox(e.box);
+        if (e.opaque) e.opaque.visible = vis;
+        if (e.transparent) e.transparent.visible = vis;
+        if (vis && relTo) {
+            const r = e.rel;
+            r[U_REL]     = e.cx * CHUNK_SIZE - relTo.x;
+            r[U_REL + 1] = WORLD_MIN_Y - relTo.y;
+            r[U_REL + 2] = e.cz * CHUNK_SIZE - relTo.z;
+            if (e.transparent) e.transparent.renderOrder = -1 - Math.abs(e.cx - pcx) - Math.abs(e.cz - pcz);
+        }
+    }
+}
+
+/**
+ * Cull for the view camera, and give each visible chunk its origin relative to
+ * the camera (uChunkRel, see CHUNK_VERT) — in doubles here, so the shader only
+ * ever sees small numbers.
+ */
+function _viewChunks(cam) { _cullChunks(cam, cam.position); }
 
 // Reused scratch so the bounding sphere below allocates nothing per chunk.
 const _bsCenter = new THREE.Vector3();
 
+// BufferAttribute.onUpload callback (`this` is the attribute): the GPU has the
+// data, so the CPU copy can go.
+function _releaseArray() { this.array = null; }
+
 function _buildGeometry(geo, transparent) {
     const buf  = new THREE.BufferGeometry();
     const pos  = transparent ? geo.transparentPositions : geo.positions;
-    const col  = transparent ? geo.transparentColors    : geo.colors;
+    const tint = transparent ? geo.transparentTints     : geo.tints;
     const idx  = transparent ? geo.transparentIndices   : geo.indices;
     const uvs  = transparent ? geo.transparentUVs       : geo.uvs;
-    const lay  = transparent ? geo.transparentLayers    : geo.layers;
+    const nrm  = transparent ? geo.transparentNormals   : geo.normals;
 
-    // No 'normal' attribute — the chunk shaders bake lighting into vertex colour
-    // and never read one, so uploading it would be 12 bytes per vertex of waste.
-    buf.setAttribute('position', new THREE.BufferAttribute(pos,  3));
-    buf.setAttribute('color',    new THREE.BufferAttribute(col,  3));
-    buf.setAttribute('uv',       new THREE.BufferAttribute(uvs,  2));
-    buf.setAttribute('layer',    new THREE.BufferAttribute(lay,  1));
-    buf.setIndex(new THREE.BufferAttribute(idx, 1));
+    // 24 bytes a vertex, packed by the mesher (engine/MeshFormat.js): the
+    // colour and texture layer as four bytes, the uv as two shorts, and the
+    // normal as four signed bytes (xyz, glow), all read normalised. Four bytes,
+    // not three: Direct3D (ANGLE) has no three-byte vertex format, so three
+    // would be converted on the CPU at every upload.
+    //
+    // Once on the GPU the arrays are dropped (_releaseArray). Nothing reads a
+    // chunk's vertices on the CPU — collision and raycasts use the voxels, and
+    // the bounds are set below — so keeping them doubled every chunk's memory
+    // in the JavaScript heap, over a hundred megabytes at a long render
+    // distance, and made every garbage collection longer.
+    buf.setAttribute('position', new THREE.BufferAttribute(pos,  3).onUpload(_releaseArray));
+    buf.setAttribute('tint',     new THREE.BufferAttribute(tint, 4, true).onUpload(_releaseArray));
+    buf.setAttribute('uv',       new THREE.BufferAttribute(uvs,  2, true).onUpload(_releaseArray));
+    buf.setAttribute('nrm',      new THREE.BufferAttribute(nrm,  4, true).onUpload(_releaseArray));
+    buf.setIndex(new THREE.BufferAttribute(idx, 1).onUpload(_releaseArray));
 
     // Set the bounding sphere from the chunk's known extent instead of letting
     // Three.js derive it lazily, which would scan every position on the main
@@ -1908,26 +2895,29 @@ function _removeMeshes(key) {
     if (!entry) return;
     for (const mesh of [entry.opaque, entry.transparent]) {
         if (!mesh) continue;
-        scene.remove(mesh);
+        chunkGroup.remove(mesh);
         mesh.geometry.dispose();
     }
     chunkMeshes.delete(key);
+    _shadows?.invalidate(entry.box);
+    _far?.chunksChanged();
 }
 
 function _disposeAll() {
+    _meshQueue.clear();
+    _shadows?.invalidate();   // the next world starts from fresh shadows
     for (const key of [...chunkMeshes.keys()]) _removeMeshes(key);
     for (const key of [...chunkLights.keys()]) _disposeChunkLight(key);
     if (_selMesh) { scene.remove(_selMesh); }
-    opaqueMaterial?.dispose();
-    transparentMaterial?.dispose();
-    opaqueMaterial = null;
-    transparentMaterial = null;
 
     // The block atlas is rebuilt on every world load, so it has to be released
     // on every unload too — otherwise each world entered in a session leaves
     // another DataArrayTexture resident on the GPU.
     _blockTexArray?.dispose();
     _blockTexArray = null;
+    _disposePrimers();
+    _noBlockLight?.dispose();
+    _noBlockLight  = null;
     chunkUniforms  = null;
 }
 
@@ -1940,6 +2930,8 @@ function _saveAll() {
     window.dispatchEvent(new CustomEvent('ww_saving', { detail: { active: true } }));
 
     chunkManager.saveAll();   // queues the batch onto the WebSocket send buffer
+    for (const key of [...worldState.edited]) _summariseEdited(key);
+    _saveFarEdits();
     _saveScreenshot(chunkManager.worldId);
 
     // Hide the indicator once the data has actually left the socket (buffer
@@ -1995,36 +2987,147 @@ window.__wwDebug = () => {
     const i = renderer.info;
     return {
         meshes:     chunkMeshes.size,
-        drawCalls:  i.render.calls,
-        tris:       i.render.triangles,
+        // Chunk work outstanding: generation and mesh jobs in flight or held,
+        // and finished meshes waiting to be installed. All zero once an area
+        // has fully loaded.
+        pending:    chunkManager ? chunkManager._pendingGen.size + chunkManager._pendingMesh.size + chunkManager._gated.size : 0,
+        queued:     _meshQueue.size,
+        player:     me?.position ? { x: +me.position.x.toFixed(1), y: +me.position.y.toFixed(1), z: +me.position.z.toFixed(1) } : null,
+        // The scene pass alone, not the shadow, cloud or post-processing passes
+        // (renderer.info resets on every render() call).
+        drawCalls:  _frameStats.calls,
+        tris:       _frameStats.tris,
         geometries: i.memory.geometries,
         textures:   i.memory.textures,
         programs:   i.programs?.length ?? 0,
+        programTypes: i.programs?.map(p => `${p.type}#${p.id}`) ?? [],
         chunks:     worldState?.chunks.size ?? 0,
         renderDist: _renderDist,
+        far:        _far?.info() ?? null,
         shadows:    _shadows?.level ?? 'off',
+        shadowRedraws: _shadows?.redraws ?? 0,
+        mobs:       _entities?.mobCount ?? 0,
         clouds:     _atmos?.clouds.level ?? _gfx.clouds,
         sky:        _atmos?.skyMode ?? _gfx.sky,
         atmosphere: _atmos?.info() ?? null,
         particles:  _particles?.level ?? _gfx.particles,
         terrainStyle: _terrainStyle,
+        worldGen:   _worldGen,
         pixelRatio: renderer.getPixelRatio(),
         cameraFar:  camera?.far ?? null,
         fogNear:    chunkUniforms?.uFogNear.value ?? null,
         fogFar:     chunkUniforms?.uFogFar.value ?? null,
+        eyeAdaptation: !!_post?.active,
+        eyeAdaptationSupported: _post?.supported ?? null,
+        handLight:  +_handLevel.toFixed(2),
+        blockLitChunks: [...chunkLights.values()].filter(e => e.block).length,
     };
+};
+
+/**
+ * Where the memory of the loaded world is, in MB (diagnostics): voxels, the
+ * CPU copies of the light volumes (the GPU holds each once more as a texture),
+ * the chunk geometry on the GPU, and how many chunk meshes the last frame's
+ * culling left visible.
+ */
+window.__wwMemory = () => {
+    let voxels = 0, sky = 0, block = 0, opaque = 0, transparent = 0, geometry = 0;
+    for (const c of worldState?.chunks.values() ?? []) voxels += c.byteLength;
+    for (const e of chunkLights.values()) { sky += e.data?.byteLength ?? 0; block += e.block?.data.byteLength ?? 0; }
+    for (const e of chunkMeshes.values()) {
+        geometry += e.bytes;
+        if (e.opaque?.visible) opaque++;
+        if (e.transparent?.visible) transparent++;
+    }
+    const mb = (b) => +(b / 1048576).toFixed(1);
+    return { chunks: worldState?.chunks.size ?? 0, voxelsMB: mb(voxels), skyLightMB: mb(sky), blockLightMB: mb(block),
+             geometryMB: mb(geometry),
+             visibleOpaque: opaque, visibleTransparent: transparent };
 };
 
 // The atmosphere, for poking at weather from the console and in diagnostics.
 window.__wwAtmos = () => _atmos;
 
+/**
+ * Put a block (by name) at a world position, as an edit would — for the smoke
+ * test and the console. Returns false with no world or an unknown name.
+ */
+window.__wwSetBlock = (x, y, z, name) => {
+    const def = name === 'AIR' ? { id: 0 } : _blockReg?.getByName(name);
+    if (!worldState || !chunkManager || !def) return false;
+    worldState.setBlock(Math.floor(x), Math.floor(y), Math.floor(z), def.id);
+    chunkManager.markEdited(Math.floor(x), Math.floor(z));
+    return true;
+};
+/**
+ * Put a mob (an entity id: 'cow', 'quiddle', …) at a world position — for
+ * tests and the console. Returns its id, or null.
+ */
+window.__wwSpawnMob = (type, x, y, z) => _entities?._spawnMob(type, { x, y, z }) ?? null;
+/** Strike the mob nearest a point, as a blow from the player would — for tests. */
+window.__wwHitMob = (x, y, z, damage) => _entities?.hitNearest({ x, y, z }, damage, 2) ?? 0;
+/** What the mobs are doing (diagnostics): [{ id, type, state, x, y, z, health, onGround }]. */
+window.__wwMobs = () => [...(_entities?._mobs.values() ?? [])].map(m => ({
+    id: m.id, type: m.typeId, state: m.dying > 0 ? 'DYING' : m.state, health: m.health, onGround: m.onGround,
+    x: +m.pos.x.toFixed(2), y: +m.pos.y.toFixed(2), z: +m.pos.z.toFixed(2), model: !!m.inst,
+}));
+/** The block id at a world position (0 = air or no world). */
+window.__wwBlockAt = (x, y, z) => worldState?.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) ?? 0;
+/** Sky and block light levels (0..15) at a world position, as the CPU sees them. */
+window.__wwLightAt = (x, y, z) => ({
+    sky: +(Math.log(Math.max(_skyBrightnessAt(x, y, z), SKY_MIN)) / Math.log(SKY_FALLOFF)).toFixed(2),
+    block: +_blockLevelAt(x, y, z).toFixed(2),
+});
+/** Eye Adaptation's current exposure (a GPU read: diagnostics only). */
+window.__wwExposure = () => _post?.readback() ?? null;
+/** Where the camera points (radians): for tests. */
+window.__wwPadLook = () => ({ yaw, pitch });
+/** Point the camera (radians): for screenshots in tests. */
+window.__wwLook = (y, p) => { yaw = y; pitch = Math.max(-PITCH_LIMIT, Math.min(PITCH_LIMIT, p)); };
+/** Move the player (creative: hovering there) — for tests and the console. */
+window.__wwTeleport = (x, y, z) => {
+    if (!me?.position) return false;
+    me.position = { x, y, z };
+    if (_physics) { _physics.vel = { x: 0, y: 0, z: 0 }; if (_gameMode === 'CREATIVE') _physics.flying = true; }
+    return true;
+};
+
 /** Draw the scene, then service a pending screenshot request in the same task. */
 let _lastRenderMs = 0;
+const _frameStats = { calls: 0, tris: 0 };
+
+// The light the player holds (items' `heldLight`), eased as it changes hands.
+let _handLevel = 0;
+let _torchFlicker = 1;
+let _flickerT = 0;
+const HAND_OFFSET_Y = -0.25;   // a little below the eye
+
+function _updateBlockLightUniforms(dt) {
+    let want = 0;
+    if (_inventory && _itemReg && !_isDead) {
+        for (const s of [_inventory.getHotbar(_hotbarSlot), _inventory.offhand]) {
+            const lvl = s ? (_itemReg.getItem(s.itemId)?.heldLight ?? 0) : 0;
+            if (lvl > want) want = lvl;
+        }
+    }
+    _handLevel += (want - _handLevel) * (1 - Math.exp(-dt * 10));
+    if (_handLevel < 0.01) _handLevel = 0;
+    // A gentle, uneven flicker; steady with Reduce Motion.
+    _flickerT += dt;
+    const t = _flickerT;
+    _torchFlicker = _gfx.reduceMotion ? 1
+        : 1 - 0.035 * (0.5 + 0.5 * (Math.sin(t * 7.3) * 0.5 + Math.sin(t * 11.9 + 1.3) * 0.3 + Math.sin(t * 23.1 + 2.1) * 0.2));
+    if (!chunkUniforms) return;
+    chunkUniforms.uHandLight.value.set(0, HAND_OFFSET_Y, 0, _handLevel);
+    chunkUniforms.uTorchFlicker.value = _torchFlicker;
+    chunkUniforms.uGlowBoost.value = _post?.active ? GLOW_HDR : 1;
+}
 
 function _render() {
     const now = performance.now();
     const dt  = _lastRenderMs ? Math.min((now - _lastRenderMs) / 1000, 0.1) : 0;
     _lastRenderMs = now;
+    _updateBlockLightUniforms(dt);
     if (_atmos) {
         // Sky and fog follow the sky light where the camera is (eased inside the
         // atmosphere). Underground the sky cannot be seen, and a bright sky
@@ -2035,7 +3138,7 @@ function _render() {
             px: me.position.x, py: me.position.y, pz: me.position.z,
             skyLight: worldState ? _skyBrightnessAt(camera.position.x, camera.position.y, camera.position.z) : 1,
             // Clouds fade out a little beyond the terrain fog, never before it.
-            fade: Math.max(_renderDist * CHUNK_SIZE * 1.6, 160),
+            fade: Math.max(_viewChunksOut() * CHUNK_SIZE * 1.6, 160),
             fog: scene.fog, background: scene.background,
         });
         _shadows?.setLightDir(_atmos.state.lightDir);
@@ -2043,8 +3146,28 @@ function _render() {
     // No direct light (night between moonrise and moonset, or twilight): no
     // shadow to cast, so skip the depth pass.
     const directLight = _atmos ? _atmos.state.directStrength > 0.01 : true;
-    if (_shadows?.enabled && chunkUniforms && directLight) _shadows.update(scene, camera.position);
-    renderer.render(scene, camera);
+    _drainMeshQueue();
+    _far?.update(camera.position.x, camera.position.z, _renderDist, chunkMeshes, !_loadGateDone);
+    if (_shadows?.enabled && chunkUniforms && directLight) {
+        _shadows.update(scene, camera.position, (_entities?.mobCount ?? 0) > 0);
+    }
+    camera.updateMatrixWorld();
+    _atmos?.prerender(renderer, camera);
+    _viewChunks(camera);
+    // Eye Adaptation: the scene goes into PostFX's linear half-float target,
+    // which then meters, adapts, blooms and puts the frame on the canvas.
+    const post = !!_post?.active;
+    if (_atmos) _atmos.uniforms.uLinearOut.value = post;
+    if (post) _post.begin();
+    _viewPass = true;
+    try { renderer.render(scene, camera); }
+    finally { _viewPass = false; }
+    _frameStats.calls = renderer.info.render.calls;
+    _frameStats.tris  = renderer.info.render.triangles;
+    if (post) {
+        if (_atmos) _atmos.uniforms.uLinearOut.value = false;
+        _post.end(dt);
+    }
     if (_pendingScreenshotWorldId !== null) {
         const worldId = _pendingScreenshotWorldId;
         _pendingScreenshotWorldId = null;

@@ -7,10 +7,10 @@ export const CHUNK_MASK   = 0x0F;                            // CHUNK_SIZE - 1
 // memory, terrain generation, cave carving, and every greedy-mesh sweep. Keep
 // this only as tall as the game actually uses.
 //
-// Playable range: terrain tops out near y=180 (MOUNTAINS baseHeight 90 +
-// heightVariation 90) and the deep-stone zone starts at y=-80, so -128 leaves a
-// full deep layer below the ore bands and 319 leaves ~140 blocks of build
-// headroom above the tallest natural peak.
+// Playable range: the tallest natural peaks reach about y=290 (Geography.js
+// MAX_HEIGHT; most mountains stay under 250, ordinary land 65–120) and caves
+// go down to just above the bedrock floor at -128, with slate from about y=0
+// down. 319 leaves room for trees on the highest peaks and a little building.
 //
 // CHANGING THESE INVALIDATES SAVED WORLDS. The on-disk chunk payload is exactly
 // CHUNK_VOLUME bytes, so a saved chunk from a differently-sized world cannot be
@@ -50,19 +50,41 @@ export function voxelCoords(idx) {
 // A plain typed array beats a Map here: compression looks up a palette index
 // for every run of voxels in every generated chunk.
 const _paletteScratch = new Int16Array(65536).fill(-1);
+// … and the palette index of every voxel of the column, before the filled
+// band is cut out of it. Written whole on each call, so never cleared.
+const _indexScratch = new Uint8Array(CHUNK_VOLUME);
+
+const ROW = CHUNK_SIZE;                    // voxels in one row (one x run)
+const SLAB = CHUNK_SIZE * CHUNK_SIZE_Y;    // voxels in one z slice of a whole column
+
+/**
+ * The rows [lo, hi] of a whole-column array (voxelIndex layout), packed one
+ * block per z slice: out[(ly − lo)·16 + lx + lz·band], band = rows·16. This is
+ * the layout a chunk is stored in and crosses to the workers in.
+ */
+function packBand(full, lo, hi) {
+    const band = (hi - lo + 1) * ROW;
+    const out  = new Uint8Array(band * CHUNK_SIZE);
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        const from = lz * SLAB + lo * ROW;
+        out.set(full.subarray(from, from + band), lz * band);
+    }
+    return out;
+}
 
 /**
  * Palette-compress an expanded chunk and find its filled-Y extent, in one pass.
  * Runs in the generation worker, so the main thread receives the compact form
- * (CHUNK_VOLUME bytes instead of twice that) and does no per-voxel work.
+ * and does no per-voxel work.
  *
  * @param {Uint16Array} src  CHUNK_VOLUME block ids
  * @returns {{ palette: Uint16Array, indices: Uint8Array, minY: number, maxY: number }}
- *   minY / maxY are 0 for an empty chunk.
+ *   `indices` covers only the filled band [minY, maxY] (packBand layout) —
+ *   everything outside it is AIR. minY / maxY are 0 for an empty chunk.
  */
 export function compressVoxels(src, cx = '?', cz = '?') {
     const pal  = [];
-    const idx  = new Uint8Array(CHUNK_VOLUME);
+    const idx  = _indexScratch;
     const seen = _paletteScratch;
 
     let minY = CHUNK_SIZE_Y;
@@ -107,13 +129,18 @@ export function compressVoxels(src, cx = '?', cz = '?') {
                       `only the first ${MAX_PALETTE} are representable`);
     }
 
+    const lo = maxY < 0 ? 0 : minY, hi = maxY < 0 ? 0 : maxY;
     return {
         palette: Uint16Array.from(pal),
-        indices: idx,
-        minY: maxY < 0 ? 0 : minY,
-        maxY: maxY < 0 ? 0 : maxY,
+        indices: packBand(idx, lo, hi),
+        minY: lo,
+        maxY: hi,
     };
 }
+
+// When an edit lands outside the rows a chunk stores, it grows to cover the
+// edit and this many rows beyond, so building upward does not grow it per block.
+const GROW_ROWS = 8;
 
 /**
  * Palette-compressed chunk storage for a 16×CHUNK_SIZE_Y×16 column.
@@ -123,7 +150,15 @@ export function compressVoxels(src, cx = '?', cz = '?') {
  *
  * Storage:
  *   _palette  — array of unique block IDs present (<= MAX_PALETTE entries)
- *   _indices  — Uint8Array(CHUNK_VOLUME) where each element indexes into _palette
+ *   _indices  — one palette slot per voxel, for the rows [_lo, _lo + _rows)
+ *               only, in packBand layout. Every voxel outside those rows is
+ *               AIR. A generated or loaded chunk stores exactly its filled
+ *               band, [minFilledY, maxFilledY]; a block placed outside it
+ *               grows the storage (_cover).
+ *
+ * The sky above the terrain is most of a column, so storing the whole column
+ * (CHUNK_VOLUME bytes, as this used to) held about twice the memory per loaded
+ * chunk — 92 MB of voxels at render distance 14.
  *
  * Workers operate on plain Uint16Array voxel buffers, but the main thread never
  * builds one: snapshot() hands the compressed pair straight to the worker, which
@@ -134,8 +169,11 @@ export class ChunkData {
         this.cx = cx;
         this.cz = cz;
 
-        this._palette = [0];                           // palette[0] = AIR
-        this._indices = new Uint8Array(CHUNK_VOLUME);  // all 0 → all AIR
+        this._palette = [0];                // palette[0] = AIR
+        this._indices = new Uint8Array(0);  // no rows stored → all AIR
+        this._lo      = 0;                  // first stored row (local Y)
+        this._rows    = 0;                  // stored rows
+        this._band    = 0;                  // _rows · 16: the index stride in z
 
         this.generated = false;  // terrain pass complete
         this.meshed    = false;  // geometry sent to main thread at least once
@@ -153,14 +191,18 @@ export class ChunkData {
     }
 
     getVoxel(lx, ly, lz) {
-        return this._palette[this._indices[voxelIndex(lx, ly, lz)]];
+        const r = ly - this._lo;
+        if (r < 0 || r >= this._rows) return 0;
+        return this._palette[this._indices[lx + r * ROW + lz * this._band]];
     }
 
     /** Local Y of the highest non-air voxel in column (lx, lz), or -1 if it is all air. */
     columnTop(lx, lz) {
         const pal = this._palette, ind = this._indices;
-        let idx = voxelIndex(lx, this.maxFilledY, lz);
-        for (let ly = this.maxFilledY; ly >= this.minFilledY; ly--, idx -= CHUNK_SIZE) {
+        const top = Math.min(this.maxFilledY, this._lo + this._rows - 1);
+        const bottom = Math.max(this.minFilledY, this._lo);
+        let idx = lx + (top - this._lo) * ROW + lz * this._band;
+        for (let ly = top; ly >= bottom; ly--, idx -= ROW) {
             if (pal[ind[idx]] !== 0) return ly;
         }
         return -1;
@@ -179,13 +221,59 @@ export class ChunkData {
             pi = this._palette.length;
             this._palette.push(id);
         }
-        this._indices[voxelIndex(lx, ly, lz)] = pi;
+        let r = ly - this._lo;
+        if (r < 0 || r >= this._rows) {
+            // Outside the stored rows everything is AIR already.
+            if (id === 0) { this.dirty = true; return true; }
+            this._cover(ly);
+            r = ly - this._lo;
+        }
+        this._indices[lx + r * ROW + lz * this._band] = pi;
         this.dirty = true;
         if (id !== 0) {
             if (ly < this.minFilledY) this.minFilledY = ly;
             if (ly > this.maxFilledY) this.maxFilledY = ly;
         }
         return true;
+    }
+
+    /** The palette slot of AIR, added if the palette has none yet. */
+    _airSlot() {
+        let a = this._palette.indexOf(0);
+        if (a === -1) {
+            if (this._palette.length >= MAX_PALETTE) {
+                console.error(`[ChunkData] palette full at chunk ${this.cx},${this.cz}; no slot for AIR`);
+                return 0;
+            }
+            a = this._palette.length;
+            this._palette.push(0);
+        }
+        return a;
+    }
+
+    /** Grow the stored rows to include `ly` (and GROW_ROWS beyond it); the new rows are AIR. */
+    _cover(ly) {
+        const oldLo = this._lo, oldRows = this._rows, oldBand = this._band, old = this._indices;
+        let lo, hi;
+        if (oldRows === 0) {
+            lo = ly - GROW_ROWS; hi = ly + GROW_ROWS;
+        } else {
+            lo = Math.min(oldLo, ly - GROW_ROWS);
+            hi = Math.max(oldLo + oldRows - 1, ly + GROW_ROWS);
+        }
+        lo = Math.max(0, lo);
+        hi = Math.min(CHUNK_SIZE_Y - 1, hi);
+
+        const rows = hi - lo + 1, band = rows * ROW;
+        const next = new Uint8Array(band * CHUNK_SIZE);
+        const air  = this._airSlot();
+        if (air !== 0) next.fill(air);
+        const shift = (oldLo - lo) * ROW;
+        for (let lz = 0; lz < CHUNK_SIZE && oldBand > 0; lz++) {
+            next.set(old.subarray(lz * oldBand, (lz + 1) * oldBand), lz * band + shift);
+        }
+        this._indices = next;
+        this._lo = lo; this._rows = rows; this._band = band;
     }
 
     /**
@@ -200,13 +288,25 @@ export class ChunkData {
 
     /**
      * Take ownership of already-compressed storage — a compressVoxels result
-     * straight from a worker. No copy, no per-voxel work on this thread.
+     * straight from a worker: `indices` holds the rows [minY, maxY]. No copy,
+     * no per-voxel work on this thread. (A whole-column array is accepted too,
+     * and cut down to the band.)
      */
     adoptCompressed(palette, indices, minY, maxY) {
+        const rows = maxY - minY + 1;
+        if (indices.length !== rows * ROW * CHUNK_SIZE) {
+            if (indices.length !== CHUNK_VOLUME) throw new Error(`[ChunkData] ${indices.length} indices for rows ${minY}..${maxY}`);
+            indices = packBand(indices, minY, maxY);
+        }
         this._palette   = Array.isArray(palette) ? palette : Array.from(palette);
         this._indices   = indices;
+        this._lo        = minY;
+        this._rows      = rows;
+        this._band      = rows * ROW;
         this.minFilledY = minY;
         this.maxFilledY = maxY;
+        // The rows left out are AIR, so the palette must be able to say so.
+        if (rows < CHUNK_SIZE_Y) this._airSlot();
     }
 
     /**
@@ -214,26 +314,38 @@ export class ChunkData {
      *
      * Returns freshly allocated copies so the caller can hand the buffers to
      * postMessage as transferables — the chunk keeps its own storage. This is
-     * deliberately NOT toUint16Array(): sending the palette pair moves
-     * CHUNK_VOLUME bytes instead of 2x CHUNK_VOLUME, and the palette expansion
-     * happens on the worker thread rather than blocking the frame.
+     * deliberately NOT toUint16Array(): sending the palette pair moves a
+     * fraction of the bytes, and the palette expansion happens on the worker
+     * thread rather than blocking the frame.
      *
      * Only the filled band [minY, maxY] is sent — everything outside it is AIR
      * by this class's invariant — packed as one block per z slice:
      *   indices[(ly − minY)·CHUNK_SIZE + lx + lz·bandSize],  bandSize = rows·CHUNK_SIZE
-     * The sky above the terrain is most of a column, so this is roughly half the
-     * bytes, and half the allocation, of copying all of _indices. Every mesh or
-     * light job copies nine of these on this thread. Expanded by worldWorker.
+     * That is how the chunk is stored, so for a chunk nobody has built above or
+     * below it is one copy of _indices. Every mesh or light job copies nine of
+     * these on this thread. Expanded by worldWorker.
      */
     snapshot() {
         const lo = this.minFilledY, hi = this.maxFilledY;
-        const band = (hi - lo + 1) * CHUNK_SIZE;
-        const SZ = CHUNK_SIZE * CHUNK_SIZE_Y;
-        const src = this._indices;
-        const indices = new Uint8Array(band * CHUNK_SIZE);
-        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-            const from = lz * SZ + lo * CHUNK_SIZE;
-            indices.set(src.subarray(from, from + band), lz * band);
+        const band = (hi - lo + 1) * ROW;
+        let indices;
+        if (lo === this._lo && band === this._band) {
+            indices = this._indices.slice();
+        } else {
+            // The stored rows and the filled band differ (an edit grew the
+            // storage, or a chunk built by hand): copy where they overlap.
+            indices = new Uint8Array(band * CHUNK_SIZE);
+            const air = this._palette.indexOf(0);
+            if (air > 0) indices.fill(air);
+            const from = Math.max(lo, this._lo), to = Math.min(hi, this._lo + this._rows - 1);
+            if (to >= from) {
+                const n = (to - from + 1) * ROW;
+                const src = this._indices;
+                for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+                    const s = lz * this._band + (from - this._lo) * ROW;
+                    indices.set(src.subarray(s, s + n), lz * band + (from - lo) * ROW);
+                }
+            }
         }
         return {
             palette: Uint16Array.from(this._palette),
@@ -251,14 +363,15 @@ export class ChunkData {
      * Layout: out[(bx + bz * size) * CHUNK_SIZE_Y + ly].
      */
     cornerBlock(x0, z0, size) {
-        const out = new Uint16Array(size * size * CHUNK_SIZE_Y);
+        const out = new Uint16Array(size * size * CHUNK_SIZE_Y);   // zeros: AIR outside the stored rows
         const pal = this._palette;
         const idx = this._indices;
+        const lo = this._lo, rows = this._rows;
         for (let bz = 0; bz < size; bz++) {
             for (let bx = 0; bx < size; bx++) {
-                const src = (x0 + bx) + (z0 + bz) * CHUNK_SIZE * CHUNK_SIZE_Y;
-                const dst = (bx + bz * size) * CHUNK_SIZE_Y;
-                for (let ly = 0; ly < CHUNK_SIZE_Y; ly++) out[dst + ly] = pal[idx[src + ly * CHUNK_SIZE]];
+                const src = (x0 + bx) + (z0 + bz) * this._band;
+                const dst = (bx + bz * size) * CHUNK_SIZE_Y + lo;
+                for (let r = 0; r < rows; r++) out[dst + r] = pal[idx[src + r * ROW]];
             }
         }
         return out;
@@ -272,54 +385,83 @@ export class ChunkData {
         const out = new Uint16Array(CHUNK_VOLUME);
         const pal = this._palette;
         const idx = this._indices;
-        for (let i = 0; i < CHUNK_VOLUME; i++) out[i] = pal[idx[i]];
+        const band = this._band, base = this._lo * ROW;
+        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+            const dst = lz * SLAB + base, src = lz * band;
+            for (let k = 0; k < band; k++) out[dst + k] = pal[idx[src + k]];
+        }
         return out;
     }
 
-    /** Compact serialization for server storage. */
-    serialize() {
-        return {
-            palette: this._palette.slice(),
-            data:    this._indices.slice(),
-        };
+    /**
+     * Write the whole column's palette slots — CHUNK_VOLUME bytes in voxelIndex
+     * layout, the form chunks are saved in — into `target` at `offset`.
+     */
+    writeIndices(target, offset = 0) {
+        const band = this._band, rows = this._rows;
+        if (rows < CHUNK_SIZE_Y) target.fill(this._airSlot(), offset, offset + CHUNK_VOLUME);
+        const src = this._indices, base = offset + this._lo * ROW;
+        for (let lz = 0; lz < CHUNK_SIZE && band > 0; lz++) {
+            target.set(src.subarray(lz * band, (lz + 1) * band), base + lz * SLAB);
+        }
     }
 
-    /** Restore a chunk from server-saved data. */
+    /** Compact serialization for server storage: the palette and the whole column's slots. */
+    serialize() {
+        // Before the palette is copied: writing may add AIR's slot to it.
+        const data = new Uint8Array(CHUNK_VOLUME);
+        this.writeIndices(data);
+        return { palette: this._palette.slice(), data };
+    }
+
+    /** Restore a chunk from server-saved data (`data`: the whole column's slots; not kept). */
     static deserialize(cx, cz, { palette, data }) {
         const chunk = new ChunkData(cx, cz);
-        chunk._palette  = Array.isArray(palette) ? palette : Array.from(palette);
-        chunk._indices  = data instanceof Uint8Array ? data : new Uint8Array(data);
+        const pal  = Array.isArray(palette) ? palette : Array.from(palette);
+        const full = data instanceof Uint8Array ? data : new Uint8Array(data);
+        const { minY, maxY } = _filledRows(pal, full, 0, CHUNK_SIZE_Y, SLAB);
+        chunk.adoptCompressed(pal, packBand(full, minY, maxY), minY, maxY);
         chunk.generated = true;
-        chunk._recomputeFilledY();
         return chunk;
     }
 
     /** Scan for the vertical extent of non-air voxels. */
     _recomputeFilledY() {
-        const pal = this._palette;
-        const idx = this._indices;
-        // Palette slots that map to AIR — usually just one.
-        const isAir = pal.map(id => id === 0);
-        let minY = CHUNK_SIZE_Y, maxY = -1;
-        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-            const slab = lz * CHUNK_SIZE * CHUNK_SIZE_Y;
-            for (let ly = 0; ly < CHUNK_SIZE_Y; ly++) {
-                const row = slab + ly * CHUNK_SIZE;
-                for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-                    if (!isAir[idx[row + lx]]) {
-                        if (ly < minY) minY = ly;
-                        if (ly > maxY) maxY = ly;
-                        break;
-                    }
-                }
-            }
-        }
-        this.minFilledY = maxY < 0 ? 0 : minY;
-        this.maxFilledY = maxY < 0 ? 0 : maxY;
+        const { minY, maxY } = _filledRows(this._palette, this._indices, this._lo, this._rows, this._band);
+        this.minFilledY = minY;
+        this.maxFilledY = maxY;
     }
+
+    /** Bytes of voxel storage this chunk holds (diagnostics). */
+    get byteLength() { return this._indices.byteLength; }
 
     // World-space XZ origin (south-west corner) of this chunk column.
     get worldX() { return this.cx << CHUNK_SHIFT; }
     get worldY() { return WORLD_MIN_Y; }
     get worldZ() { return this.cz << CHUNK_SHIFT; }
+}
+
+/**
+ * The first and last row holding a non-air voxel, in `idx`: palette slots for
+ * `rows` rows starting at local Y `lo`, `band` apart in z. Both 0 when it is
+ * all air.
+ */
+function _filledRows(pal, idx, lo, rows, band) {
+    // Palette slots that map to AIR — usually just one.
+    const isAir = pal.map(id => id === 0);
+    let minY = CHUNK_SIZE_Y, maxY = -1;
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        const slab = lz * band;
+        for (let r = 0; r < rows; r++) {
+            const row = slab + r * ROW;
+            for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+                if (!isAir[idx[row + lx]]) {
+                    if (lo + r < minY) minY = lo + r;
+                    if (lo + r > maxY) maxY = lo + r;
+                    break;
+                }
+            }
+        }
+    }
+    return { minY: maxY < 0 ? 0 : minY, maxY: maxY < 0 ? 0 : maxY };
 }

@@ -1,7 +1,7 @@
 {
   "name": "wonder-world",
   "productName": "Wonder World",
-  "version": "1.0.0-beta.1",
+  "version": "1.0.170-beta",
   "description": "Wonder World is a 3D voxel sandbox game where players explore a vast, procedurally generated world.",
   "author": "Alex Fischer, Interlinked Creations",
   "license": "MIT",
@@ -20,10 +20,16 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/mesher.test.mjs && node test/smooth.test.mjs && node test/light.test.mjs && node test/weather.test.mjs && node test/worker.test.mjs && node test/chunkmanager.test.mjs && node test/persistence.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
+    "test": "node test/chunkdata.test.mjs && node test/mobai.test.mjs && node test/mesher.test.mjs && node test/smooth.test.mjs && node test/light.test.mjs && node test/weather.test.mjs && node test/worker.test.mjs && node test/terrain.test.mjs && node test/chunkmanager.test.mjs && node test/persistence.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
     "test:smoke": "node test/smoke.mjs && node test/update-ui.test.mjs",
     "bench:load": "node test/loadbench.mjs",
-    "bench:pipeline": "node test/pipelinebench.mjs"
+    "bench:pipeline": "node test/pipelinebench.mjs",
+    "bench:render": "node test/renderbench.mjs",
+    "map": "node test/worldmap.mjs",
+    "mobtex": "node tools/gen_mob_textures.mjs",
+    "blocktex": "python tools/gen_block_textures.py",
+    "mobshots": "node test/mobshots.mjs",
+    "shots": "node test/terrainshots.mjs"
   },
   "dependencies": {
     "cors": "^2.8.5",

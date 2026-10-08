@@ -128,6 +128,7 @@ export class ChunkManager {
         // distance changes — not on every one of the 60 update() calls per second.
         this._neededKeys   = new Set();
         this._neededCoords = [];        // parallel [cx, cz, cx, cz, …] for the missing scan
+        this._neededList   = [];        // … and their keys, so the per-frame scan builds no strings
         this._lastPcx      = null;
         this._lastPcz      = null;
         this._lastRD       = -1;
@@ -150,16 +151,29 @@ export class ChunkManager {
         this.smooth = false;
     }
 
-    /** Send all currently loaded chunks to the server in one WebSocket batch. */
+    /**
+     * Send the server the loaded chunks it does not have yet — fresh terrain
+     * never saved, and chunks edited since their last save — in one WebSocket
+     * batch. This runs on every autosave and every time the pointer is
+     * released (pause, the inventory, any menu). It used to send every loaded
+     * chunk: at render distance 14 that was ~840 chunks, ~97 MB copied on the
+     * main thread and every region file around the player compressed again,
+     * about a second of CPU each time the inventory opened. When the client is
+     * unsure what the server has (savedKeys null), everything goes.
+     */
     saveAll() {
-        if (this.worldId && this.worldClient?.connected) {
-            this.worldClient.saveChunks(this.worldId, this.world);
-            // Clear pending changes for every chunk that was just saved so we
-            // don't replay them unnecessarily on the next reload.
-            for (const key of this.world.chunks.keys()) {
-                this.world.pendingChanges.delete(key);
-            }
+        if (!(this.worldId && this.worldClient?.connected)) return;
+        const saved  = this.worldClient.savedKeys;
+        const edited = this.world.pendingChanges;
+        const chunks = new Map();
+        for (const [key, chunk] of this.world.chunks) {
+            if (!chunk.generated) continue;
+            if (saved?.has(key) && !edited.has(key)) continue;
+            chunks.set(key, chunk);
         }
+        this.worldClient.saveChunks(this.worldId, { chunks }, saved === null);
+        // Saved now, so there is nothing to replay on the next reload.
+        for (const key of chunks.keys()) edited.delete(key);
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -174,8 +188,10 @@ export class ChunkManager {
         // saved chunks are loaded from disk rather than regenerated as fresh terrain.
         if (!this.ready) return;
 
-        const pcx = WorldState.worldToChunk(playerPos.x | 0);
-        const pcz = WorldState.worldToChunk(playerPos.z | 0);
+        // Math.floor, not `| 0`: truncation put x in (-1, 0) in chunk 0, which
+        // shifted the loaded square a chunk the wrong way for that sliver.
+        const pcx = WorldState.worldToChunk(Math.floor(playerPos.x));
+        const pcz = WorldState.worldToChunk(Math.floor(playerPos.z));
         const rd  = this.renderDistance;
 
         // ── Rebuild the residency set only when it can actually have changed ──
@@ -187,17 +203,21 @@ export class ChunkManager {
 
             const needed = this._neededKeys;
             const coords = this._neededCoords;
+            const list   = this._neededList;
             needed.clear();
             coords.length = 0;
+            list.length = 0;
 
-            const rdSq = (rd + 0.5) * (rd + 0.5);
+            // A square: every chunk within rd of the player's chunk on both
+            // axes, (2rd+1)² in all. The chunk fog in world.js is shaped to
+            // match, so the whole square is visible and its edge never is.
             for (let dx = -rd; dx <= rd; dx++) {
                 for (let dz = -rd; dz <= rd; dz++) {
-                    // Circular cull — skip corners beyond the render radius
-                    if (dx * dx + dz * dz > rdSq) continue;
                     const cx = pcx + dx, cz = pcz + dz;
-                    needed.add(WorldState.key(cx, cz));
+                    const key = WorldState.key(cx, cz);
+                    needed.add(key);
                     coords.push(cx, cz);
+                    list.push(key);
                 }
             }
 
@@ -219,27 +239,30 @@ export class ChunkManager {
         }
 
         const coords = this._neededCoords;
+        const keys   = this._neededList;
 
         // ── Collect and prioritise missing chunks ────────────────────────────
-        // Walks the cached coordinate list, so no key parsing and no per-frame
-        // string allocation in the common case where nothing is missing.
-        const missing = [];
+        // Walks the cached coordinate and key lists, so no key parsing and no
+        // per-frame string allocation in the common case where nothing is
+        // missing. (Building the key here cost ~650 strings a frame at render
+        // distance 14 — steady garbage for the collector.)
+        let missing = null;
         for (let i = 0; i < coords.length; i += 2) {
             const cx = coords[i], cz = coords[i + 1];
-            const key = WorldState.key(cx, cz);
+            const key = keys[i >> 1];
             const chunk = this.world.chunks.get(key);
             if (chunk?.generated && !chunk.dirty) continue;
             if (this._pendingGen.has(key) || this._pendingMesh.has(key)) continue;
             // Held for its neighbours; released by their arrival, not by polling,
             // so it must not use up this frame's dispatch budget.
             if (this._gated.has(key)) continue;
-            missing.push({
+            (missing ??= []).push({
                 key, cx, cz,
                 priority: this._priority(cx, cz, pcx, pcz),
             });
         }
 
-        if (missing.length === 0) return;
+        if (missing === null) return;
         missing.sort((a, b) => a.priority - b.priority);
 
         // ── Dispatch generation jobs ─────────────────────────────────────────

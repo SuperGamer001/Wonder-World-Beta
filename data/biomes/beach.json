@@ -1,0 +1,54 @@
+{
+  "name": "BEACH",
+  "category": "beach",
+  "temperature": 0.6,
+  "humidity": 0.5,
+  "mapColor": "#fade55",
+  "select": {
+    "temperature": [
+      0.14,
+      1.2
+    ],
+    "humidity": [
+      -0.2,
+      1.2
+    ],
+    "slope": [
+      0,
+      0.95
+    ]
+  },
+  "surface": {
+    "top": "SAND",
+    "layers": [
+      {
+        "block": "SAND",
+        "depth": 3
+      },
+      {
+        "block": "SANDSTONE",
+        "depth": 4
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "steep": {
+      "top": "SANDSTONE",
+      "layers": [
+        {
+          "block": "SANDSTONE",
+          "depth": 3
+        }
+      ]
+    },
+    "underwater": {
+      "top": "SAND",
+      "layers": [
+        {
+          "block": "SAND",
+          "depth": 3
+        }
+      ]
+    }
+  }
+}

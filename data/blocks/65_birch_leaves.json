@@ -1,0 +1,23 @@
+{
+  "id": 65,
+  "name": "BIRCH_LEAVES",
+  "terrainType": "solid",
+  "transparent": true,
+  "noCollision": true,
+  "leaves": true,
+  "color": [
+    0.36,
+    0.5,
+    0.2
+  ],
+  "hardness": 0.2,
+  "drops": [
+    {
+      "itemId": "apple",
+      "count": 1,
+      "chance": 0.03
+    }
+  ],
+  "texture": "Birch_Leaves.png",
+  "render": "cutout"
+}

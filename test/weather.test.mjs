@@ -275,6 +275,43 @@ function simulate(climate, seconds, seed = 1, field = null) {
     check('it is colder higher up', high < low - 0.25, `${low.toFixed(2)} → ${high.toFixed(2)}`);
 }
 
+// Worlds from the current generator (worldGen 2): the climate is the column's
+// own, from the same geography the terrain comes from, and its biome's weather.
+{
+    const { Geography, LAPSE_START, LAPSE_RATE } = await import('../src/scripts/workers/Geography.js');
+    const above = (y) => Math.max(0, y - LAPSE_START);
+    const { BiomeSet } = await import('../src/scripts/workers/Biomes.js');
+    const fs = await import('node:fs');
+    const dir = new URL('../data/biomes/', import.meta.url);
+    const biomes = fs.readdirSync(dir).map(f => JSON.parse(fs.readFileSync(new URL(f, dir), 'utf8')));
+    const cl = new Climate(1234, biomes, 2);
+    const geo = new Geography(1234, new BiomeSet(biomes));
+    const out = newClimate();
+    let finite = true, sawDry = false, sawCold = false, matches = true, deserts = 0, dustyDeserts = 0;
+    for (let i = 0; i < 300; i++) {
+        const x = i * 997 - 150000, z = i * 613 - 90000;
+        const c = geo.column(x, z);
+        const b = geo.biomes.list[c.biome];
+        cl.at(x + 0.5, c.top + 1, z + 0.5, out);
+        if (![out.temp, out.humidity, out.precipitation].every(Number.isFinite)) finite = false;
+        if (out.precipitation < 0.4) sawDry = true;
+        if (out.temp < 0.2) sawCold = true;
+        // Standing on the ground (one block above the top), the climate is the
+        // column's, cooled for that one block.
+        const want = c.temp - (above(c.top + 1) - above(c.top)) * LAPSE_RATE;
+        if (Math.abs(out.temp - want) > 1e-9) matches = false;
+        if (b.name === 'DESERT') { deserts++; if (out.affinity.dusty > 0 && out.precipitation < 0.2) dustyDeserts++; }
+    }
+    check('current worlds: climate is finite everywhere', finite);
+    check('current worlds: there are dry and cold places', sawDry && sawCold);
+    check('current worlds: on the ground, the climate is the column\'s own', matches);
+    check('current worlds: a desert brings its own weather', deserts === 0 || dustyDeserts === deserts, `${dustyDeserts}/${deserts}`);
+    const c = geo.column(500, 500);
+    const low = cl.at(500, c.top + 1, 500, newClimate()).temp;
+    const high = cl.at(500, c.top + 150, 500, newClimate()).temp;
+    check('current worlds: it is colder higher up', high < low - 0.25, `${low.toFixed(2)} → ${high.toFixed(2)}`);
+}
+
 if (failures) {
     console.log(`\n${failures} check(s) failed`);
     process.exit(1);

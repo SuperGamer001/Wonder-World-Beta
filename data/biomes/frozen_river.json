@@ -1,0 +1,40 @@
+{
+  "name": "FROZEN_RIVER",
+  "category": "river",
+  "temperature": 0.05,
+  "humidity": 0.5,
+  "mapColor": "#a0a0ff",
+  "select": {
+    "temperature": [
+      -1,
+      0.14
+    ]
+  },
+  "surface": {
+    "top": "SNOW",
+    "layers": [
+      {
+        "block": "SAND",
+        "depth": 2
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        }
+      ]
+    },
+    "underwaterPatches": [
+      {
+        "block": "SAND",
+        "scale": 10,
+        "threshold": 0.3
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "lantern",
+  "name": "Lantern",
+  "type": "resource",
+  "weight": 2,
+  "maxStack": 64,
+  "heldLight": 14,
+  "icon": "data/textures/items/lantern.png"
+}

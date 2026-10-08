@@ -1,31 +1,51 @@
 {
   "name": "OCEAN",
+  "category": "ocean",
   "temperature": 0.5,
   "humidity": 1,
-  "baseHeight": 36,
-  "heightVariation": 12,
-  "heightOctaves": 3,
-  "heightFrequency": 0.002,
-  "mountainBlend": 0.02,
-  "surfaceBlock": "GRAVEL",
-  "subsurfaceBlock": "CLAY",
-  "stoneBlock": "STONE",
-  "deepBlock": "STONE",
-  "structures": {
-    "tree": {
-      "frequency": 0,
-      "minSpacing": 99,
-      "spawnInWater": false
-    }
+  "mapColor": "#000070",
+  "select": {
+    "temperature": [
+      0.14,
+      0.76
+    ],
+    "elevation": [
+      36,
+      64
+    ]
   },
-  "ores": [
-    {
-      "block": "COAL_ORE",
-      "minY": -90,
-      "maxY": 279,
-      "frequency": 0.0043,
-      "minSize": 3,
-      "maxSize": 10
-    }
-  ]
+  "surface": {
+    "top": "SAND",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 1
+      }
+    ],
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "underwaterPatches": [
+      {
+        "block": "SAND",
+        "scale": 22,
+        "threshold": 0.1
+      },
+      {
+        "block": "CLAY",
+        "scale": 12,
+        "threshold": 0.6
+      }
+    ]
+  }
 }

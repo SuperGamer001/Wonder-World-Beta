@@ -14,5 +14,6 @@
       "itemId": "gold_block",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Gold_Block.png"
 }

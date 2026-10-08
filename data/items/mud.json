@@ -1,0 +1,8 @@
+{
+  "id": "mud",
+  "name": "Mud",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "icon": "data/textures/blocks/Mud.png"
+}

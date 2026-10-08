@@ -1,0 +1,18 @@
+{
+  "id": "torch_charcoal",
+  "station": "hand",
+  "result": {
+    "itemId": "torch",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "charcoal",
+      "count": 1
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

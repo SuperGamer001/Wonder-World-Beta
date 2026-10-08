@@ -1,0 +1,89 @@
+<!doctype html>
+<!-- A stage for looking at the mob models outside the game: test/mobshots.mjs
+     drives it (window.show) and screenshots it. Open it by hand through the
+     dev server too: /test/mob_viewer.html?model=cow -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mob viewer</title>
+<style>html, body { margin: 0; height: 100%; overflow: hidden; background: #9fc4e8; } canvas { display: block; }</style>
+<script type="importmap">{ "imports": { "three": "/node_modules/three/build/three.module.min.js" } }</script>
+</head>
+<body>
+<script type="module">
+import * as THREE from 'three';
+import { MobModels, MODELS } from '/src/scripts/MobModels.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x9fc4e8);
+const camera = new THREE.PerspectiveCamera(30, innerWidth / innerHeight, 0.1, 200);
+
+// A checked lawn, one square to a block, so sizes can be read off it.
+const cv = document.createElement('canvas'); cv.width = cv.height = 32;
+const cx = cv.getContext('2d');
+for (let y = 0; y < 2; y++) for (let x = 0; x < 2; x++) { cx.fillStyle = (x + y) % 2 ? '#5f9a45' : '#69a84c'; cx.fillRect(x * 16, y * 16, 16, 16); }
+const lawn = new THREE.CanvasTexture(cv);
+lawn.wrapS = lawn.wrapT = THREE.RepeatWrapping; lawn.repeat.set(20, 20);
+lawn.magFilter = THREE.NearestFilter; lawn.colorSpace = THREE.SRGBColorSpace;
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(40, 40), new THREE.MeshBasicMaterial({ map: lawn }));
+ground.rotation.x = -Math.PI / 2;
+scene.add(ground);
+
+const models = new MobModels('/data/textures/entities/');
+await models.load();
+// The same models with no textures loaded: plain clay, for judging the shapes alone.
+const clay = new MobModels('/data/textures/entities/');
+const SUN = [0.45, 0.8, 0.4];
+let shown = [];
+
+/**
+ * Put a row of mobs on the stage.
+ * list: [{ model, variant, yaw, anim: { … }, death }]; opts: { spacing, camYaw, camPitch, dist, lookY, light, clay }
+ */
+window.show = (list, opts = {}) => {
+    for (const s of shown) { scene.remove(s.mesh); s.from.release(s); }
+    shown = [];
+    const spacing = opts.spacing ?? 1.6, from = opts.clay ? clay : models;
+    list.forEach((item, i) => {
+        const inst = from.create(item.model, item.variant ?? {}, item.scale ?? 1);
+        if (!inst) return;
+        inst.from = from;
+        Object.assign(inst.anim, { time: 0, phase: 0, seed: 0.37 }, item.anim ?? {});
+        inst.death = item.death ?? 0;
+        const yaw = item.yaw ?? 0;
+        inst.mesh.position.set((i - (list.length - 1) / 2) * spacing, item.y ?? 0, item.z ?? 0);
+        inst.mesh.rotation.y = yaw;
+        from.pose(inst, opts.light ?? 1, MobModels.toModelSpace(SUN, yaw, []));
+        scene.add(inst.mesh);
+        shown.push(inst);
+    });
+    const yaw = opts.camYaw ?? 0.5, pitch = opts.camPitch ?? 0.22, dist = opts.dist ?? 6, lookY = opts.lookY ?? 0.8;
+    camera.position.set(Math.sin(yaw) * Math.cos(pitch) * dist, lookY + Math.sin(pitch) * dist, Math.cos(yaw) * Math.cos(pitch) * dist);
+    camera.lookAt(0, lookY, 0);
+    renderer.render(scene, camera);
+    return shown.length;
+};
+window.modelNames = Object.keys(MODELS);
+
+// By hand: ?model=cow turns one slowly, walking.
+const q = new URLSearchParams(location.search);
+if (q.get('model')) {
+    const name = q.get('model');
+    let t = 0;
+    const loop = () => {
+        t += 1 / 60;
+        window.show([{ model: name, variant: {}, yaw: t * 0.4, anim: { time: t, phase: t * 6, move: 1 } }],
+                    { dist: +(q.get('dist') ?? 5) });
+        requestAnimationFrame(loop);
+    };
+    loop();
+}
+addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+window.viewerReady = true;
+</script>
+</body>
+</html>

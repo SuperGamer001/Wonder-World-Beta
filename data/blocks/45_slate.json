@@ -1,0 +1,20 @@
+{
+  "id": 45,
+  "name": "SLATE",
+  "terrainType": "mesh",
+  "color": [
+    0.29,
+    0.29,
+    0.32
+  ],
+  "hardness": 3,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "slate",
+      "count": 1
+    }
+  ],
+  "texture": "Slate.png",
+  "blend": 7
+}

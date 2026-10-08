@@ -13,7 +13,7 @@
  */
 
 import * as THREE from 'three';
-import { ATMOS_GLSL } from './AtmosGLSL.js';
+import { ATMOS_GLSL, OUTPUT_GLSL } from './AtmosGLSL.js';
 
 const DEBRIS = 1600;
 
@@ -35,7 +35,7 @@ void main() {
 }
 `;
 
-const FUNNEL_FRAG = ATMOS_GLSL + `
+const FUNNEL_FRAG = ATMOS_GLSL + OUTPUT_GLSL + `
 uniform float uAlpha;
 uniform vec3  uLight;
 in vec2  vUv;
@@ -55,7 +55,7 @@ void main() {
     vec3 col = mix(vec3(0.40, 0.34, 0.28), vec3(0.34, 0.35, 0.38), smoothstep(0.0, 0.25, vH)) * uLight;
     col *= 0.8 + 0.3 * n;
     float f = weatherFog(cameraPosition, vW - cameraPosition);
-    fragColor = vec4(mix(col, fogColorFor(-v), f), a * (1.0 - f * 0.8));
+    fragColor = displayOut(vec4(mix(col, fogColorFor(-v), f), a * (1.0 - f * 0.8)));
 }
 `;
 
@@ -78,7 +78,7 @@ void main() {
 }
 `;
 
-const DEBRIS_FRAG = `
+const DEBRIS_FRAG = OUTPUT_GLSL + `
 uniform float uAlpha;
 uniform vec3  uLight;
 in vec2  vUv;
@@ -88,7 +88,7 @@ void main() {
     vec2 c = vUv * 2.0 - 1.0;
     float a = (1.0 - smoothstep(0.4, 1.0, length(c))) * vA * uAlpha * 0.8;
     if (a < 0.01) discard;
-    fragColor = vec4(vec3(0.36, 0.30, 0.24) * uLight, a);
+    fragColor = displayOut(vec4(vec3(0.36, 0.30, 0.24) * uLight, a));
 }
 `;
 

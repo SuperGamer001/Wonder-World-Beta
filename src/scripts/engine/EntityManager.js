@@ -1,21 +1,33 @@
 /**
- * EntityManager — mob spawning, AI, Three.js rendering, and dropped-item management.
+ * EntityManager — mob spawning and upkeep, and dropped items.
  *
- * Mob visual: a simple colored box (body) + smaller box (head) per entity.
- * Dropped items: rotating glowing cubes that auto-pickup on proximity.
+ * A mob's mind and body are engine/MobAI.js (what it decides, how it moves,
+ * the paths it takes: engine/MobNav.js); how it looks is MobModels.js (the
+ * models of engine/MobModelDefs.js, one mesh per mob, posed on the CPU). This
+ * class brings them together each frame: it runs the AI, turns what the mob
+ * is doing into the animation state its model reads, and lights it.
+ *
+ * An entity names its model with `model` (default: its id). One with no model
+ * of that name — a gamepack's own creature — is drawn as two plain boxes, as
+ * every mob used to be.
+ *
+ * Dropped items: sprites that fall, bob and are picked up on proximity.
  */
 
 import * as THREE from 'three';
 import { WORLD_MIN_Y } from './ChunkData.js';
+import { MobAI, WALK, RUN } from './MobAI.js';
+import { MobModels } from '../MobModels.js';
+import { randomVariant } from './MobShapes.js';
+import { GAITS } from './MobAnim.js';
 
 const SPAWN_RADIUS  = 32;   // chunks from player to attempt spawn
 const DESPAWN_RADIUS= 80;   // blocks from player to despawn
 const PICKUP_RADIUS = 1.5;  // blocks from player to auto-pickup
-const GRAVITY       = -18;  // m/s²
 const SPAWN_INTERVAL= 8;    // seconds between spawn attempts
 const MAX_MOBS      = 24;   // hard cap per world
 const ITEM_LIFETIME = 300;  // seconds before dropped items expire
-const MOB_STEP      = 0.6;  // smooth worlds: max climb onto a slope (blocks)
+const DEATH_TIME    = 0.9;  // seconds a mob lies where it fell before it is gone
 
 let _nextId = 0;
 
@@ -40,19 +52,58 @@ export class EntityManager {
         this._spawnT  = 0;
         this._biomeData = [];        // from gamepack
 
-        // SmoothTerrain collider in smooth worlds; null keeps blocky collision.
-        this.smooth = null;
+        this.ai     = new MobAI(worldState, blockRegistry);
+        this.models = new MobModels();
 
         // (x, y, z) => 0..1 sky-light brightness at a point, set by world.js, so
         // mobs are as dark as the cave they stand in. null = always full light.
         this.lightAt = null;
+        // Unit vector toward the sun or moon, set by world.js each frame: the
+        // faces of a mob turned to it are the bright ones, as on the terrain.
+        this.lightDir = [0.35, 0.87, 0.35];
+
+        this._player = { x: 0, y: 0, z: 0 };
+        this._ctx = { player: this._player, playerVisible: true, onAttack: (damage) => {
+            window.dispatchEvent(new CustomEvent('ww_mobAttack', { detail: { damage } }));
+        } };
+        this._dir = [0, 1, 0];
     }
+
+    // SmoothTerrain collider in smooth worlds; null keeps blocky collision.
+    get smooth() { return this.ai.smooth; }
+    set smooth(v) { this.ai.smooth = v; }
+
+    /** Fetch the mob textures. Awaited by world.js while the loading screen is up. */
+    loadModels() { return this.models.load(); }
 
     loadEntityTypes(entities) {
         for (const def of entities) this._types.set(def.id, def);
     }
 
     setBiomeData(biomes) { this._biomeData = biomes; }
+
+    /** Live mobs — while there are any, their shadows are redrawn every frame. */
+    get mobCount() { return this._mobs.size; }
+
+    /**
+     * Throwaway objects drawn with the same kinds of material as mobs and
+     * dropped items, so world.js can compile their shaders during the loading
+     * screen rather than on the frame the first one appears. Their materials
+     * stay alive until dispose(): Three.js deletes a program once no material
+     * uses it, and the next mob would then compile it all over again.
+     */
+    warmupObjects() {
+        const out = [...this.models.warmupMeshes()];
+        const def = this._types.values().next().value;
+        if (def) out.push(this._buildMesh(def));   // the per-type shared parts, kept in _mobParts
+        if (!this._warmSprite) {
+            const tex = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+            tex.needsUpdate = true;
+            this._warmSprite = new THREE.SpriteMaterial({ map: tex, transparent: true });
+        }
+        out.push(new THREE.Sprite(this._warmSprite));
+        return out;
+    }
 
     // ── Main update ───────────────────────────────────────────────────────────
 
@@ -89,28 +140,42 @@ export class EntityManager {
             let sy = null;
             const scanTop    = Math.floor(playerPos.y) + 10;
             const scanBottom = Math.max(WORLD_MIN_Y + 1, scanTop - (DESPAWN_RADIUS + 16));
+            const needsWater = def.aquatic ?? false;
             for (let y = scanTop; y > scanBottom; y--) {
                 const id  = this.world.getBlock(sx, y, sz);
                 const idy = this.world.getBlock(sx, y - 1, sz);
-                if (id === 0 && idy !== 0 && !this.blkReg.isNoCollision(idy)) {
-                    // Check Y range
-                    if (rules.minY !== undefined && y < rules.minY) break;
-                    if (rules.maxY !== undefined && y > rules.maxY) break;
-                    // Check spawn in water
-                    const needsWater = def.aquatic ?? false;
-                    const isWater = this.blkReg.isLiquid(idy);
-                    if (needsWater !== isWater) break;
-                    sy = y;
-                    break;
+                if (id !== 0 || idy === 0) continue;
+                // The first thing under open air: water, or ground.
+                const isWater = this.blkReg.isLiquid(idy);
+                if (!isWater && this.blkReg.isNoCollision(idy)) continue;
+                if (needsWater !== isWater) break;
+                if (needsWater) {
+                    // A fish goes a little way under, where the water is deep enough to swim in.
+                    if (!this.blkReg.isLiquid(this.world.getBlock(sx, y - 3, sz))) break;
+                    y -= 2;
                 }
+                if (rules.minY !== undefined && y < rules.minY) break;
+                if (rules.maxY !== undefined && y > rules.maxY) break;
+                sy = y;
+                break;
             }
             if (sy === null) continue;
 
             const count = 1 + Math.floor(Math.random() * ((rules.maxGroupSize ?? 1) - (rules.minGroupSize ?? 1) + 1));
             for (let i = 0; i < count; i++) {
                 if (this._mobs.size >= MAX_MOBS) break;
-                const spread = (rules.minGroupSize ?? 1) > 1 ? (Math.random() - 0.5) * 8 : 0;
-                this._spawnMob(typeId, { x: sx + spread, y: sy, z: sz + spread });
+                // The others of a group stand nearby — each on its own ground, or in its own water.
+                let gx = sx + 0.5, gy = sy, gz = sz + 0.5;
+                if (i > 0) {
+                    gx += (Math.random() - 0.5) * 8; gz += (Math.random() - 0.5) * 8;
+                    if (needsWater) { if (!this.blkReg.isLiquid(this.world.getBlock(Math.floor(gx), sy, Math.floor(gz)))) continue; }
+                    else {
+                        const y = this.ai.nav.stand(Math.floor(gx), Math.floor(gz), sy, { clear: 2, maxDrop: 3, swims: false });
+                        if (y < -9000 || this.ai.nav.wet) continue;
+                        gy = y;
+                    }
+                }
+                this._spawnMob(typeId, { x: gx, y: gy, z: gz });
             }
         }
     }
@@ -118,190 +183,120 @@ export class EntityManager {
     _spawnMob(typeId, pos) {
         const def = this._types.get(typeId);
         if (!def) return;
-        const id   = uid();
-        const mesh = this._buildMesh(def);
+        const id = uid();
+
+        // Its model, in a look of its own; or the plain boxes if it has none.
+        const name = def.model ?? def.id;
+        const model = this.models.model(name);
+        const inst = model ? this.models.create(name, randomVariant(model), def.modelScale ?? 1) : null;
+        const mesh = inst ? inst.mesh : this._buildMesh(def);
         mesh.position.set(pos.x, pos.y, pos.z);
-        // Render layer 1 = shadow caster (see Shadows.js); mobs cast shadows.
-        // Each mob gets its own copy of the (shared) materials so it can be
-        // dimmed by the light where it stands; the copies are freed in _removeMob.
+        // Render layer 2 = shadow caster that moves every frame (SHADOW_DYNAMIC_LAYER
+        // in Shadows.js, drawn over the cached terrain shadows); mobs cast shadows.
         mesh.traverse(o => {
-            o.layers.enable(1);
-            if (o.material) {
+            o.layers.enable(2);
+            // The plain boxes are Lambert: each mob gets its own copy of the
+            // (shared) materials so it can be dimmed by the light where it stands.
+            if (!inst && o.material) {
                 o.material = o.material.clone();
                 o.userData.baseColor = o.material.color.clone();
             }
         });
         this.scene.add(mesh);
 
-        this._mobs.set(id, {
-            id, typeId,
-            pos:   { ...pos },
-            vel:   { x: 0, y: 0, z: 0 },
+        const mob = this.ai.init({
+            id, typeId, def, mesh, inst,
+            pos: { ...pos },
             health: def.health ?? 10,
             maxHealth: def.health ?? 10,
-            onGround: false,
-            state: 'IDLE',
-            wanderTarget: null,
-            stateTimer: 0,
-            mesh,
-            def,
+            dying: 0,            // 0 alive, else seconds since it died
+            hurt: 0,             // 1 when just hit, fading
+            lookYaw: 0, lookPitch: 0,
         });
+        mesh.rotation.y = mob.yaw;
+        this._mobs.set(id, mob);
         return id;
     }
 
-    // ── Mob AI + physics ──────────────────────────────────────────────────────
+    // ── Mob update ────────────────────────────────────────────────────────────
 
     _updateMobs(dt, playerPos, gameMode) {
+        const ai = this.ai, ctx = this._ctx;
+        this._player.x = playerPos.x; this._player.y = playerPos.y; this._player.z = playerPos.z;
+        ctx.playerVisible = gameMode !== 'SPECTATOR';
+        ai.beginFrame();
+
         for (const [id, mob] of this._mobs) {
             const dx = mob.pos.x - playerPos.x;
             const dz = mob.pos.z - playerPos.z;
-            const dist2 = dx * dx + dz * dz;
 
-            // Despawn if too far
-            if (dist2 > DESPAWN_RADIUS * DESPAWN_RADIUS) {
+            // Despawn if too far, or fallen out of the world.
+            if (dx * dx + dz * dz > DESPAWN_RADIUS * DESPAWN_RADIUS || mob.pos.y < WORLD_MIN_Y - 16) {
                 this._removeMob(id);
                 continue;
             }
-
-            mob.stateTimer -= dt;
-            this._updateAI(mob, dt, playerPos);
-            this._physicsStep(mob, dt);
-
+            if (mob.dying > 0) {
+                mob.dying += dt;
+                if (mob.dying > DEATH_TIME) { this._removeMob(id); continue; }
+            } else {
+                ai.update(mob, dt, ctx);
+            }
+            mob.hurt = Math.max(0, mob.hurt - dt * 3);
             mob.mesh.position.set(mob.pos.x, mob.pos.y, mob.pos.z);
-            mob.mesh.rotation.y += dt * 0.5; // gentle idle rotate (temp)
-            this._applyLight(mob);
+            mob.mesh.rotation.y = mob.yaw;
+            if (mob.inst) this._animate(mob, dt);
+            else this._applyLight(mob);
         }
     }
 
-    _updateAI(mob, dt, playerPos) {
-        if (mob.health <= 0) return;
+    /** Turn what the mob is doing into its model's animation state, and pose and light it. */
+    _animate(mob, dt) {
+        const a = mob.inst.anim, def = mob.def, alive = mob.dying === 0;
+        const ease = (from, to, rate) => from + (to - from) * (1 - Math.exp(-rate * dt));
+        const speed = alive ? Math.hypot(mob.vel.x, mob.vel.z) : 0;
+        const walk = (def.speed ?? 3) * WALK, full = (def.speed ?? 3) * RUN;
 
-        if (mob.state === 'IDLE') {
-            if (mob.stateTimer <= 0) {
-                mob.state = 'WANDER';
-                const angle = Math.random() * Math.PI * 2;
-                const r     = 4 + Math.random() * 8;
-                mob.wanderTarget = {
-                    x: mob.pos.x + Math.cos(angle) * r,
-                    z: mob.pos.z + Math.sin(angle) * r,
-                };
-                mob.stateTimer = 3 + Math.random() * 5;
-            }
-        } else if (mob.state === 'WANDER') {
-            if (!mob.wanderTarget || mob.stateTimer <= 0) {
-                mob.state = 'IDLE';
-                mob.stateTimer = 2 + Math.random() * 4;
-                return;
-            }
-            const speed = mob.def.speed ?? 3;
-            const tdx   = mob.wanderTarget.x - mob.pos.x;
-            const tdz   = mob.wanderTarget.z - mob.pos.z;
-            const dist  = Math.sqrt(tdx * tdx + tdz * tdz);
-            if (dist < 0.5) { mob.state = 'IDLE'; mob.stateTimer = 2; return; }
-            mob.vel.x = (tdx / dist) * speed;
-            mob.vel.z = (tdz / dist) * speed;
+        a.time += dt;
+        a.move = ease(a.move, Math.min(1, speed / walk), 10);
+        a.run  = ease(a.run, Math.min(1, Math.max(0, (speed - walk) / (full - walk))), 6);
+        // The stride follows the ground covered — its length is the model's own,
+        // for the pace it is going at — so a foot that is down stays where it
+        // was put. A fish beats its tail all the time.
+        const gait = GAITS[mob.inst.name];
+        const stride = (gait ? gait.walk + (gait.run - gait.walk) * a.run : Math.max(0.4, (def.height ?? 1.4) * 0.8)) * mob.inst.scale;
+        if (def.aquatic) a.phase += dt * (3.5 + 7 * Math.min(1, speed / walk));
+        else a.phase += speed * dt * (Math.PI * 2) / stride;
+        a.air   = ease(a.air, alive && !mob.onGround && !mob.inWater ? 1 : 0, 12);
+        a.swim  = ease(a.swim, mob.inWater ? 1 : 0, 6);
+        a.graze = ease(a.graze, alive && mob.grazing ? 1 : 0, 4);
+        a.panic = ease(a.panic, alive && mob.panic ? 1 : 0, 6);
+        a.attack = alive ? mob.swing : 0;
+        a.hurt = mob.hurt;
 
-        } else if (mob.state === 'FLEE') {
-            if (mob.stateTimer <= 0) { mob.state = 'IDLE'; mob.stateTimer = 2; return; }
-            const speed = (mob.def.speed ?? 3) * 1.5;
-            const tdx   = mob.pos.x - playerPos.x;
-            const tdz   = mob.pos.z - playerPos.z;
-            const dist  = Math.sqrt(tdx * tdx + tdz * tdz);
-            if (dist > 0) {
-                mob.vel.x = (tdx / dist) * speed;
-                mob.vel.z = (tdz / dist) * speed;
-            }
-
-        } else if (mob.state === 'ATTACK') {
-            if (mob.stateTimer <= 0) {
-                mob.state = 'FLEE';
-                mob.stateTimer = 4;
-                return;
-            }
-            // Chase player
-            const speed = (mob.def.speed ?? 3) * 1.2;
-            const tdx   = playerPos.x - mob.pos.x;
-            const tdz   = playerPos.z - mob.pos.z;
-            const dist  = Math.sqrt(tdx * tdx + tdz * tdz);
-            if (dist > 0) {
-                mob.vel.x = (tdx / dist) * speed;
-                mob.vel.z = (tdz / dist) * speed;
-            }
-            // Deal damage when in melee range
-            mob.attackCooldown = (mob.attackCooldown ?? 0) - dt;
-            if (dist < 1.8 && mob.attackCooldown <= 0) {
-                mob.attackCooldown = 1.5;
-                const dmg = mob.def.attackDamage ?? 4;
-                window.dispatchEvent(new CustomEvent('ww_mobAttack', { detail: { damage: dmg } }));
-            }
+        // Where the head turns: toward what it is looking at, as far as a neck goes.
+        let yaw = 0, pitch = 0;
+        const look = alive ? mob.look : null;
+        if (look) {
+            const h = def.height ?? 1.4;
+            const lx = look.x - mob.pos.x, lz = look.z - mob.pos.z;
+            const ly = (look.y + 1.5) - (mob.pos.y + h * 0.85);
+            yaw = Math.atan2(lx, lz) - mob.yaw;
+            yaw -= Math.round(yaw / (Math.PI * 2)) * Math.PI * 2;
+            yaw = Math.max(-1.15, Math.min(1.15, yaw));
+            pitch = Math.max(-0.6, Math.min(0.6, -Math.atan2(ly, Math.hypot(lx, lz))));
         }
-    }
+        mob.lookYaw = ease(mob.lookYaw, yaw, 7);
+        mob.lookPitch = ease(mob.lookPitch, pitch, 7);
+        a.lookYaw = mob.lookYaw; a.lookPitch = mob.lookPitch;
 
-    _physicsStep(mob, dt) {
-        const hw = (mob.def.width ?? 0.8) / 2;
-        const h  = mob.def.height ?? 1.4;
+        const inst = mob.inst;
+        inst.death = alive ? 0 : Math.min(1, mob.dying / 0.45);
+        // Struck: a flush of red.
+        const flush = Math.max(mob.hurt, alive ? 0 : 0.5);
+        inst.tint[1] = inst.tint[2] = 1 - 0.55 * flush;
 
-        // Gravity
-        if (!mob.onGround) mob.vel.y = Math.max(mob.vel.y + GRAVITY * dt, -30);
-
-        // Move X
-        const nx = mob.pos.x + mob.vel.x * dt;
-        if (!this._collidesAABB(nx, mob.pos.y, mob.pos.z, hw, h)) mob.pos.x = nx;
-        else if (!this._stepUp(mob, nx, mob.pos.z, hw, h)) mob.vel.x = 0;
-
-        // Move Z
-        const nz = mob.pos.z + mob.vel.z * dt;
-        if (!this._collidesAABB(mob.pos.x, mob.pos.y, nz, hw, h)) mob.pos.z = nz;
-        else if (!this._stepUp(mob, mob.pos.x, nz, hw, h)) mob.vel.z = 0;
-
-        // Move Y
-        const ny = mob.pos.y + mob.vel.y * dt;
-        if (!this._collidesAABB(mob.pos.x, ny, mob.pos.z, hw, h)) {
-            mob.pos.y = ny;
-            mob.onGround = false;
-        } else {
-            mob.onGround = mob.vel.y < 0;
-            mob.vel.y = 0;
-        }
-
-        // Dampen horizontal when on ground
-        if (mob.onGround) {
-            if (mob.state === 'IDLE') { mob.vel.x *= 0.7; mob.vel.z *= 0.7; }
-        }
-    }
-
-    /** Smooth worlds: climb a grounded mob onto a slope (see PlayerPhysics._stepUp). */
-    _stepUp(mob, nx, nz, hw, h) {
-        if (!this.smooth || !mob.onGround) return false;
-        const top = mob.pos.y + MOB_STEP;
-        if (this._collidesAABB(mob.pos.x, top, mob.pos.z, hw, h) ||
-            this._collidesAABB(nx, top, nz, hw, h)) return false;
-        let lo = mob.pos.y, hi = top;
-        for (let i = 0; i < 8; i++) {
-            const mid = (lo + hi) * 0.5;
-            if (this._collidesAABB(nx, mid, nz, hw, h)) lo = mid; else hi = mid;
-        }
-        mob.pos.x = nx; mob.pos.y = hi; mob.pos.z = nz;
-        return true;
-    }
-
-    _collidesAABB(x, y, z, hw, h) {
-        const smooth = this.smooth;
-        const x0 = x - hw, x1 = x + hw - 0.001;
-        const y0 = y,      y1 = y + h  - 0.001;
-        const z0 = z - hw, z1 = z + hw - 0.001;
-        for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
-            for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
-                for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
-                    const id = this.world.getBlock(bx, by, bz);
-                    if (id === 0 || this.blkReg.isNoCollision(id)) continue;
-                    // Mesh blocks collide with their rendered shape, not their cube.
-                    if (!smooth || !smooth.isMesh(id)) return true;
-                    if (smooth.cellBlocks(bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
-                }
-            }
-        }
-        return false;
+        const l = this.lightAt ? this.lightAt(mob.pos.x, mob.pos.y + 0.5, mob.pos.z) : 1;
+        this.models.pose(inst, l, MobModels.toModelSpace(this.lightDir, mob.yaw, this._dir));
     }
 
     // ── Damage / death ────────────────────────────────────────────────────────
@@ -315,6 +310,7 @@ export class EntityManager {
         let bestT   = maxDist;
 
         for (const mob of this._mobs.values()) {
+            if (mob.dying > 0) continue;
             const hw = (mob.def.width  ?? 0.8) / 2 + 0.05;
             const h  = (mob.def.height ?? 1.4) + 0.05;
             const t  = this._rayAABB(origin, dir,
@@ -347,6 +343,7 @@ export class EntityManager {
     hitNearest(hitPos, damage, radius = 3) {
         let closest = null, bestDist = radius * radius;
         for (const mob of this._mobs.values()) {
+            if (mob.dying > 0) continue;
             const dx = mob.pos.x - hitPos.x;
             const dy = mob.pos.y - hitPos.y;
             const dz = mob.pos.z - hitPos.z;
@@ -356,18 +353,15 @@ export class EntityManager {
         if (!closest) return 0;
 
         closest.health -= damage;
-        // Quiddles retaliate; other mobs flee
-        if (closest.typeId === 'quiddle') {
-            closest.state      = 'ATTACK';
-            closest.stateTimer = 8;
-            closest.attackCooldown = 0;
-        } else {
-            closest.state      = 'FLEE';
-            closest.stateTimer = 5;
-        }
-
+        closest.hurt = 1;
         if (closest.health <= 0) {
             this._killMob(closest);
+        } else {
+            // Whoever is hit runs from the player — or, if it is the kind that
+            // fights back, comes for them (MobAI.hurt). Lightning is its own threat.
+            const p = this._player;
+            const byPlayer = Math.hypot(p.x - hitPos.x, p.y - hitPos.y, p.z - hitPos.z) < 12;
+            this.ai.hurt(closest, byPlayer ? p : hitPos);
         }
         return damage;
     }
@@ -380,20 +374,27 @@ export class EntityManager {
             const count = drop.minCount + Math.floor(Math.random() * (drop.maxCount - drop.minCount + 1));
             if (count > 0) this.dropItem({ ...mob.pos }, drop.itemId, count);
         }
-        this._removeMob(mob.id);
+        // A model keels over and lies a moment before it goes; plain boxes just go.
+        if (mob.inst) mob.dying = 0.0001;
+        else this._removeMob(mob.id);
     }
 
     _removeMob(id) {
         const mob = this._mobs.get(id);
         if (!mob) return;
         this.scene.remove(mob.mesh);
-        // Geometries are shared per entity type and released in dispose(); the
-        // materials are per-mob copies (see _spawnMob), so free those here.
-        mob.mesh.traverse(o => o.material?.dispose());
+        if (mob.inst) {
+            // Its geometry goes back to the pool; the material is shared.
+            this.models.release(mob.inst);
+        } else {
+            // Plain boxes: geometries are shared per entity type and released in
+            // dispose(); the materials are per-mob copies (see _spawnMob).
+            mob.mesh.traverse(o => o.material?.dispose());
+        }
         this._mobs.delete(id);
     }
 
-    /** Dim a mob's colours by the sky light at its middle. */
+    /** Plain-box mobs: dim the colours by the light at its middle. */
     _applyLight(mob) {
         const l = this.lightAt ? this.lightAt(mob.pos.x, mob.pos.y + 0.5, mob.pos.z) : 1;
         if (mob.light === l) return;
@@ -524,7 +525,8 @@ export class EntityManager {
     // ── Three.js mesh builder ─────────────────────────────────────────────────
 
     /**
-     * Build a mob mesh, reusing one geometry + material pair per entity type.
+     * The plain two-box mob, for an entity with no model, reusing one geometry
+     * + material pair per entity type.
      *
      * Every mob of a given type has identical dimensions and colour, so there is
      * no reason to allocate fresh BoxGeometry and MeshLambertMaterial objects
@@ -590,9 +592,16 @@ export class EntityManager {
             p.bodyMat.dispose(); p.headMat.dispose();
         }
         this._mobParts?.clear();
+        this.models.dispose();
 
         for (const m of (this._dropMats?.values() ?? [])) m.dispose();
         this._dropMats?.clear();
+
+        if (this._warmSprite) {
+            this._warmSprite.map?.dispose();
+            this._warmSprite.dispose();
+            this._warmSprite = null;
+        }
 
         for (const t of (this._texCache?.values() ?? [])) t.dispose();
         this._texCache?.clear();

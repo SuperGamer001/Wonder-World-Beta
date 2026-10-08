@@ -1,0 +1,63 @@
+{
+  "name": "SAVANNA",
+  "category": "land",
+  "temperature": 0.76,
+  "humidity": 0.32,
+  "mapColor": "#bdb25f",
+  "select": {
+    "temperature": [
+      0.62,
+      0.84
+    ],
+    "humidity": [
+      0.14,
+      0.48
+    ],
+    "elevation": [
+      58,
+      126
+    ]
+  },
+  "surface": {
+    "top": "DRY_GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "COARSE_DIRT",
+        "scale": 14,
+        "threshold": 0.45
+      }
+    ]
+  },
+  "weather": {
+    "precipitation": 0.6
+  },
+  "structures": {
+    "acacia_tree": {
+      "frequency": 0.0032
+    },
+    "oak_tree": {
+      "frequency": 0.0003
+    }
+  }
+}

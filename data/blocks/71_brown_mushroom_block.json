@@ -1,0 +1,13 @@
+{
+  "id": 71,
+  "name": "BROWN_MUSHROOM_BLOCK",
+  "terrainType": "solid",
+  "color": [
+    0.54,
+    0.41,
+    0.29
+  ],
+  "hardness": 0.2,
+  "drops": [],
+  "texture": "Brown_Mushroom_Block.png"
+}

@@ -1,0 +1,18 @@
+{
+  "id": 43,
+  "name": "LAMP",
+  "terrainType": "solid",
+  "light": 15,
+  "color": [
+    1,
+    0.82,
+    0.5
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "lamp",
+      "count": 1
+    }
+  ]
+}

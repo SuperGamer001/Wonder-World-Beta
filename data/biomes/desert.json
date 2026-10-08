@@ -1,43 +1,69 @@
 {
   "name": "DESERT",
+  "category": "land",
   "temperature": 0.9,
   "humidity": 0.1,
-  "baseHeight": 62,
-  "heightVariation": 14,
-  "heightOctaves": 4,
-  "heightFrequency": 0.002,
-  "mountainBlend": 0.03,
-  "surfaceBlock": "SAND",
-  "subsurfaceBlock": "SAND",
-  "stoneBlock": "SANDSTONE",
-  "deepBlock": "STONE",
+  "mapColor": "#fa9418",
+  "select": {
+    "temperature": [
+      0.7,
+      1.2
+    ],
+    "humidity": [
+      -0.2,
+      0.34
+    ],
+    "elevation": [
+      58,
+      110
+    ],
+    "plateau": [
+      0,
+      0.22
+    ]
+  },
+  "surface": {
+    "top": "SAND",
+    "topDepth": 3,
+    "layers": [
+      {
+        "block": "SAND",
+        "depth": 2
+      },
+      {
+        "block": "SANDSTONE",
+        "depth": 6
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "steep": {
+      "top": "SANDSTONE",
+      "layers": [
+        {
+          "block": "SANDSTONE",
+          "depth": 4
+        }
+      ]
+    },
+    "underwater": {
+      "top": "SAND",
+      "layers": [
+        {
+          "block": "SAND",
+          "depth": 3
+        }
+      ]
+    }
+  },
   "weather": {
     "precipitation": 0.12,
-    "dusty": 1.0
+    "dusty": 1
   },
   "structures": {
-    "tree": {
-      "frequency": 0.0002,
-      "minSpacing": 20,
-      "spawnInWater": false
+    "cactus": {
+      "frequency": 0.004
     }
   },
-  "ores": [
-    {
-      "block": "COAL_ORE",
-      "minY": -90,
-      "maxY": 279,
-      "frequency": 0.0043,
-      "minSize": 3,
-      "maxSize": 10
-    },
-    {
-      "block": "GOLD_ORE",
-      "minY": -128,
-      "maxY": -90,
-      "frequency": 0.004,
-      "minSize": 2,
-      "maxSize": 7
-    }
-  ]
+  "ores": []
 }

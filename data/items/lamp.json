@@ -1,0 +1,8 @@
+{
+  "id": "lamp",
+  "name": "Lamp",
+  "type": "resource",
+  "weight": 2,
+  "maxStack": 64,
+  "icon": "data/textures/blocks/Lamp.png"
+}

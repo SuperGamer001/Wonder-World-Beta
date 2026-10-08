@@ -1,0 +1,78 @@
+{
+  "name": "STONY_PEAKS",
+  "category": "land",
+  "temperature": 0.35,
+  "humidity": 0.4,
+  "mapColor": "#7b8c8d",
+  "select": {
+    "temperature": [
+      0.14,
+      1.2
+    ],
+    "humidity": [
+      0,
+      1.2
+    ],
+    "elevation": [
+      150,
+      400
+    ],
+    "slope": [
+      0.5,
+      20
+    ]
+  },
+  "surface": {
+    "top": "STONE",
+    "layers": [
+      {
+        "block": "STONE",
+        "depth": 2
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "ANDESITE",
+        "scale": 16,
+        "threshold": 0.3,
+        "under": true
+      },
+      {
+        "block": "GRAVEL",
+        "scale": 11,
+        "threshold": 0.62
+      },
+      {
+        "block": "LIMESTONE",
+        "scale": 20,
+        "threshold": 0.66,
+        "under": true
+      }
+    ]
+  },
+  "ores": [
+    {
+      "block": "IRON_ORE",
+      "minY": 100,
+      "maxY": 290,
+      "frequency": 0.005,
+      "minSize": 3,
+      "maxSize": 9
+    }
+  ]
+}

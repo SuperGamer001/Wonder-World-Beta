@@ -1,0 +1,22 @@
+{
+  "id": "lamp",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "lamp",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "glass",
+      "count": 4
+    },
+    {
+      "itemId": "torch",
+      "count": 4
+    },
+    {
+      "itemId": "iron_ingot",
+      "count": 1
+    }
+  ]
+}

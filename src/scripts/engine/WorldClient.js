@@ -35,6 +35,9 @@ export class WorldClient {
         this._worldId         = null;      // remembered so we can re-sync on reconnect
         this._closed          = false;     // true once close() is called — stops reconnects
         this._reconnectTimer  = null;
+        // Set when an open connection drops: a save batch still in its send
+        // buffer may have been lost, so the next full save sends everything.
+        this._resendAll       = false;
     }
 
     /** Returns a Promise that resolves once the connection is open. */
@@ -62,6 +65,7 @@ export class WorldClient {
         };
 
         ws.onclose = () => {
+            if (this._ready) this._resendAll = true;
             this._ready = false;
             // Any in-flight loadChunk promises will never resolve via the socket —
             // fail them so generation can fall through instead of hanging forever.
@@ -107,6 +111,13 @@ export class WorldClient {
     /** Bytes still queued in the WebSocket send buffer (0 once fully flushed). */
     get bufferedAmount() { return this._ws?.bufferedAmount ?? 0; }
 
+    /**
+     * Keys of the chunks the server holds, or null when that is not known for
+     * sure — no manifest yet, or the connection dropped since the last full
+     * save — and a save should send every loaded chunk.
+     */
+    get savedKeys() { return this._resendAll ? null : this._savedChunks; }
+
     // ── Chunk I/O ─────────────────────────────────────────────────────────────
 
     /**
@@ -140,10 +151,12 @@ export class WorldClient {
 
     /**
      * Send all generated chunks in worldState to the server in one binary message.
-     * Fire-and-forget — no acknowledgement is awaited.
+     * Fire-and-forget — no acknowledgement is awaited. `full`: these are every
+     * loaded chunk, which makes up for anything a dropped connection lost.
      */
-    saveChunks(worldId, worldState) {
+    saveChunks(worldId, worldState, full = false) {
         if (!this._ready) return;
+        if (full) this._resendAll = false;
 
         const encoder    = new TextEncoder();
         const worldIdBuf = encoder.encode(worldId);
@@ -175,14 +188,14 @@ export class WorldClient {
 
         for (const chunk of chunks) {
             const pal = chunk._palette;
-            const idx = chunk._indices;
             dv.setInt32(offset, chunk.cx, true);     offset += 4;
             dv.setInt32(offset, chunk.cz, true);     offset += 4;
             dv.setUint16(offset, pal.length, true);  offset += 2;
             for (const id of pal) {
                 dv.setUint16(offset, id, true);      offset += 2;
             }
-            u8.set(idx, offset);                     offset += CHUNK_VOLUME;
+            // The chunk stores only its filled rows; the save format is the whole column.
+            chunk.writeIndices(u8, offset);          offset += CHUNK_VOLUME;
         }
 
         if (this._savedChunks) {
@@ -238,7 +251,8 @@ export class WorldClient {
             return;
         }
 
-        const data = new Uint8Array(buf, indexOffset, CHUNK_VOLUME).slice();
+        // A view, not a copy: ChunkData.deserialize keeps only the filled rows of it.
+        const data = new Uint8Array(buf, indexOffset, CHUNK_VOLUME);
 
         resolve({ palette, data });
     }

@@ -3,19 +3,22 @@
  *
  * Each worker in the pool handles two message types:
  *
- *   init { seed, blockRegistry, biomes, blockFaceMap, terrainStyle }
- *     → Initialises the TerrainGenerator, StructurePlacer, and GreedyMesher.
+ *   init { seed, blockRegistry, biomes, blockFaceMap, terrainStyle, terrain, worldGen, farPalette, flat }
+ *     → Initialises the generator and the GreedyMesher. worldGen ≥ 2 builds
+ *       TerrainGenerator (with the world settings in `terrain`); older worlds
+ *       get LegacyWorldGen, the generator they were made with.
  *     → terrainStyle 'smooth' also creates a SmoothMesher; anything else meshes
  *       exactly as a blocky world always has.
  *     → Responds with { type: 'ready' }.
  *
  *   generateChunk { taskId, cx, cz }
- *     → Generates terrain for a full 16×448×16 column, places structures,
+ *     → Generates a full 16×448×16 column (terrain, caves, ores, structures)
  *       and palette-compresses it (ChunkData.compressVoxels) so the main
  *       thread only has to adopt the arrays.
  *     → Responds with { type: 'chunkGenerated', taskId, cx, cz,
  *                        palette: Uint16Array, indices: Uint8Array, minY, maxY }
- *        (both buffers are transferred, not copied).
+ *        (both buffers are transferred, not copied). `indices` holds only the
+ *        filled rows minY … maxY, in the layout a chunk is stored in.
  *
  *   meshChunk { taskId, cx, cz, chunk, neighbors, diagonals, corners? }
  *     → Runs greedy meshing on the supplied voxel data, all six face
@@ -29,27 +32,40 @@
  *       SMOOTH_REACH × SMOOTH_REACH columns of each diagonal chunk nearest this
  *       chunk's corner (ChunkData.cornerBlock layout)
  *     → diagonals: { "±1,±1": snapshot } — the four diagonal chunks, used only
- *       for sky light, which reaches SKY_MAX blocks into every neighbour
+ *       for light, which reaches SKY_MAX blocks into every neighbour
  *     → Responds with { type: 'chunkMeshed', taskId, cx, cz, geo, light }
- *       with `light` from Skylight.js; every buffer is transferred.
+ *       with `light` from Skylight.js (plus `light.block` from Blocklight.js,
+ *       or null) and `geo.rain` the 16×16 column heights rain stops at
+ *       (_rainHeights); every buffer is transferred.
+ *
+ *   farTile { taskId, x0, z0, step, cells, edits? }
+ *     → A far-terrain tile (FarTiles.js): the heightfield of the square at
+ *       (x0, z0), `cells` × `step` blocks wide, straight from the geography,
+ *       with its trees and buildings as boxes at the finer steps. `edits`:
+ *       the surfaces of chunks the player has changed there, which replace
+ *       the generated ones ([{ cx, cz, heights, ids }]).
+ *       Responds with { type: 'farTileBuilt', taskId, x0, z0, step, positions,
+ *       colors, normals, indices, yMin, yMax, features }; every buffer is
+ *       transferred. Its colours come from `farPalette` (init), the render
+ *       thread's average texture colour of each block.
  *
  *   lightChunk { taskId, cx, cz, chunk, neighbors, diagonals }
- *     → Sky light only, for a chunk whose geometry is current but whose light
- *       changed (an edit or a load up to SKY_MAX blocks away in a neighbour).
- *       Responds with { type: 'chunkLit', taskId, cx, cz, light }
+ *     → Light only (sky and block), for a chunk whose geometry is current but
+ *       whose light changed (an edit or a load up to SKY_MAX blocks away in a
+ *       neighbour). Responds with { type: 'chunkLit', taskId, cx, cz, light }
  */
 
-import { setSeed }           from './noise.js';
 import { BlockRegistry }     from '../engine/BlockRegistry.js';
 import { TerrainGenerator }  from './TerrainGenerator.js';
-import { StructurePlacer }   from './StructurePlacer.js';
+import { LegacyWorldGen }    from './legacy/LegacyTerrainGenerator.js';
+import { buildFarTile }      from './FarTiles.js';
 import { GreedyMesher }      from './GreedyMesher.js';
 import { SmoothMesher }      from './SmoothMesher.js';
-import { CHUNK_VOLUME, CHUNK_SIZE, CHUNK_SIZE_Y, compressVoxels } from '../engine/ChunkData.js';
+import { CHUNK_VOLUME, CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, compressVoxels } from '../engine/ChunkData.js';
 import { computeSkylight }   from './Skylight.js';
+import { computeBlocklight, paletteHasLight } from './Blocklight.js';
 
-let generator = null;
-let placer    = null;
+let generator = null;   // TerrainGenerator, or LegacyWorldGen for worlds made before it
 let mesher    = null;
 let smoother  = null;   // SmoothMesher — only in smooth-terrain worlds
 
@@ -64,6 +80,7 @@ self.onmessage = function (e) {
             case 'generateChunk': handleGenerate(data); break;
             case 'meshChunk':     handleMesh(data);     break;
             case 'lightChunk':    handleLight(data);    break;
+            case 'farTile':       handleFarTile(data);  break;
             default:
                 console.warn('[worldWorker] unknown message type:', type);
         }
@@ -80,13 +97,16 @@ self.onmessage = function (e) {
     }
 };
 
-function handleInit({ seed, blockRegistry: serialisedReg, biomes, blockFaceMap, terrainStyle }) {
+function handleInit({ seed, blockRegistry: serialisedReg, biomes, blockFaceMap, terrainStyle, terrain, worldGen, farPalette, flat }) {
     const reg = BlockRegistry.deserialize(serialisedReg);
 
-    setSeed(seed);
-
-    generator = new TerrainGenerator(seed, reg, biomes);
-    placer    = new StructurePlacer(seed, reg, generator.biomes, generator);
+    // A world keeps the generator it was made with: worlds from before the
+    // current one (no worldGen) go on generating their old terrain, so what the
+    // player has not explored yet still matches what they have.
+    generator = (worldGen ?? 1) >= 2
+        ? new TerrainGenerator(seed, reg, biomes, terrain, flat)   // flat: a Flat world's settings, or null
+        : new LegacyWorldGen(seed, reg);
+    generator.setFarPalette(farPalette);
     mesher    = new GreedyMesher(reg, blockFaceMap ?? {});
     smoother  = terrainStyle === 'smooth' ? new SmoothMesher(reg, mesher) : null;
 
@@ -99,14 +119,10 @@ function handleGenerate({ taskId, cx, cz }) {
         return;
     }
 
-    // ── 1. Terrain + ores ────────────────────────────────────────────────────
-    const voxels = generator.generateChunk(cx, cz);
+    // Terrain, caves, ores and structures.
+    const voxels = generator.generate(cx, cz);
 
-    // ── 2. Structures ────────────────────────────────────────────────────────
-    const { heights, blends } = generator.buildColumnData(cx, cz);
-    placer.apply(voxels, cx, cz, heights, blends);
-
-    // ── 3. Compress here, so the main thread only adopts the result ─────────
+    // Compress here, so the main thread only adopts the result.
     const { palette, indices, minY, maxY } = compressVoxels(voxels, cx, cz);
     self.postMessage(
         { type: 'chunkGenerated', taskId, cx, cz, palette, indices, minY, maxY },
@@ -118,21 +134,23 @@ function handleGenerate({ taskId, cx, cz }) {
 // draws as one opaque and one transparent mesh.
 const ALL_FACES = [0, 1, 2, 3, 4, 5];
 
-// No `normals` entry: the chunk shaders bake directional brightness into vertex
-// colour and never read a normal, so the mesher does not produce one.
 function _geoTransferList(geo) {
     const list = [
-        geo.positions.buffer, geo.colors.buffer, geo.indices.buffer,
-        geo.uvs.buffer, geo.layers.buffer,
+        geo.positions.buffer, geo.tints.buffer, geo.indices.buffer,
+        geo.uvs.buffer, geo.normals.buffer, geo.rain.buffer,
     ];
     if (geo.transparentPositions.length > 0) {
         list.push(
-            geo.transparentPositions.buffer, geo.transparentColors.buffer,
+            geo.transparentPositions.buffer, geo.transparentTints.buffer,
             geo.transparentIndices.buffer, geo.transparentUVs.buffer,
-            geo.transparentLayers.buffer,
+            geo.transparentNormals.buffer,
         );
     }
     return list;
+}
+
+function _lightTransferList(light) {
+    return light.block ? [light.data.buffer, light.block.data.buffer] : [light.data.buffer];
 }
 
 // Scratch buffers reused across mesh jobs on this worker. A worker handles one
@@ -194,15 +212,24 @@ function _expand(snapshot, out) {
 const _lightViews = new Array(9).fill(null);
 const _lightMinY  = new Array(9).fill(0);
 const _lightMaxY  = new Array(9).fill(0);
+const _lightScan  = new Array(9).fill(false);   // may hold light sources (palette)
 
+/**
+ * Sky light, with the block light (torches, lanterns, lamps) as `light.block`
+ * — null unless one of the nine chunks' palettes has a light source, which
+ * natural terrain never does.
+ */
 function _light(voxelView, chunk, neighbors, diagonals, neighbourViews) {
-    for (let k = 0; k < 9; k++) _lightViews[k] = null;
+    for (let k = 0; k < 9; k++) { _lightViews[k] = null; _lightScan[k] = false; }
+    let anyLight = false;
     const put = (key, view, snap) => {
         const [dx, dz] = key.split(',').map(Number);
         const k = (dx + 1) + (dz + 1) * 3;
         _lightViews[k] = view;
         _lightMinY[k]  = snap.minY | 0;
         _lightMaxY[k]  = snap.maxY | 0;
+        _lightScan[k]  = paletteHasLight(snap.palette, mesher._light);
+        anyLight ||= _lightScan[k];
     };
     put('0,0', voxelView, chunk);
     for (const key of Object.keys(neighbourViews)) put(key, neighbourViews[key], neighbors[key]);
@@ -210,7 +237,11 @@ function _light(voxelView, chunk, neighbors, diagonals, neighbourViews) {
         const snap = diagonals[key], buf = _nbrVoxels[key];
         if (snap && buf) put(key, _expand(snap, buf), snap);
     }
-    return computeSkylight(_lightViews, _lightMinY, _lightMaxY, mesher._solid);
+    const light = computeSkylight(_lightViews, _lightMinY, _lightMaxY, mesher._solid);
+    light.block = anyLight
+        ? computeBlocklight(_lightViews, _lightMinY, _lightMaxY, mesher._solid, mesher._light, _lightScan)
+        : null;
+    return light;
 }
 
 function _expandNeighbours(neighbors) {
@@ -225,6 +256,46 @@ function _expandNeighbours(neighbors) {
     return neighbourViews;
 }
 
+/**
+ * Where rain stops in each column, for the render thread's RainHeightmap
+ * (Precipitation.js): the world Y of the top of the highest non-air block
+ * (torches and lanterns do not count), or,
+ * for a deformed Mesh voxel in a smooth world, of its surface at the column
+ * centre. NaN for an empty column; x fastest.
+ *
+ * Computed here because the smooth shapes are already memoised from meshing
+ * this chunk. On the render thread the same heights cost hundreds of shape
+ * evaluations per chunk against the live world.
+ */
+function _rainHeights(voxels, yRange) {
+    const out = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);
+    const SZ  = CHUNK_SIZE * CHUNK_SIZE_Y;
+    for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+        for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+            let h = NaN;
+            let i = lx + yRange.max * CHUNK_SIZE + lz * SZ;
+            for (let ly = yRange.max; ly >= yRange.min; ly--, i -= CHUNK_SIZE) {
+                const id = voxels[i];
+                if (id === 0 || mesher._model[id] === 1) continue;   // rain falls past a torch
+                h = WORLD_MIN_Y + ly + (smoother?.isMesh(id) ? smoother.topHeight(lx, ly, lz) : 1);
+                break;
+            }
+            out[lx + lz * CHUNK_SIZE] = h;
+        }
+    }
+    return out;
+}
+
+function handleFarTile({ taskId, x0, z0, step, cells, edits }) {
+    // Thrown, not just logged, so the pool hears back and frees this worker.
+    if (!generator) throw new Error('farTile called before init');
+    const t = buildFarTile(generator, x0, z0, step, cells, edits);
+    self.postMessage(
+        { type: 'farTileBuilt', taskId, x0, z0, step, ...t },
+        [t.positions.buffer, t.colors.buffer, t.normals.buffer, t.indices.buffer],
+    );
+}
+
 function handleLight({ taskId, cx, cz, chunk, neighbors, diagonals }) {
     if (!mesher) {
         console.error('[worldWorker] lightChunk called before init');
@@ -232,7 +303,7 @@ function handleLight({ taskId, cx, cz, chunk, neighbors, diagonals }) {
     }
     const voxelView = _expand(chunk, _selfVoxels);
     const light = _light(voxelView, chunk, neighbors, diagonals, _expandNeighbours(neighbors));
-    self.postMessage({ type: 'chunkLit', taskId, cx, cz, light }, [light.data.buffer]);
+    self.postMessage({ type: 'chunkLit', taskId, cx, cz, light }, _lightTransferList(light));
 }
 
 function handleMesh({ taskId, cx, cz, chunk, neighbors, diagonals, corners }) {
@@ -252,10 +323,13 @@ function handleMesh({ taskId, cx, cz, chunk, neighbors, diagonals, corners }) {
     // smooth pass instead of the greedy one.
     const smoothCtx = smoother ? smoother.prepare(voxelView, neighbourViews, corners, yRange) : null;
 
-    const geo   = mesher.meshGroup(voxelView, neighbourViews, ALL_FACES, yRange, smoothCtx);
+    // Torches and lanterns are drawn from their models, if the palette has any.
+    const models = mesher.hasModels(chunk.palette);
+    const geo   = mesher.meshGroup(voxelView, neighbourViews, ALL_FACES, yRange, smoothCtx, models);
+    geo.rain    = _rainHeights(voxelView, yRange);
     const light = _light(voxelView, chunk, neighbors, diagonals, neighbourViews);
     self.postMessage(
         { type: 'chunkMeshed', taskId, cx, cz, geo, light },
-        [..._geoTransferList(geo), light.data.buffer],
+        [..._geoTransferList(geo), ..._lightTransferList(light)],
     );
 }

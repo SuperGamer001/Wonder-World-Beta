@@ -1,0 +1,78 @@
+{
+  "name": "COLD_HIGHLANDS",
+  "category": "land",
+  "temperature": 0.18,
+  "humidity": 0.3,
+  "mapColor": "#7c8878",
+  "select": {
+    "temperature": [
+      0.05,
+      0.3
+    ],
+    "humidity": [
+      0,
+      0.5
+    ],
+    "elevation": [
+      110,
+      180
+    ],
+    "slope": [
+      0,
+      1.3
+    ]
+  },
+  "surface": {
+    "top": "GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 2
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "steep": {
+      "top": "STONE",
+      "layers": [
+        {
+          "block": "STONE",
+          "depth": 2
+        }
+      ]
+    },
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "GRAVEL",
+        "scale": 10,
+        "threshold": 0.35
+      },
+      {
+        "block": "COARSE_DIRT",
+        "scale": 14,
+        "threshold": 0.1
+      }
+    ]
+  },
+  "structures": {
+    "spruce_tree": {
+      "frequency": 0.0012
+    },
+    "boulder": {
+      "frequency": 0.001
+    }
+  }
+}

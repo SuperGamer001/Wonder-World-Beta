@@ -13,5 +13,6 @@
       "itemId": "wooden_planks",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Wooden_Planks.png"
 }

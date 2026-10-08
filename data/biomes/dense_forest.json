@@ -1,0 +1,68 @@
+{
+  "name": "DENSE_FOREST",
+  "category": "land",
+  "temperature": 0.57,
+  "humidity": 0.75,
+  "mapColor": "#40511a",
+  "select": {
+    "temperature": [
+      0.46,
+      0.68
+    ],
+    "humidity": [
+      0.66,
+      0.86
+    ],
+    "elevation": [
+      58,
+      122
+    ]
+  },
+  "surface": {
+    "top": "GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "underwater": {
+      "top": "MUD",
+      "layers": [
+        {
+          "block": "MUD",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 2
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "PODZOL",
+        "scale": 14,
+        "threshold": 0.35
+      },
+      {
+        "block": "MOSS",
+        "scale": 10,
+        "threshold": 0.55
+      }
+    ]
+  },
+  "structures": {
+    "large_oak_tree": {
+      "frequency": 0.018
+    },
+    "oak_tree": {
+      "frequency": 0.022
+    },
+    "huge_mushroom": {
+      "frequency": 0.0004
+    }
+  }
+}

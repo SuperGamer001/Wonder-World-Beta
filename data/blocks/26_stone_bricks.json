@@ -14,5 +14,6 @@
       "itemId": "stone_bricks",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Stone_Bricks.png"
 }

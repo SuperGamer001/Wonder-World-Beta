@@ -1,0 +1,73 @@
+{
+  "name": "SWAMP",
+  "category": "land",
+  "temperature": 0.66,
+  "humidity": 0.85,
+  "mapColor": "#07f9b2",
+  "select": {
+    "temperature": [
+      0.48,
+      0.86
+    ],
+    "humidity": [
+      0.72,
+      1.2
+    ],
+    "elevation": [
+      50,
+      70
+    ]
+  },
+  "surface": {
+    "top": "GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 2
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "underwater": {
+      "top": "MUD",
+      "layers": [
+        {
+          "block": "MUD",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 2
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "MUD",
+        "scale": 10,
+        "threshold": 0.2,
+        "under": true
+      },
+      {
+        "block": "MOSS",
+        "scale": 8,
+        "threshold": 0.6
+      }
+    ],
+    "underwaterPatches": [
+      {
+        "block": "CLAY",
+        "scale": 12,
+        "threshold": 0.5
+      }
+    ]
+  },
+  "structures": {
+    "swamp_tree": {
+      "frequency": 0.012
+    },
+    "huge_mushroom": {
+      "frequency": 0.0003
+    }
+  }
+}

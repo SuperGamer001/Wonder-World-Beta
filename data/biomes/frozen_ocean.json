@@ -1,0 +1,42 @@
+{
+  "name": "FROZEN_OCEAN",
+  "category": "ocean",
+  "temperature": 0.05,
+  "humidity": 1,
+  "mapColor": "#7070d6",
+  "select": {
+    "temperature": [
+      -1,
+      0.14
+    ]
+  },
+  "surface": {
+    "top": "SNOW",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 1
+      }
+    ],
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "underwaterPatches": [
+      {
+        "block": "SAND",
+        "scale": 18,
+        "threshold": 0.3
+      }
+    ]
+  }
+}

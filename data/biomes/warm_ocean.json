@@ -1,0 +1,46 @@
+{
+  "name": "WARM_OCEAN",
+  "category": "ocean",
+  "temperature": 0.85,
+  "humidity": 1,
+  "mapColor": "#0000ac",
+  "select": {
+    "temperature": [
+      0.76,
+      1.2
+    ],
+    "elevation": [
+      36,
+      64
+    ]
+  },
+  "surface": {
+    "top": "SAND",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 1
+      }
+    ],
+    "underwater": {
+      "top": "SAND",
+      "layers": [
+        {
+          "block": "SAND",
+          "depth": 3
+        },
+        {
+          "block": "SANDSTONE",
+          "depth": 2
+        }
+      ]
+    },
+    "underwaterPatches": [
+      {
+        "block": "LIMESTONE",
+        "scale": 10,
+        "threshold": 0.6
+      }
+    ]
+  }
+}

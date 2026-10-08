@@ -3,8 +3,15 @@
  *
  * Converts a 16×CHUNK_SIZE_Y×16 voxel chunk column (plus its four horizontal
  * neighbours for boundary face visibility) into two compact triangle meshes:
- *   • opaque       — standard opaque blocks
- *   • transparent  — water, leaves, glass etc.
+ *   • opaque       — opaque blocks, and the see-through blocks drawn as
+ *                    cutouts (leaves, glass: BlockRegistry `render`), whose
+ *                    texels are either there or not. They write depth like
+ *                    everything else here, so nothing in this mesh needs sorting.
+ *   • transparent  — what is blended over the scene: water and ice. Each face
+ *                    goes in twice, once facing each way, and the mesh is drawn
+ *                    with back faces culled; its triangles are put in an order
+ *                    that is back to front from wherever it is seen (see
+ *                    _orderTranslucent).
  *
  * Because chunks span the full world height there are no vertical chunk
  * boundaries.  Only four horizontal neighbours are needed (±X, ±Z).
@@ -26,9 +33,21 @@
  *   • Solidity is a prebuilt Uint8Array lookup instead of a registry call.
  *   • Output goes straight into growable typed arrays; no JS array boxing and
  *     no final Array→Float32Array copy.
- *   • No `normal` attribute is produced. The chunk shaders bake directional
- *     brightness into vertex colour and never read a normal, so emitting one
- *     would be 12 bytes per vertex of pure waste.
+ *
+ * Every vertex carries its surface normal as four signed bytes (`normals`:
+ * x, y, z × 127, then the block's glow × 127). The chunk shader lights each
+ * pixel from it — sun, sky, block light — so vertex colour is the plain block
+ * colour, with no light baked in, and smooth terrain, whose normals vary
+ * across a patch, is shaded smoothly rather than per triangle.
+ *
+ * Blocks with a model (torches, lanterns — BlockRegistry `model`) are not
+ * greedy-meshed: they are skipped here and drawn by BlockModels.js, and they
+ * never hide a neighbour's face.
+ *
+ * A textured face has no colour of its own, so its three colour bytes carry
+ * something else (engine/MeshFormat.js): which neighbouring ground spreads
+ * over this face's edges and from which sides (blendCode, smooth worlds), and
+ * whether it is natural ground at all.
  *
  * Chunk dimensions:  DIM = [16, CHUNK_SIZE_Y, 16]  (X, Y, Z)
  *
@@ -43,7 +62,8 @@
  */
 
 import { CHUNK_SIZE, CHUNK_SIZE_Y } from '../engine/ChunkData.js';
-import { sunBrightness } from '../engine/Sun.js';
+import { emitModel, isModel } from './BlockModels.js';
+import { packTints, packUVs, packIndices } from '../engine/MeshFormat.js';
 
 const N_XZ = CHUNK_SIZE;
 const N_Y  = CHUNK_SIZE_Y;
@@ -59,10 +79,8 @@ const DIM = [N_XZ, N_Y, N_XZ];
 // neighbour: treated as solid so the face is culled.
 const SOLID_SENTINEL = 0xFFFF;
 
-// Face brightness under open sky, from the sun's direction (engine/Sun.js):
-// +X -X +Y -Y +Z -Z. Sky light and shadows are applied on top in the shader.
-const FACE_BRIGHTNESS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
-    .map(([x, y, z]) => sunBrightness(x, y, z));
+// Face normals as signed bytes (x, y, z × 127): +X -X +Y -Y +Z -Z.
+export const FACE_NORMAL8 = [[127, 0, 0], [-127, 0, 0], [0, 127, 0], [0, -127, 0], [0, 0, 127], [0, 0, -127]];
 
 // faceAxis, uAxis, vAxis, isPositive, normalIndex
 const FACE_DEFS = [
@@ -99,6 +117,26 @@ class F32Buf {
     trim()            { return this.a.slice(0, this.n); }
 }
 
+/** Same, for the signed-byte normals (four per vertex). */
+export class I8Buf {
+    constructor(cap = 4096) { this.a = new Int8Array(cap); this.n = 0; }
+    _fit(extra) {
+        if (this.n + extra <= this.a.length) return;
+        let cap = this.a.length || 1;
+        while (cap < this.n + extra) cap *= 2;
+        const next = new Int8Array(cap);
+        next.set(this.a.subarray(0, this.n));
+        this.a = next;
+    }
+    reserve(extra) { this._fit(extra); return this.a; }
+    push4(x, y, z, w) {
+        this._fit(4);
+        const a = this.a;
+        a[this.n++] = x; a[this.n++] = y; a[this.n++] = z; a[this.n++] = w;
+    }
+    trim() { return this.a.slice(0, this.n); }
+}
+
 /** Same, for Uint32 indices. */
 class U32Buf {
     constructor(cap = 4096) { this.a = new Uint32Array(cap); this.n = 0; }
@@ -127,20 +165,46 @@ class U32Buf {
 
 /** One mesh's worth of output buffers. */
 function _newSink() {
-    return { pos: new F32Buf(), col: new F32Buf(), uv: new F32Buf(), lay: new F32Buf(), idx: new U32Buf() };
+    return { pos: new F32Buf(), col: new F32Buf(), uv: new F32Buf(), lay: new F32Buf(), nrm: new I8Buf(), idx: new U32Buf() };
 }
 
 function _resetSink(s) {
-    s.pos.n = 0; s.col.n = 0; s.uv.n = 0; s.lay.n = 0; s.idx.n = 0;
+    s.pos.n = 0; s.col.n = 0; s.uv.n = 0; s.lay.n = 0; s.nrm.n = 0; s.idx.n = 0;
     return s;
 }
 
+// The arrays that leave the worker, packed as engine/MeshFormat.js describes.
+// The sinks stay float while a mesh is being built — the emit paths write
+// whole quads into them — and are packed once, here.
 function _sinkArrays(s) {
-    return { positions: s.pos.trim(), colors: s.col.trim(), uvs: s.uv.trim(), layers: s.lay.trim(), indices: s.idx.trim() };
+    const verts = s.lay.n;
+    return {
+        positions: s.pos.trim(),
+        tints:     packTints(s.col.a, s.lay.a, verts),
+        uvs:       packUVs(s.uv.a, s.uv.n),
+        normals:   s.nrm.trim(),
+        indices:   packIndices(s.idx.a, s.idx.n, verts),
+    };
 }
 
 // Flat-index stride of each axis (X, Y, Z).
 const STRIDE = [1, SY, SZ];
+
+/**
+ * Where a translucent quad goes in its mesh's draw order (lower first). See
+ * _orderTranslucent: horizontal faces, then those across x, then across z;
+ * within each, the faces turned toward + by rising position, then the ones
+ * turned toward − by falling position.
+ */
+function _translucentKey(faceAxis, facesPositive, plane) {
+    const family = faceAxis === 1 ? 0 : faceAxis === 0 ? 1 : 2;
+    return family * 4096 + (facesPositive ? plane : 2048 - plane);
+}
+
+// The eight columns around a voxel, in the order of a blend code's bits:
+// −x, +x, −z, +z, then the corners (−x−z, +x−z, −x+z, +x+z).
+const BLEND_DX = [-1, 1, 0, 0, -1, 1, -1, 1];
+const BLEND_DZ = [0, 0, -1, 1, -1, -1, 1, 1];
 
 export class GreedyMesher {
     /**
@@ -156,11 +220,17 @@ export class GreedyMesher {
 
         // Scratch reused across jobs (a worker meshes one chunk at a time).
         // Masks hold block ids, which are 16-bit; sized for the largest slice.
+        // The opaque one is 32-bit: a top face's blend code rides in the high
+        // half, so faces only merge with faces that blend the same way.
         const maxSlice = N_XZ * N_Y;
-        this._mask   = new Uint16Array(maxSlice);
+        this._mask   = new Uint32Array(maxSlice);
         this._maskT  = new Uint16Array(maxSlice);
         this._opaque = _newSink();
         this._transp = _newSink();
+        // The transparent mesh's quads, three numbers each: sort key, first
+        // vertex, and which way it faces (_orderTranslucent).
+        this._tq     = new U32Buf(256);
+        this._nb     = new Uint16Array(8);
     }
 
     /**
@@ -173,6 +243,16 @@ export class GreedyMesher {
      * The colour and texture-layer tables are only read once per emitted quad,
      * so they are sized to the registry and indexed by ids that came out of the
      * mask (always real, registered block ids).
+     *
+     * See-through blocks that draw their own faces are `_cutout` (leaves,
+     * glass: into the opaque mesh) or `_glassy` (water, ice: the transparent
+     * one). `_airLike` is what a translucent face shows against besides a
+     * cutout: air, and model blocks like torches, which do not fill their
+     * voxel. All three are read only off the opaque branch of the mask fill.
+     *
+     * `_blend` is the block's `blend` (how readily natural ground spreads over
+     * its neighbours' edges, 0 = takes no part) and `_natural` 1 for the
+     * blocks that have one.
      */
     _buildTables() {
         const ids = this.reg.serialize().map(b => b.id);
@@ -180,16 +260,44 @@ export class GreedyMesher {
         const n = maxId + 1;
 
         this._solid       = new Uint8Array(65536);
+        this._glassy      = new Uint8Array(65536);
+        this._cutout      = new Uint8Array(65536);
+        this._airLike     = new Uint8Array(65536);
+        this._blend       = new Uint8Array(65536);
+        this._natural     = new Float32Array(n);
+        this._anyBlend    = false;
+        this._model       = new Uint8Array(65536);
+        this._modelDef    = [];
         this._layerTop    = new Int16Array(n).fill(-1);
         this._layerSide   = new Int16Array(n).fill(-1);
         this._layerBottom = new Int16Array(n).fill(-1);
         // colors[id*18 + ni*3 + c] — per-face RGB for all six faces.
         this._colors      = new Float32Array(n * 18);
+        // glow[id] — full-bright share, 0..127, written into each vertex's normal.w
+        this._glow        = new Int8Array(n);
+        // light[id] — block light given off, 0..15 (Blocklight.js)
+        this._light       = new Uint8Array(65536);
+        this._airLike[0]  = 1;
 
         for (const id of ids) {
             const block = this.reg.get(id);
             if (!block) continue;
             this._solid[id] = this.reg.isSolid(id) ? 1 : 0;
+            this._glow[id]  = Math.round((block.glow ?? 0) * 127);
+            this._light[id] = block.light ?? 0;
+            if (block.model && isModel(block.model)) {
+                this._model[id]    = 1;
+                this._airLike[id]  = 1;
+                this._modelDef[id] = { model: block.model, facing: block.facing ?? null };
+            } else if (id !== 0 && !this._solid[id]) {
+                if (block.render === 'cutout') this._cutout[id] = 1;
+                else this._glassy[id] = 1;
+            }
+            if (this._solid[id] && block.terrainType === 'mesh' && block.blend > 0) {
+                this._blend[id] = block.blend;
+                this._natural[id] = 1;
+                this._anyBlend = true;
+            }
 
             const fe = this.blockFaceMap[id];
             if (fe) {
@@ -223,15 +331,21 @@ export class GreedyMesher {
      *   Faces only exist on solid voxels, so sweeping outside this band can never
      *   produce geometry. Skipping the empty sky is most of a 448-tall column.
      * @param {object} [smooth] smooth-terrain context from SmoothMesher.prepare():
-     *   { occ, partial, emit }. `occ` replaces the solidity table for the
+     *   { occ, partial, emit, read }. `occ` replaces the solidity table for the
      *   neighbour test (Mesh blocks hide faces against them), `partial` marks
-     *   deformed Mesh voxels the greedy pass must leave alone, and `emit(sink)`
-     *   appends their custom geometry to the opaque output. Omitted in blocky
-     *   worlds, where behaviour is exactly as before.
+     *   deformed Mesh voxels the greedy pass must leave alone, `emit(sink)`
+     *   appends their custom geometry to the opaque output, and `read(lx, ly,
+     *   lz)` reads a voxel up to a block past the chunk on every side — with
+     *   it, the tops of natural ground carry their blend code. Omitted in
+     *   blocky worlds, where behaviour is exactly as before.
+     * @param {boolean} [models] the chunk may hold model blocks (torches,
+     *   lanterns): look for them and draw them. worldWorker knows from the
+     *   chunk's palette (hasModels), so chunks without any skip the scan.
      */
-    meshGroup(voxels, neighbors, faceDefIndices, yRange, smooth = null) {
+    meshGroup(voxels, neighbors, faceDefIndices, yRange, smooth = null, models = false) {
         const opaque = _resetSink(this._opaque);
         const transp = _resetSink(this._transp);
+        this._tq.n = 0;
 
         const yMin = Math.max(0,       (yRange?.min ?? 0) | 0);
         const yMax = Math.min(N_Y - 1, (yRange?.max ?? (N_Y - 1)) | 0);
@@ -252,19 +366,21 @@ export class GreedyMesher {
         }
 
         smooth?.emit?.(opaque);
+        if (models && yMax >= yMin) this._emitModels(voxels, yMin, yMax, opaque);
+        this._orderTranslucent(transp);
 
         const o = _sinkArrays(opaque);
         const t = _sinkArrays(transp);
         return {
             positions:            o.positions,
-            colors:               o.colors,
+            tints:                o.tints,
             uvs:                  o.uvs,
-            layers:               o.layers,
+            normals:              o.normals,
             indices:              o.indices,
             transparentPositions: t.positions,
-            transparentColors:    t.colors,
+            transparentTints:     t.tints,
             transparentUVs:       t.uvs,
-            transparentLayers:    t.layers,
+            transparentNormals:   t.normals,
             transparentIndices:   t.indices,
             // Tight local-space Y bounds, so the render layer can set a bounding
             // sphere without Three.js scanning every position on the main thread.
@@ -275,6 +391,115 @@ export class GreedyMesher {
     /** Full mesh — all 6 face directions. */
     mesh(voxels, neighbors, yRange) {
         return this.meshGroup(voxels, neighbors, [0, 1, 2, 3, 4, 5], yRange);
+    }
+
+    /** Whether any id in `palette` is a model block (worldWorker, before meshing). */
+    hasModels(palette) {
+        for (let i = 0; i < palette.length; i++) if (this._model[palette[i]] === 1) return true;
+        return false;
+    }
+
+    /** Draw every model block in the band (BlockModels.js). */
+    _emitModels(voxels, yMin, yMax, sink) {
+        const model = this._model;
+        const tables = { layer: -1, color: [1, 1, 1], glow: 0 };
+        for (let lz = 0; lz < N_XZ; lz++) {
+            for (let ly = yMin; ly <= yMax; ly++) {
+                const row = ly * SY + lz * SZ;
+                for (let lx = 0; lx < N_XZ; lx++) {
+                    const id = voxels[row + lx];
+                    if (model[id] !== 1) continue;
+                    const cb = id * 18 + 2 * 3;   // the top face's colour
+                    tables.layer = this._layerTop[id];
+                    tables.color[0] = this._colors[cb];
+                    tables.color[1] = this._colors[cb + 1];
+                    tables.color[2] = this._colors[cb + 2];
+                    tables.glow = this._glow[id];
+                    emitModel(sink, lx, ly, lz, this._modelDef[id], tables);
+                }
+            }
+        }
+    }
+
+    /**
+     * Smooth worlds: which neighbouring ground spreads over the top of the
+     * natural-ground voxel at (lx, ly, lz), and from which sides.
+     *
+     * Each kind of natural ground has a `blend` number (BlockRegistry). Where
+     * two kinds meet, the higher one creeps onto the lower one's edge: this
+     * looks at the surface voxel of each of the eight columns around — a step
+     * up, level, or a step down, since that is how the smooth surface runs
+     * on — and takes the highest-ranking ground above this voxel's own.
+     *
+     * @param {(x, y, z) => number} read  a voxel at chunk-local coordinates,
+     *        up to a block outside the chunk (the smooth mesher's)
+     * @returns {number} that ground's top texture layer × 256 + a bit for each
+     *        of the eight sides it lies on (BLEND_DX/DZ order), or 0 for none.
+     *        The chunk shader does the rest (blendGround in world.js).
+     */
+    blendCode(read, lx, ly, lz, id) {
+        const rank = this._blend, mine = rank[id], nb = this._nb, solid = this._solid;
+        let best = mine, bestId = 0;
+        for (let k = 0; k < 8; k++) {
+            const x = lx + BLEND_DX[k], z = lz + BLEND_DZ[k];
+            // The column's surface next to this voxel's top: the block a step
+            // up if it is open above, else the one level with us, else a step
+            // down. Water and leaves do not close a surface.
+            const up = read(x, ly + 1, z);
+            let s = 0;
+            if (rank[up] !== 0) {
+                if (solid[read(x, ly + 2, z)] !== 1) s = up;
+            } else if (solid[up] !== 1) {
+                const level = read(x, ly, z);
+                if (rank[level] !== 0) s = level;
+                else if (solid[level] !== 1) {
+                    const down = read(x, ly - 1, z);
+                    if (rank[down] !== 0) s = down;
+                }
+            }
+            nb[k] = s;
+            if (rank[s] > best) { best = rank[s]; bestId = s; }
+        }
+        if (bestId === 0) return 0;
+        const layer = this._layerTop[bestId];
+        if (layer < 0) return 0;
+        let sides = 0;
+        for (let k = 0; k < 8; k++) if (nb[k] === bestId) sides |= 1 << k;
+        return layer * 256 + sides;
+    }
+
+    /**
+     * Write the transparent mesh's indices, in an order that is back to front
+     * from any viewpoint.
+     *
+     * Every translucent quad is in the mesh twice, once facing each way, and
+     * the mesh is drawn with back faces culled. Among quads that face the same
+     * way, the camera can only see those it is in front of, so of two it can
+     * see, the one further along their normal is the nearer: drawing them by
+     * rising position (falling, for those that face −) is back to front
+     * wherever the camera is. A quad facing + and one facing − on the same
+     * axis are never both visible unless the camera is between them, and then
+     * no line of sight crosses both, so the two lists can simply follow each
+     * other. That is exact for everything on one axis — every water and ice
+     * surface, which is nearly all there is. The three axes are drawn in turn
+     * (horizontal faces first), which is only approximate between a surface
+     * and the side of something standing in it.
+     *
+     * Chunks are ordered among themselves by world.js (_cullChunks).
+     */
+    _orderTranslucent(sink) {
+        const tq = this._tq, n = (tq.n / 3) | 0;
+        if (n === 0) return;
+        const q = tq.a;
+        const order = new Array(n);
+        for (let i = 0; i < n; i++) order[i] = i;
+        order.sort((a, b) => (q[a * 3] - q[b * 3]) || (a - b));
+        const idx = sink.idx;
+        for (let i = 0; i < n; i++) {
+            const o = order[i] * 3, base = q[o + 1];
+            if (q[o + 2] === 1) idx.push6(base, base + 1, base + 2, base, base + 2, base + 3);
+            else                idx.push6(base, base + 2, base + 1, base, base + 3, base + 2);
+        }
     }
 
     // ── Internal helpers ────────────────────────────────────────────────────────
@@ -291,7 +516,10 @@ export class GreedyMesher {
      */
     _sweepFace(fd, voxels, nbr, opaque, transp, yMin, yMax, smooth) {
         const { faceAxis, uAxis, vAxis, positive, ni } = fd;
-        const solid = this._solid;
+        const solid = this._solid, glassy = this._glassy, cutout = this._cutout, airLike = this._airLike;
+        // Tops of natural ground blend with their neighbours (smooth worlds).
+        const blendRead = ni === 2 && this._anyBlend && smooth?.read ? smooth.read : null;
+        const blendT = this._blend;
         // Blocky worlds: the adjacent test uses the same table as the source test.
         const occ   = smooth ? smooth.occ     : solid;
         const skip  = smooth ? smooth.partial : null;
@@ -353,8 +581,15 @@ export class GreedyMesher {
                         const adjId = adj[src + shift];
                         if (solid[id] === 1) {
                             if (occ[adjId] !== 1) m = id;
-                        } else if (adjId === 0) {
-                            // Transparent (non-solid, non-air) against air.
+                        } else if (cutout[id] === 1) {
+                            // Leaves, glass: against anything that does not hide
+                            // them, but not against more of themselves.
+                            if (adjId !== id && occ[adjId] !== 1) m = id;
+                        } else if (glassy[id] === 1 && (airLike[adjId] === 1 || cutout[adjId] === 1)) {
+                            // Water, ice: against air (or a torch), and against
+                            // a cutout block, which shows what is behind it.
+                            // Model blocks are neither: they draw themselves
+                            // (_emitModels).
                             mt = id;
                         }
                     }
@@ -366,8 +601,21 @@ export class GreedyMesher {
             }
 
             // Most slices have no transparent faces at all, many no opaque ones.
-            if (anyO !== 0) this._greedyMerge(mask,  f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, opaque);
-            if (anyT !== 0) this._greedyMerge(maskT, f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, transp);
+            if (anyO !== 0) {
+                if (blendRead !== null) {
+                    // +Y: u is z and v is x. The code goes in the mask's high half.
+                    for (let u = uLo; u <= uHi; u++) {
+                        for (let v = vLo; v <= vHi; v++) {
+                            const cell = u * nV + v, id = mask[cell];
+                            if (id === 0 || blendT[id] === 0) continue;
+                            const code = this.blendCode(blendRead, v, f, u, id);
+                            if (code !== 0) mask[cell] = id + code * 65536;
+                        }
+                    }
+                }
+                this._greedyMerge(mask, f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, opaque, false);
+            }
+            if (anyT !== 0) this._greedyMerge(maskT, f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, transp, true);
         }
     }
 
@@ -376,34 +624,38 @@ export class GreedyMesher {
      * rectangle consumes are zeroed in the mask itself (it is rebuilt for the
      * next slice anyway), so no separate "done" table is needed.
      */
-    _greedyMerge(mask, depth, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, sink) {
-        const brightness = FACE_BRIGHTNESS[ni];
-        const colors = this._colors;
+    _greedyMerge(mask, depth, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, sink, translucent) {
+        const colors = this._colors, glowT = this._glow, natural = this._natural;
         const layerTable = ni === 2 ? this._layerTop : ni === 3 ? this._layerBottom : this._layerSide;
         const faceOffset = positive ? depth + 1 : depth;
+        const fn = FACE_NORMAL8[ni], nx = fn[0], ny = fn[1], nz = fn[2];
 
-        const posArr = sink.pos, colArr = sink.col, uvArr = sink.uv, layArr = sink.lay, idxArr = sink.idx;
+        const posArr = sink.pos, colArr = sink.col, uvArr = sink.uv, layArr = sink.lay, nrmArr = sink.nrm, idxArr = sink.idx;
 
         for (let u = uLo; u <= uHi; u++) {
             const rowBase = u * nV;
             for (let v = vLo; v <= vHi; v++) {
                 const cell = rowBase + v;
-                const startId = mask[cell];
-                if (startId === 0) continue;
+                const startV = mask[cell];
+                if (startV === 0) continue;
 
                 // Grow rectangle: expand v first, then u
                 let vW = 1;
-                while (v + vW <= vHi && mask[cell + vW] === startId) vW++;
+                while (v + vW <= vHi && mask[cell + vW] === startV) vW++;
 
                 let uW = 1;
                 expand_u:
                 while (u + uW <= uHi) {
                     const probe = (u + uW) * nV + v;
                     for (let k = 0; k < vW; k++) {
-                        if (mask[probe + k] !== startId) break expand_u;
+                        if (mask[probe + k] !== startV) break expand_u;
                     }
                     uW++;
                 }
+
+                // The block, and for a top face in a smooth world the ground
+                // that spreads onto it (blendCode), from the mask's high half.
+                const startId = startV & 0xFFFF, code = startV >>> 16;
 
                 // Mark cells consumed
                 for (let uu = 0; uu < uW; uu++) {
@@ -413,16 +665,18 @@ export class GreedyMesher {
 
                 const layer = layerTable[startId];
 
-                // Textured faces store brightness as uniform grey so the shader can
-                // tint the texture; untextured faces store the shaded block colour.
+                // A textured face's colour is its texture, so its three bytes
+                // say how it blends instead (MeshFormat.js); an untextured
+                // face carries the block's colour for this face. The shader
+                // does all the lighting, from the normal.
                 let r, g, b;
                 if (layer >= 0) {
-                    r = brightness; g = brightness; b = brightness;
+                    r = (code >>> 8) / 255; g = (code & 255) / 255; b = natural[startId];
                 } else {
                     const cbase = startId * 18 + ni * 3;
-                    r = colors[cbase]     * brightness;
-                    g = colors[cbase + 1] * brightness;
-                    b = colors[cbase + 2] * brightness;
+                    r = colors[cbase];
+                    g = colors[cbase + 1];
+                    b = colors[cbase + 2];
                 }
 
                 // The 4 quad corners, at (u, v) offsets (0,0) (uW,0) (uW,vW) (0,vW).
@@ -448,7 +702,13 @@ export class GreedyMesher {
                 la[n] = layer; la[n + 1] = layer; la[n + 2] = layer; la[n + 3] = layer;
                 layArr.n = n + 4;
 
-                // UV: tile once per block across both axes — shader uses fract() for repeating.
+                n = nrmArr.n;
+                const na = nrmArr.reserve(16);
+                const glow = glowT[startId];
+                for (let i = 0; i < 4; i++, n += 4) { na[n] = nx; na[n + 1] = ny; na[n + 2] = nz; na[n + 3] = glow; }
+                nrmArr.n = n;
+
+                // UV: tile once per block across both axes — the texture sampler repeats.
                 // For ±X faces (faceAxis=0): uAxis=Y (vertical), vAxis=Z (horizontal).
                 // Swap so UV.x maps to Z (horizontal on face) and UV.y maps to Y (vertical).
                 n = uvArr.n;
@@ -462,10 +722,27 @@ export class GreedyMesher {
                 }
                 uvArr.n = n + 8;
 
-                if (positive) {
-                    idxArr.push6(base, base + 1, base + 2, base, base + 2, base + 3);
+                if (!translucent) {
+                    if (positive) {
+                        idxArr.push6(base, base + 1, base + 2, base, base + 2, base + 3);
+                    } else {
+                        idxArr.push6(base, base + 2, base + 1, base, base + 3, base + 2);
+                    }
                 } else {
-                    idxArr.push6(base, base + 2, base + 1, base, base + 3, base + 2);
+                    // The same quad again, facing the other way (the far side
+                    // of a sheet of water, seen from under it), and both noted
+                    // for _orderTranslucent, which writes the indices.
+                    posArr.reserve(12).copyWithin(posArr.n, posArr.n - 12, posArr.n); posArr.n += 12;
+                    colArr.reserve(12).copyWithin(colArr.n, colArr.n - 12, colArr.n); colArr.n += 12;
+                    uvArr.reserve(8).copyWithin(uvArr.n, uvArr.n - 8, uvArr.n);       uvArr.n += 8;
+                    layArr.reserve(4).copyWithin(layArr.n, layArr.n - 4, layArr.n);   layArr.n += 4;
+                    n = nrmArr.n;
+                    const nb = nrmArr.reserve(16);
+                    for (let i = 0; i < 4; i++, n += 4) { nb[n] = -nx; nb[n + 1] = -ny; nb[n + 2] = -nz; nb[n + 3] = glow; }
+                    nrmArr.n = n;
+                    const tq = this._tq;
+                    tq.push3(_translucentKey(faceAxis, positive, faceOffset), base, positive ? 1 : 0);
+                    tq.push3(_translucentKey(faceAxis, !positive, faceOffset), base + 4, positive ? 0 : 1);
                 }
 
                 // Skip the cells this rectangle just consumed.

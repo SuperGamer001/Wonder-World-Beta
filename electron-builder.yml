@@ -26,6 +26,7 @@ files:
   - "!.github${/*}"
   - "!.claude${/*}"
   - "!test${/*}"                 # dev-only test harnesses
+  - "!tools${/*}"                # texture generators
   - "!**/*.py"
   - "!INSTRUCT.md"
   - "!CLAUDE.md"

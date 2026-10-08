@@ -1,0 +1,65 @@
+{
+  "name": "JUNGLE",
+  "category": "land",
+  "temperature": 0.88,
+  "humidity": 0.82,
+  "mapColor": "#537b09",
+  "select": {
+    "temperature": [
+      0.7,
+      1.2
+    ],
+    "humidity": [
+      0.62,
+      1.2
+    ],
+    "elevation": [
+      58,
+      138
+    ]
+  },
+  "surface": {
+    "top": "GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "underwater": {
+      "top": "MUD",
+      "layers": [
+        {
+          "block": "MUD",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 2
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "MOSS",
+        "scale": 12,
+        "threshold": 0.45
+      },
+      {
+        "block": "PODZOL",
+        "scale": 16,
+        "threshold": 0.6
+      }
+    ]
+  },
+  "structures": {
+    "jungle_tree": {
+      "frequency": 0.026
+    },
+    "oak_tree": {
+      "frequency": 0.006
+    }
+  }
+}

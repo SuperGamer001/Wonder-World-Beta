@@ -1,0 +1,45 @@
+{
+  "name": "SNOWY_BEACH",
+  "category": "beach",
+  "temperature": 0.05,
+  "humidity": 0.4,
+  "mapColor": "#faf0c0",
+  "select": {
+    "temperature": [
+      -1,
+      0.14
+    ],
+    "humidity": [
+      -0.2,
+      1.2
+    ],
+    "slope": [
+      0,
+      0.95
+    ]
+  },
+  "surface": {
+    "top": "SNOW",
+    "layers": [
+      {
+        "block": "SAND",
+        "depth": 3
+      },
+      {
+        "block": "SANDSTONE",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "SAND",
+          "depth": 2
+        }
+      ]
+    }
+  }
+}

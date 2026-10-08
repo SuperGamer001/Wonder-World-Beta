@@ -178,6 +178,70 @@ const badGot = await new Promise((res) => {
 });
 check('mismatched world-height chunk is refused', badGot === 0, `has=${badGot}`);
 
+// ── The game's own client: WorldClient + ChunkData against this server ───────
+// A chunk keeps only its filled rows in memory but is saved as the whole
+// column; this is the path a player's world takes out and back.
+{
+    const { WorldClient } = await import('../src/scripts/engine/WorldClient.js');
+    const { ChunkData, voxelIndex, CHUNK_SIZE, CHUNK_SIZE_Y } = await import('../src/scripts/engine/ChunkData.js');
+    const w = await (await fetch(`${base}/api/worlds`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Client', seed: 9 }),
+    })).json();
+
+    // Terrain-like columns (slot 0 is the floor block, not AIR), then edits
+    // above and below the rows the chunk was loaded with.
+    const made = new Map();
+    for (let cx = -1; cx <= 1; cx++) for (let cz = 0; cz <= 1; cz++) {
+        const ref = new Uint16Array(CHUNK_VOLUME);
+        for (let lz = 0; lz < CHUNK_SIZE; lz++) for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+            const h = 150 + ((lx * 3 + lz * 5 + cx * 7 + cz) % 9);
+            for (let ly = 40; ly <= h; ly++) ref[voxelIndex(lx, ly, lz)] = ly === 40 ? 19 : ly === h ? 1 : 3;
+        }
+        const c = new ChunkData(cx, cz);
+        c.loadVoxels(ref);
+        c.generated = true;
+        for (const [lx, ly, lz, id] of [[1, 300, 1, 6], [2, 5, 2, 44], [3, 100, 3, 0], [4, 447, 4, 7]]) {
+            ref[voxelIndex(lx, ly, lz)] = id;
+            c.setVoxel(lx, ly, lz, id);
+        }
+        made.set(`${cx},${cz}`, { c, ref });
+    }
+
+    const saver = new WorldClient(`ws://${host}:${port}`);
+    await saver.connect();
+    await saver.fetchManifest(w.id);
+    saver.saveChunks(w.id, { chunks: new Map([...made].map(([k, v]) => [k, v.c])) }, true);
+    // Saved once the server lists them.
+    let listed = 0;
+    for (let i = 0; i < 100 && listed < made.size; i++) {
+        await new Promise(r => setTimeout(r, 50));
+        const probe = new WorldClient(`ws://${host}:${port}`);
+        await probe.connect();
+        await probe.fetchManifest(w.id);
+        listed = probe.savedKeys?.size ?? 0;
+        probe.close();
+    }
+    saver.close();
+    check('WorldClient: every chunk it saved is listed', listed === made.size, `${listed}/${made.size}`);
+
+    const loader = new WorldClient(`ws://${host}:${port}`);
+    await loader.connect();
+    await loader.fetchManifest(w.id);
+    let bad = 0, compact = 0;
+    for (const [key, { ref }] of made) {
+        const [cx, cz] = key.split(',').map(Number);
+        const saved = await loader.loadChunk(w.id, cx, cz);
+        const back = saved && ChunkData.deserialize(cx, cz, saved);
+        const got = back?.toUint16Array();
+        if (!got || got.length !== ref.length || !got.every((x, i) => x === ref[i])) bad++;
+        if (back && back.byteLength < CHUNK_VOLUME && back.minFilledY === 5 && back.maxFilledY === 447) compact++;
+    }
+    loader.close();
+    check('WorldClient + ChunkData: chunks come back voxel for voxel', bad === 0, `${bad} differ`);
+    check('… with their filled band found again', compact === made.size, `${compact}/${made.size}`);
+}
+
 ws.close();
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 // Let in-flight zlib threadpool work settle before exiting; calling

@@ -27,13 +27,21 @@ const BLOCK_TYPES = {
     WOODEN_PLANKS: 25, STONE_BRICKS: 26, BRICKS: 27, GLASS: 28,
     GOLD_BLOCK: 29, IRON_BLOCK: 30, COAL_BLOCK: 31, WOOL_BLOCK: 32,
     POLISHED_GRANITE: 33, POLISHED_DIORITE: 34, MOSSY_STONE: 35,
+    TORCH: 36, WALL_TORCH_EAST: 37, WALL_TORCH_WEST: 38, WALL_TORCH_SOUTH: 39,
+    WALL_TORCH_NORTH: 40, LANTERN: 41, HANGING_LANTERN: 42, LAMP: 43,
+    ANDESITE: 44, SLATE: 45, LIMESTONE: 46, COARSE_DIRT: 47, PODZOL: 48, MUD: 49,
+    MOSS: 50, RED_SAND: 51, RED_SANDSTONE: 52, TERRACOTTA: 53, WHITE_TERRACOTTA: 54,
+    ORANGE_TERRACOTTA: 55, YELLOW_TERRACOTTA: 56, BROWN_TERRACOTTA: 57, RED_TERRACOTTA: 58,
+    PACKED_ICE: 59, DRY_GRASS: 60, MYCELIUM: 61, SPRUCE_LOG: 62, SPRUCE_LEAVES: 63,
+    BIRCH_LOG: 64, BIRCH_LEAVES: 65, JUNGLE_LEAVES: 66, ACACIA_LEAVES: 67, CACTUS: 68,
+    MUSHROOM_STEM: 69, RED_MUSHROOM_BLOCK: 70, BROWN_MUSHROOM_BLOCK: 71,
 };
 
 let titleBG = null;
 let packsLoaded = 0;
 let safeToClose = true;
 
-const mergedGamePackData = { blocks: [], biomes: [], items: [], entities: [], recipes: [] };
+const mergedGamePackData = { blocks: [], biomes: [], items: [], entities: [], recipes: [], terrain: [] };
 
 let paused = false;
 let _menuOpen = false;   // true while inventory / interactive panel is open
@@ -71,9 +79,10 @@ const DOM = {};
 
 document.addEventListener("DOMContentLoaded", async () => {
     cacheDOM();
+    buildSegments();
     bindEvents();
 
-    await loadAllGamePacks();
+    await Promise.all([loadAllGamePacks(), loadSettings()]);
     _buildBlockColorIcons();
     applyLoadedAssets();
     applyPlayerSettings(getSettings());   // apply accessibility/HUD prefs from the start
@@ -131,8 +140,7 @@ function cacheDOM() {
     DOM.worldDetailCloseBtn = document.querySelector("#worldDetailCloseBtn");
 
     DOM.worldSettingsGameMode  = document.querySelector("#worldSettingsGameMode");
-    DOM.worldSettingsSaveBtn   = document.querySelector("#worldSettingsSaveBtn");
-    DOM.worldSettingsCancelBtn = document.querySelector("#worldSettingsCancelBtn");
+    DOM.worldSettingsDoneBtn   = document.querySelector("#worldSettingsDoneBtn");
 
     DOM.createWorldConfirmBtn = document.querySelector("#createWorldConfirmBtn");
     DOM.createWorldCancelBtn  = document.querySelector("#createWorldCancelBtn");
@@ -144,7 +152,6 @@ function cacheDOM() {
     DOM.pauseSettingsBtn  = document.querySelector("#pauseSettingsBtn");
     DOM.settingsBackBtn   = document.querySelector("#settingsBackBtn");
     DOM.settingGameMode   = document.querySelector("#settingGameMode");
-    DOM.settingGameModeApply = document.querySelector("#settingGameModeApply");
 
     DOM.respawnBtn         = document.querySelector("#respawnBtn");
     DOM.interactivePanelTitle = document.querySelector("#interactivePanelTitle");
@@ -191,8 +198,7 @@ function bindEvents() {
         if (activeWorld) { DOM.worldDetailModal.classList.add("hidden"); startWorld(activeWorld); }
     });
     DOM.worldSettingsBtn.addEventListener("click", openWorldSettingsModal);
-    DOM.worldSettingsSaveBtn.addEventListener("click", saveWorldSettings);
-    DOM.worldSettingsCancelBtn.addEventListener("click", () => DOM.worldSettingsModal.classList.add("hidden"));
+    DOM.worldSettingsDoneBtn.addEventListener("click", closeWorldSettingsModal);
 
     DOM.worldDuplicateBtn.addEventListener("click", async () => {
         if (!activeWorld) return;
@@ -214,6 +220,15 @@ function bindEvents() {
     });
 
     DOM.createWorldConfirmBtn.addEventListener("click", createWorld);
+    document.getElementById('newWorldType')?.addEventListener('change', updateFlatForm);
+    document.getElementById('newFlatMode')?.addEventListener('change', updateFlatForm);
+    document.getElementById('newFlatPreset')?.addEventListener('change', (e) => _setFlatPreset(e.target.value));
+    document.getElementById('flatAddLayerBtn')?.addEventListener('click', () => {
+        if (_flatLayers.length >= FLAT_MAX_LAYERS) return;
+        // Above the last layer, which is usually the bedrock.
+        _flatLayers.splice(Math.max(0, _flatLayers.length - 1), 0, { block: 'STONE', depth: 4 });
+        _renderFlatLayers();
+    });
     DOM.createWorldCancelBtn.addEventListener("click", () => DOM.createWorldModal.classList.add("hidden"));
 
     DOM.titleSettingsBtn.addEventListener("click", () => openSettings('title'));
@@ -223,8 +238,6 @@ function bindEvents() {
     document.getElementById('titleHowToBtn')?.addEventListener('click', () => openHowToPlay('title'));
     document.getElementById('pauseHowToBtn')?.addEventListener('click', () => openHowToPlay('pause'));
     document.getElementById('howToBackBtn')?.addEventListener('click', closeHowToPlay);
-
-    DOM.settingGameModeApply?.addEventListener("click", applyInGameModeChange);
 
     DOM.respawnBtn?.addEventListener("click", () => {
         DOM.deathScreen.classList.add("hidden");
@@ -380,6 +393,10 @@ function lockPointer(el) {
 let _lockRetryTimer = null;
 function requestGameLock() {
     clearTimeout(_lockRetryTimer);
+    // With a controller in use the game plays without the lock (gamepad.js),
+    // and a page may not take the pointer on a controller button anyway: the
+    // mouse is taken hold of again when it is next clicked on the game.
+    if (window.__wwPad?.active) return;
     let attempts = 0;
     const tryLock = () => {
         if (!gameStarted || _menuOpen) return;                           // no longer wanted
@@ -408,6 +425,9 @@ window.addEventListener('keydown', (e) => {
     }
     if (_menuOpen)   { e.preventDefault(); closeAnyMenu(); return; }
     if (paused)      { resumeGame(); }
+    // Playing without the lock (with a controller, gamepad.js): the browser
+    // has no lock to take away, so the key has to pause by itself.
+    else if (document.pointerLockElement !== DOM.gameScreen) paused = true;
 });
 
 // ── "Saving World..." indicator ───────────────────────────────────────────────
@@ -498,7 +518,7 @@ function renderUpdateBanner() {
     el.appendChild(text);
 
     const btn = document.createElement('div');
-    btn.className = 'menuButton updateBannerBtn';
+    btn.className = 'menuButton small primary updateBannerBtn';
     btn.textContent = ready ? 'Restart & Install' : 'Download';
     btn.onclick = ready ? installUpdateNow : openUpdateDownload;
     el.appendChild(btn);
@@ -578,26 +598,30 @@ window.addEventListener("beforeunload", (event) => {
 //   clouds    - 'fast' | 'fancy'                                   (Clouds.js)
 //               No 'off': the weather decides how much cloud there is,
 //               and Fully Clear weather is the cloudless sky.
-//   sky       - 'simple' (flat colour, square sun and moon) | 'pretty' (Sky.js)
+//   sky       - 'simple' (flat colour, flat round sun and moon) | 'pretty' (Sky.js)
 //   particles - 'off' | 'low' | 'medium' | 'high'; also the density of rain,
 //               snow and other weather particles       (Particles.js, Precipitation.js)
+//   eyeAdaptation - 'off' | 'on': auto-exposure with a little bloom (PostFX.js)
 //   maxFps    - frame-rate cap; 0 = unlimited
+//   farTerrain - chunks of low-detail land beyond the render distance; 0 = off (FarTerrain.js)
 const GRAPHICS_PRESETS = {
-    simple:  { renderDistance: 5,  resolutionScale: 0.75, fogStart: 0.65, shadows: 'off',    clouds: 'fast',  sky: 'simple', particles: 'low',    maxFps: 60 },
-    classic: { renderDistance: 8,  resolutionScale: 1.0,  fogStart: 0.75, shadows: 'off',    clouds: 'fast',  sky: 'simple', particles: 'medium', maxFps: 0 },
-    normal:  { renderDistance: 10, resolutionScale: 1.0,  fogStart: 0.80, shadows: 'medium', clouds: 'fast',  sky: 'pretty', particles: 'medium', maxFps: 0 },
-    pro:     { renderDistance: 14, resolutionScale: 1.0,  fogStart: 0.88, shadows: 'high',   clouds: 'fancy', sky: 'pretty', particles: 'high',   maxFps: 0 },
+    simple:  { renderDistance: 5,  farTerrain: 0,  resolutionScale: 0.75, fogStart: 0.72, shadows: 'off',    clouds: 'fast',  sky: 'simple', particles: 'low',    eyeAdaptation: 'off', maxFps: 60 },
+    classic: { renderDistance: 8,  farTerrain: 0,  resolutionScale: 1.0,  fogStart: 0.82, shadows: 'off',    clouds: 'fast',  sky: 'simple', particles: 'medium', eyeAdaptation: 'off', maxFps: 0 },
+    normal:  { renderDistance: 10, farTerrain: 16, resolutionScale: 1.0,  fogStart: 0.86, shadows: 'medium', clouds: 'fast',  sky: 'pretty', particles: 'medium', eyeAdaptation: 'on',  maxFps: 0 },
+    pro:     { renderDistance: 14, farTerrain: 32, resolutionScale: 1.0,  fogStart: 0.90, shadows: 'high',   clouds: 'fancy', sky: 'pretty', particles: 'high',   eyeAdaptation: 'on',  maxFps: 0 },
 };
 // The form control for each graphics value, and how to read it. Touching any of
 // them selects Custom. Add a row here (plus its markup) to add an option.
 const GRAPHICS_CONTROLS = {
     renderDistance:  { id: 'settingRenderDist', type: 'int' },
+    farTerrain:      { id: 'settingFarTerrain', type: 'int' },
     resolutionScale: { id: 'settingResScale',   type: 'num' },
     fogStart:        { id: 'settingFogDist',    type: 'num' },
     shadows:         { id: 'settingShadows',    type: 'text' },
     clouds:          { id: 'settingClouds',     type: 'text' },
     sky:             { id: 'settingSky',        type: 'text' },
     particles:       { id: 'settingParticles',  type: 'text' },
+    eyeAdaptation:   { id: 'settingEyeAdapt',   type: 'text' },
     maxFps:          { id: 'settingMaxFps',     type: 'int' },
 };
 const GRAPHICS_IDS = Object.values(GRAPHICS_CONTROLS).map(c => c.id);
@@ -618,6 +642,7 @@ function resolveGraphics(s) {
         : { ...(GRAPHICS_PRESETS[s.graphics] ?? GRAPHICS_PRESETS.classic) };
     // Custom sets saved while clouds could be turned off.
     if (g.clouds !== 'fast' && g.clouds !== 'fancy') g.clouds = 'fast';
+    if (g.eyeAdaptation !== 'on') g.eyeAdaptation = 'off';
     return g;
 }
 
@@ -643,9 +668,51 @@ const DEFAULT_SETTINGS = {
     weatherVolume: 0.8,     // rain, wind and thunder (WeatherAudio.js)
 };
 
+// ── Where the settings are kept ──────────────────────────────────────────────
+// With the game server, in user/settings.json (GET / PUT /api/settings), which
+// is in the player's data folder. They used to live only in localStorage, and
+// that belongs to the page's origin: the desktop app serves the game from a
+// port the system picks afresh at every launch, so each launch was a new
+// origin with empty storage and every setting went back to its default.
+// localStorage is still written, as the fallback for a page with no server
+// behind it, and read once to carry over settings saved before this.
+let _settings = null;          // the saved settings, once loadSettings() has run
+let _settingsPushTimer = null;
+const SETTINGS_PUSH_MS = 250;  // a slider sends many changes; the server gets the last
+
+function _localSettings() {
+    try { return JSON.parse(localStorage.getItem('ww_settings') ?? 'null'); } catch { return null; }
+}
+
+/** Read the saved settings from the server. Call once, before anything applies them. */
+async function loadSettings() {
+    let saved = null;
+    try {
+        const res = await fetch(`${SERVER_URL}/api/settings`, { cache: 'no-store' });
+        if (res.ok) saved = await res.json();
+    } catch { /* no server: localStorage below */ }
+    if (saved && Object.keys(saved).length > 0) { _settings = saved; return; }
+    _settings = _localSettings() ?? {};
+    // Nothing on the server yet: hand it what this browser had.
+    if (saved && Object.keys(_settings).length > 0) _pushSettings();
+}
+
+function _pushSettings() {
+    clearTimeout(_settingsPushTimer);
+    _settingsPushTimer = null;
+    if (!_settings) return;
+    // keepalive: the request outlives the page, so a change made just before
+    // the window closes still arrives.
+    fetch(`${SERVER_URL}/api/settings`, {
+        method: 'PUT', keepalive: true,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(_settings),
+    }).catch(() => { /* offline: localStorage has it */ });
+}
+window.addEventListener('pagehide', () => { if (_settingsPushTimer) _pushSettings(); });
+
 function getSettings() {
-    let saved = {};
-    try { saved = JSON.parse(localStorage.getItem('ww_settings') ?? '{}'); } catch { /* corrupt */ }
+    const saved = { ...(_settings ?? _localSettings() ?? {}) };
     // Settings saved before the Graphics preset existed: anyone who had changed
     // render distance or resolution keeps those values, as Custom.
     if (saved.graphics == null && ((saved.renderDistance != null && saved.renderDistance !== 8) ||
@@ -658,7 +725,10 @@ function getSettings() {
 }
 
 function saveSettings(s) {
-    localStorage.setItem('ww_settings', JSON.stringify(s));
+    _settings = { ...s };
+    try { localStorage.setItem('ww_settings', JSON.stringify(_settings)); } catch { /* storage unavailable */ }
+    clearTimeout(_settingsPushTimer);
+    _settingsPushTimer = setTimeout(_pushSettings, SETTINGS_PUSH_MS);
 }
 
 // Frame-rate cap from the Graphics settings (0 = unlimited); read by gameLoop.
@@ -706,9 +776,10 @@ function openSettings(origin) {
     const tabWorld = document.getElementById('tabWorld');
     const inGame   = origin === 'pause';
 
-    // World tab only makes sense while in a game.
+    // "This World" only makes sense while in a game. Otherwise the screen
+    // opens on the section it was last left at.
     if (tabWorld) tabWorld.style.display = inGame ? '' : 'none';
-    switchSettingsTab('player');
+    switchSettingsTab(!inGame && _settingsSection === 'world' ? 'video' : _settingsSection);
     if (inGame && activeWorld) {
         if (DOM.settingGameMode)  DOM.settingGameMode.value  = activeWorld.gameMode  ?? 'SURVIVAL';
         const diffEl = document.getElementById('settingDifficulty');
@@ -725,8 +796,13 @@ function openSettings(origin) {
 
 function closeSettings() {
     DOM.settingsScreen.classList.add("hidden");
-    if (_settingsOrigin === 'pause') DOM.pauseScreen.classList.remove("hidden");
-    else                             DOM.titleScreen.classList.remove("hidden");
+    if (_settingsOrigin === 'pause') {
+        DOM.pauseScreen.classList.remove("hidden");
+        // The World tab has no Apply button: its settings take effect here.
+        applyWorldSettings();
+    } else {
+        DOM.titleScreen.classList.remove("hidden");
+    }
 }
 
 // ── How To Play ───────────────────────────────────────────────────────────────
@@ -762,6 +838,7 @@ function populateSettingsForm() {
     chk('settingReduceMotion', s.reduceMotion);
     chk('settingLargeText', s.largeText);
     _updateSettingLabels();
+    syncSegments();
 }
 
 function _updateSettingLabels() {
@@ -774,6 +851,11 @@ function _updateSettingLabels() {
     t('settingFogDistVal', `${Math.round(parseFloat(v('settingFogDist')) * 100)}%`);
     t('settingBrightnessVal', `${Math.round(parseFloat(v('settingBrightness')) * 100)}%`);
     t('settingWeatherVolumeVal', `${Math.round(parseFloat(v('settingWeatherVolume')) * 100)}%`);
+    // Each slider is filled up to its handle (--fill, game.css).
+    document.querySelectorAll('.settingsSlider').forEach(el => {
+        const lo = parseFloat(el.min), hi = parseFloat(el.max);
+        el.style.setProperty('--fill', `${((parseFloat(el.value) - lo) / (hi - lo)) * 100}%`);
+    });
 }
 
 // Read the form, persist, and apply live (called on every input change).
@@ -829,6 +911,7 @@ function _populateAtmosphereControls(prefix, world) {
     if (weather) weather.value = world.weather ?? 'dynamic';
     const time = document.getElementById(prefix + 'TimeOfDay');
     if (time) time.value = '';
+    syncSegments();
 }
 
 function _readAtmosphereControls(prefix) {
@@ -838,36 +921,104 @@ function _readAtmosphereControls(prefix) {
     };
 }
 
-async function applyInGameModeChange() {
-    if (!activeWorld) return;
-    const mode = DOM.settingGameMode?.value ?? 'SURVIVAL';
-    const difficulty = document.getElementById('settingDifficulty')?.value ?? 'NORMAL';
-    const atmos = _readAtmosphereControls('setting');
-    const timeRaw = document.getElementById('settingTimeOfDay')?.value ?? '';
-    activeWorld.gameMode   = mode;
-    activeWorld.difficulty = difficulty;
-    activeWorld.daylightCycle = atmos.daylightCycle;
-    activeWorld.weather       = atmos.weather;
+/**
+ * Save a world's settings (world.json on the server) and update our copy.
+ * `changes`: { gameMode, difficulty, daylightCycle, weather }. Returns the keys
+ * that actually changed, so nothing is sent or re-applied for an untouched form.
+ */
+async function saveWorldSettingsFor(world, changes) {
+    const changed = Object.keys(changes).filter(k => (world[k] ?? WORLD_SETTING_DEFAULTS[k]) !== changes[k]);
+    if (changed.length === 0) return changed;
+    Object.assign(world, changes);
     try {
-        await fetch(`${SERVER_URL}/api/worlds/${activeWorld.id}/settings`, {
+        await fetch(`${SERVER_URL}/api/worlds/${world.id}/settings`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameMode: mode, difficulty, ...atmos }),
+            body: JSON.stringify(changes),
         });
     } catch { /* offline */ }
-    callWorldJS("setGameMode", { gameMode: mode });
-    callWorldJS("setAtmosphere", { ...atmos, hours: timeRaw === '' ? null : parseFloat(timeRaw) });
+    return changed;
+}
+const WORLD_SETTING_DEFAULTS = { gameMode: 'SURVIVAL', difficulty: 'NORMAL', daylightCycle: true, weather: 'dynamic' };
+
+/**
+ * The World tab of the in-game settings, applied to the running world. There
+ * is no Apply button: this runs when the settings screen closes (closeSettings).
+ */
+async function applyWorldSettings() {
+    const world = activeWorld;
+    if (!world || !gameStarted) return;
+    const changes = {
+        gameMode:   DOM.settingGameMode?.value ?? 'SURVIVAL',
+        difficulty: document.getElementById('settingDifficulty')?.value ?? 'NORMAL',
+        ..._readAtmosphereControls('setting'),
+    };
     const time = document.getElementById('settingTimeOfDay');
-    if (time) time.value = '';
+    const timeRaw = time?.value ?? '';
+    if (time) time.value = '';   // a one-shot jump, not a setting
+    const changed = await saveWorldSettingsFor(world, changes);
+    if (changed.includes('gameMode')) callWorldJS("setGameMode", { gameMode: changes.gameMode });
+    if (timeRaw !== '' || changed.includes('daylightCycle') || changed.includes('weather')) {
+        callWorldJS("setAtmosphere", {
+            daylightCycle: changes.daylightCycle,
+            // Only a new choice starts a change of weather; re-sending the same
+            // one would restart it.
+            weather: changed.includes('weather') ? changes.weather : null,
+            hours: timeRaw === '' ? null : parseFloat(timeRaw),
+        });
+    }
 }
 
-// Global settings tab switch
-window.switchSettingsTab = function(tab) {
-    document.getElementById('settingsPanelPlayer')?.classList.toggle('hidden', tab !== 'player');
-    document.getElementById('settingsPanelWorld')?.classList.toggle('hidden', tab !== 'world');
-    document.getElementById('tabPlayer')?.classList.toggle('active', tab === 'player');
-    document.getElementById('tabWorld')?.classList.toggle('active', tab === 'world');
+// The settings screen shows one section at a time, picked from the list down
+// its left side: each .settingsPanel and its .settingsTab share a data-section.
+let _settingsSection = 'video';
+window.switchSettingsTab = function (section) {
+    _settingsSection = section;
+    document.querySelectorAll('.settingsPanel[data-section]').forEach(el =>
+        el.classList.toggle('hidden', el.dataset.section !== section));
+    document.querySelectorAll('.settingsTab[data-section]').forEach(el =>
+        el.classList.toggle('active', el.dataset.section === section));
+    const scroll = document.querySelector('.settingsScroll');
+    if (scroll) scroll.scrollTop = 0;
 };
+
+// ── Segmented choices ────────────────────────────────────────────────────────
+// A <select class="seg"> with a handful of options is shown as a row of
+// buttons, all of them in view and one click each, instead of a list to open.
+// The select stays in the page, hidden, and keeps the value: everything that
+// reads or sets it works as before. A click sets it and fires the events a
+// real choice would; after code sets a value, syncSegments() moves the
+// highlight to match.
+function buildSegments() {
+    document.querySelectorAll('select.seg').forEach(sel => {
+        const group = document.createElement('div');
+        group.className = 'segGroup';
+        for (const opt of sel.options) {
+            const b = document.createElement('div');
+            b.className = 'segBtn';
+            b.textContent = opt.textContent;
+            b.dataset.value = opt.value;
+            b.addEventListener('click', () => {
+                if (sel.value === opt.value) return;
+                sel.value = opt.value;
+                syncSegments(sel);
+                sel.dispatchEvent(new Event('input', { bubbles: true }));
+                sel.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+            group.appendChild(b);
+        }
+        sel.insertAdjacentElement('afterend', group);
+        sel._segGroup = group;
+    });
+    syncSegments();
+}
+
+/** Move each segmented control's highlight to its select's value (all of them, or one). */
+function syncSegments(only = null) {
+    for (const sel of only ? [only] : document.querySelectorAll('select.seg')) {
+        sel._segGroup?.querySelectorAll('.segBtn').forEach(b => b.classList.toggle('on', b.dataset.value === sel.value));
+    }
+}
 
 /* =========================================================
    WORLD SETTINGS MODAL
@@ -883,24 +1034,17 @@ function openWorldSettingsModal() {
     DOM.worldSettingsModal.classList.remove("hidden");
 }
 
-async function saveWorldSettings() {
-    if (!activeWorld) return;
-    const mode = DOM.worldSettingsGameMode.value;
-    const difficulty = document.getElementById('worldSettingsDifficulty')?.value ?? 'NORMAL';
-    const atmos = _readAtmosphereControls('worldSettings');
-    activeWorld.gameMode   = mode;
-    activeWorld.difficulty = difficulty;
-    activeWorld.daylightCycle = atmos.daylightCycle;
-    activeWorld.weather       = atmos.weather;
-    try {
-        await fetch(`${SERVER_URL}/api/worlds/${activeWorld.id}/settings`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gameMode: mode, difficulty, ...atmos }),
-        });
-    } catch { /* offline */ }
+/** Close the world settings window (from the world list); what it shows is saved as it closes. */
+async function closeWorldSettingsModal() {
     DOM.worldSettingsModal.classList.add("hidden");
-    DOM.worldDetailModal.classList.remove("hidden");
+    if (!activeWorld) return;
+    const world = activeWorld;
+    await saveWorldSettingsFor(world, {
+        gameMode:   DOM.worldSettingsGameMode.value,
+        difficulty: document.getElementById('worldSettingsDifficulty')?.value ?? 'NORMAL',
+        ..._readAtmosphereControls('worldSettings'),
+    });
+    if (activeWorld === world) showWorldDetail(world);
 }
 
 /* =========================================================
@@ -911,7 +1055,7 @@ async function showWorldList() {
     DOM.titleScreen.classList.add("hidden");
     DOM.titleLogo?.classList.add("hidden");   // hide the big logo behind the world list
     DOM.worldListScreen.classList.remove("hidden");
-    DOM.worldListContainer.innerHTML = '<div style="color:#aaa;font-size:1.2vw;text-align:center;padding:2vw;">Loading worlds...</div>';
+    DOM.worldListContainer.innerHTML = '<div class="listNote">Looking for your worlds…</div>';
 
     let worlds = [];
     try {
@@ -925,28 +1069,40 @@ async function showWorldList() {
 function renderWorldList(worlds) {
     if (worlds.length === 0) {
         DOM.worldListContainer.innerHTML =
-            '<div style="color:#aaa;font-size:1.2vw;text-align:center;padding:3vw;">No saved worlds. Click <strong>+ Create World</strong> to get started.</div>';
+            '<div class="listNote">No worlds yet.<br>Press <strong>+ New World</strong> to make your first.</div>';
         return;
     }
     DOM.worldListContainer.innerHTML = '';
     for (const world of worlds) {
         const card = document.createElement('div');
         card.className = 'worldCard';
-        const lastPlayed = world.lastPlayed ? new Date(world.lastPlayed).toLocaleDateString() : 'Never';
-        const mode = world.gameMode ? ` &nbsp;|&nbsp; ${world.gameMode.charAt(0) + world.gameMode.slice(1).toLowerCase()}` : '';
-        // Cache-busted thumbnail; hidden if the world has no screenshot yet.
+        const lastPlayed = world.lastPlayed ? new Date(world.lastPlayed).toLocaleDateString() : 'never';
+        // Cache-busted thumbnail; a patch of sky and grass if the world has no screenshot yet.
         const thumb = `${SERVER_URL}/user/worlds/${world.id}/screenshot.jpg?t=${world.lastPlayed ?? 0}`;
         card.innerHTML = `
             <div class="worldCardLeft">
-                <img class="worldCardThumb" src="${thumb}" alt="" onerror="this.classList.add('noThumb')">
+                <img class="worldCardThumb" src="${thumb}" alt=""
+                     onerror="this.onerror=null; this.src='data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=='; this.classList.add('noThumb')">
                 <div class="worldCardInfo">
                     <div class="worldCardName">${escapeHtml(world.name)}</div>
-                    <div class="worldCardMeta">Seed: ${world.seed}${mode} &nbsp;|&nbsp; Last played: ${lastPlayed}</div>
+                    <div class="worldCardMeta">
+                        <span class="tag mode">${_titleCaseName(world.gameMode ?? 'SURVIVAL')}</span>
+                        ${world.worldType === 'flat' ? '<span class="tag">Flat</span>' : ''}
+                        <span class="tag">Played ${lastPlayed}</span>
+                        <span class="tag">Seed ${world.seed}</span>
+                    </div>
                 </div>
             </div>
-            <div class="worldCardPlay">▶ Play</div>
+            <div class="worldCardBtns">
+                <div class="menuButton small" data-act="more">Options</div>
+                <div class="menuButton small primary" data-act="play">Play</div>
+            </div>
         `;
-        card.addEventListener('click', () => showWorldDetail(world));
+        // Straight in with Play; anywhere else on the card opens its options.
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('[data-act="play"]')) startWorld(world);
+            else showWorldDetail(world);
+        });
         DOM.worldListContainer.appendChild(card);
     }
 }
@@ -954,7 +1110,8 @@ function renderWorldList(worlds) {
 function showWorldDetail(world) {
     activeWorld = world;
     DOM.worldDetailName.textContent = world.name;
-    DOM.worldDetailInfo.textContent = `Seed: ${world.seed}  |  Mode: ${world.gameMode ?? 'SURVIVAL'}`;
+    DOM.worldDetailInfo.textContent =
+        `${_titleCaseName(world.gameMode ?? 'SURVIVAL')}  ·  ${_titleCaseName(world.difficulty ?? 'NORMAL')}\nSeed ${world.seed}`;
     DOM.worldDetailModal.classList.remove("hidden");
 }
 
@@ -962,11 +1119,125 @@ function showWorldDetail(world) {
    CREATE WORLD
 ========================================================= */
 
+// ── Flat worlds (New World → World Type) ─────────────────────────────────────
+// Level ground with no terrain generated: either the player's own stack of
+// layers with one biome, or biomes by climate, each with its own ground
+// (src/scripts/engine/FlatWorld.js). The stacks a player can start from:
+const FLAT_PRESETS = {
+    classic:  { label: 'Classic',       biome: 'PLAINS', layers: [['GRASS', 1], ['DIRT', 3], ['BEDROCK', 1]] },
+    deep:     { label: 'Deep ground',   biome: 'PLAINS', layers: [['GRASS', 1], ['DIRT', 3], ['STONE', 56], ['BEDROCK', 1]] },
+    desert:   { label: 'Desert',        biome: 'DESERT', layers: [['SAND', 4], ['SANDSTONE', 8], ['STONE', 16], ['BEDROCK', 1]] },
+    snow:     { label: 'Snowfield',     biome: 'SNOWY_PLAINS', layers: [['SNOW', 2], ['SNOW_DIRT', 1], ['DIRT', 3], ['STONE', 16], ['BEDROCK', 1]] },
+    quarry:   { label: 'Stone floor',   biome: 'PLAINS', layers: [['STONE', 8], ['BEDROCK', 1]] },
+    planks:   { label: "Builder's floor", biome: 'PLAINS', layers: [['WOODEN_PLANKS', 1], ['STONE', 4], ['BEDROCK', 1]] },
+};
+const FLAT_DEPTHS = [1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 24, 32, 48, 64];
+const FLAT_MAX_LAYERS = 16;
+let _flatLayers = [];      // [{ block, depth }], top first
+
+/** The blocks a layer can be: every whole block of the loaded packs. */
+function _flatBlockChoices() {
+    return (mergedGamePackData.blocks ?? [])
+        .filter(b => b.id !== 0 && b.name && !b.model)
+        .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function _setFlatPreset(key) {
+    const p = FLAT_PRESETS[key] ?? FLAT_PRESETS.classic;
+    const have = new Set(_flatBlockChoices().map(b => b.name));
+    _flatLayers = p.layers.filter(([b]) => have.has(b)).map(([block, depth]) => ({ block, depth }));
+    const biome = document.getElementById('newFlatBiome');
+    if (biome && [...biome.options].some(o => o.value === p.biome)) biome.value = p.biome;
+    _renderFlatLayers();
+}
+
+function _renderFlatLayers() {
+    const list = document.getElementById('flatLayerList');
+    if (!list) return;
+    const blocks = _flatBlockChoices();
+    list.innerHTML = '';
+    _flatLayers.forEach((layer, i) => {
+        const row = document.createElement('div');
+        row.className = 'layerRow';
+        const def = blocks.find(b => b.name === layer.block);
+        // Its picture: the block's own texture, or failing that its colour.
+        const file = def?.textures?.top ?? def?.texture;
+        const tex = file ? `data/textures/blocks/${file}` : (ITEM_TEXTURES[layer.block.toLowerCase()] ?? '');
+        const rgb = (def?.topColor ?? def?.color ?? [0.4, 0.4, 0.4]).map(v => Math.round(v * 255)).join(',');
+        const depths = FLAT_DEPTHS.includes(layer.depth) ? FLAT_DEPTHS : [...FLAT_DEPTHS, layer.depth].sort((a, b) => a - b);
+        row.innerHTML = `
+            <span class="layerSwatch" style="background-color:rgb(${rgb});${tex ? `background-image:url('${tex}')` : ''}"></span>
+            <select class="settingsSelect layerBlock">${blocks.map(b =>
+                `<option value="${b.name}"${b.name === layer.block ? ' selected' : ''}>${_titleCaseName(b.name)}</option>`).join('')}</select>
+            <select class="settingsSelect layerDepth">${depths.map(d =>
+                `<option value="${d}"${d === layer.depth ? ' selected' : ''}>${d} ${d === 1 ? 'block' : 'blocks'}</option>`).join('')}</select>
+            <div class="menuButton small${i === 0 ? ' off' : ''}" data-act="up" title="Move up">&#9650;</div>
+            <div class="menuButton small${i === _flatLayers.length - 1 ? ' off' : ''}" data-act="down" title="Move down">&#9660;</div>
+            <div class="menuButton small danger${_flatLayers.length === 1 ? ' off' : ''}" data-act="remove" title="Remove">&#10005;</div>`;
+        row.querySelector('.layerBlock').addEventListener('change', (e) => { layer.block = e.target.value; _renderFlatLayers(); });
+        row.querySelector('.layerDepth').addEventListener('change', (e) => { layer.depth = Number(e.target.value); _renderFlatLayers(); });
+        row.addEventListener('click', (e) => {
+            const act = e.target.closest('[data-act]')?.dataset.act;
+            if (act === 'up' && i > 0) [_flatLayers[i - 1], _flatLayers[i]] = [_flatLayers[i], _flatLayers[i - 1]];
+            else if (act === 'down' && i < _flatLayers.length - 1) [_flatLayers[i + 1], _flatLayers[i]] = [_flatLayers[i], _flatLayers[i + 1]];
+            else if (act === 'remove' && _flatLayers.length > 1) _flatLayers.splice(i, 1);
+            else return;
+            _renderFlatLayers();
+        });
+        list.appendChild(row);
+    });
+    const total = _flatLayers.reduce((n, l) => n + l.depth, 0);
+    const note = document.getElementById('flatLayerNote');
+    if (note) note.textContent = `${total} ${total === 1 ? 'block' : 'blocks'} deep, with nothing underneath`;
+    document.getElementById('flatAddLayerBtn')?.classList.toggle('cannot', _flatLayers.length >= FLAT_MAX_LAYERS);
+}
+
+/** Show the rows that go with the chosen world type and kind of ground. */
+function updateFlatForm() {
+    const flat = document.getElementById('newWorldType')?.value === 'flat';
+    const layers = document.getElementById('newFlatMode')?.value !== 'biomes';
+    document.querySelectorAll('#CreateWorldModal .flatRow').forEach(el => {
+        el.classList.toggle('hidden', !flat || (el.classList.contains('layersRow') && !layers));
+    });
+}
+
+/** Fill the form's lists (once the packs are loaded) and put it back to a normal world. */
+function resetFlatForm() {
+    const preset = document.getElementById('newFlatPreset');
+    const biome  = document.getElementById('newFlatBiome');
+    if (!preset || !biome) return;
+    preset.innerHTML = Object.entries(FLAT_PRESETS).map(([k, p]) => `<option value="${k}">${p.label}</option>`).join('');
+    const land = (mergedGamePackData.biomes ?? []).filter(b => b.name && (b.category ?? 'land') === 'land');
+    biome.innerHTML = land.sort((a, b) => a.name.localeCompare(b.name))
+        .map(b => `<option value="${b.name}">${_titleCaseName(b.name)}</option>`).join('');
+    document.getElementById('newWorldType').value = 'normal';
+    document.getElementById('newFlatMode').value = 'layers';
+    document.getElementById('newFlatDecor').checked = true;
+    document.getElementById('newFlatStruct').checked = false;
+    _setFlatPreset('classic');
+    updateFlatForm();
+}
+
+/** What the form says a new Flat world is made of (the server checks it again). */
+function readFlatForm() {
+    const mode = document.getElementById('newFlatMode').value === 'biomes' ? 'biomes' : 'layers';
+    return {
+        mode,
+        layers: mode === 'layers' ? _flatLayers.map(l => ({ block: l.block, depth: l.depth })) : [],
+        biome: mode === 'layers' ? document.getElementById('newFlatBiome').value : null,
+        decorations: document.getElementById('newFlatDecor').checked,
+        structures: document.getElementById('newFlatStruct').checked,
+    };
+}
+
 function showCreateWorldModal() {
     DOM.newWorldName.value = '';
     DOM.newWorldSeed.value = '';
     DOM.newWorldGameMode.value = 'SURVIVAL';
+    resetFlatForm();
+    syncSegments();
     DOM.createWorldModal.classList.remove("hidden");
+    DOM.newWorldName.focus();
 }
 
 async function createWorld() {
@@ -975,12 +1246,14 @@ async function createWorld() {
     const seed       = seedRaw !== '' ? (parseInt(seedRaw, 10) || hashString(seedRaw)) : undefined;
     const gameMode   = DOM.newWorldGameMode.value || 'SURVIVAL';
     const difficulty = document.getElementById('newWorldDifficulty')?.value || 'NORMAL';
+    const flat       = document.getElementById('newWorldType')?.value === 'flat';
 
     try {
         const res = await fetch(`${SERVER_URL}/api/worlds`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, seed, gameMode, difficulty }),
+            body: JSON.stringify({ name, seed, gameMode, difficulty,
+                                   ...(flat ? { worldType: 'flat', flat: readFlatForm() } : {}) }),
         });
         if (!res.ok) throw new Error('Server error');
         const newWorld = await res.json();
@@ -1006,6 +1279,7 @@ function startWorld(world) {
     // compute as NaN (undefined - oldTimestamp), which corrupts player physics
     // into NaN positions and stalls chunk generation until a page refresh.
     _lastFrameTime = 0;
+    _nextFrameAt = 0;
 
     DOM.worldListScreen.classList.add("hidden");
     DOM.titleScreen.classList.add("hidden");
@@ -1014,6 +1288,8 @@ function startWorld(world) {
     DOM.loadingBar.style.width = "0%";
     DOM.loadingText.textContent = "Loading World...";
     DOM.packName.textContent = `${packsLoaded} Gamepacks Successfully Loaded`;
+    // The logo waits with the loading card (the world list had put it away).
+    DOM.titleLogo.classList.remove("hidden");
     DOM.logo.classList.add("Loading");
     DOM.loadingContainer.classList.remove("hidden");
 
@@ -1027,6 +1303,11 @@ function startWorld(world) {
         // world's world.json; new worlds get TERRAIN_STYLE from server/server.js.
         // A world with no value predates the setting and was built blocky.
         terrainStyle: world.terrainStyle ?? 'blocky',
+        // The generator the world was made with (server.js WORLD_GEN); worlds
+        // from before the field keep the old one (workers/legacy/).
+        worldGen: world.worldGen ?? 1,
+        // A Flat world's settings (what it is made of), or null for a normal one.
+        flat: world.worldType === 'flat' ? (world.flat ?? {}) : null,
         // World Settings → Daylight Cycle and Weather ('dynamic' or a held type).
         daylightCycle: world.daylightCycle !== false,
         weather: world.weather ?? 'dynamic',
@@ -1075,7 +1356,6 @@ function applyLoadedAssets() {
         DOM.logo.src = textures.logo;
         DOM.pauseLogo.src = textures.logo;
     }
-    DOM.logo.style.width = "40%";
 }
 
 /* =========================================================
@@ -1119,16 +1399,23 @@ const ITEM_TEXTURES = {
 
 function itemTextureSrc(itemId) {
     if (!itemId) return '';
+    if (_itemIcons[itemId]) return _itemIcons[itemId];
     if (_blockColorIcons[itemId]) return _blockColorIcons[itemId];
     return ITEM_TEXTURES[itemId] ?? `data/textures/items/${itemId}.png`;
 }
 window._itemTextureSrc = itemTextureSrc;
 
-// Colored blocks (ids ≥ 25) have no PNG — generate a swatch icon from their colour
-// so they show up in the hotbar / inventory / creative grid.
+// Items can name their own icon ("icon" in the item JSON): it wins over
+// everything below. A block that names its texture ("texture" / "textures")
+// shows that; other coloured blocks (ids ≥ 25) have no PNG, so get a swatch
+// icon from their colour to show up in the hotbar / inventory / creative grid.
+const _itemIcons = {};
 const _blockColorIcons = {};
 function _buildBlockColorIcons() {
+    for (const it of (mergedGamePackData.items ?? [])) if (it.icon) _itemIcons[it.id] = it.icon;
     for (const def of (mergedGamePackData.blocks ?? [])) {
+        const tex = def.texture ?? def.textures?.side ?? def.textures?.top;
+        if (tex) { _blockColorIcons[def.name.toLowerCase()] = `data/textures/blocks/${tex}`; continue; }
         if ((def.id ?? 0) < 25 || !def.color) continue;
         _blockColorIcons[def.name.toLowerCase()] = _makeColorSwatch(def.color);
     }
@@ -1257,9 +1544,7 @@ function _updateInvCraftBtn() {
         return;
     }
     DOM.invCraftBtn.style.display = '';
-    const isCreative = mode === 'CREATIVE';
-    DOM.invCraftBtn.textContent = isCreative ? 'Creative Inventory' : 'Open Craft';
-    DOM.invCraftBtn.style.width = isCreative ? '14vw' : '11vw';
+    DOM.invCraftBtn.textContent = mode === 'CREATIVE' ? 'Creative Inventory' : 'Crafting';
 }
 
 // ── Hand crafting (Survival) ─────────────────────────────────────────────────
@@ -1302,8 +1587,15 @@ function _creativeEntries() {
         if (blk) covered.add(blk.id);
     }
 
+    // A block another one places for a particular face (a wall torch, a hanging
+    // lantern) comes from that block's item; it is not an entry of its own.
+    const variants = new Set();
+    for (const b of blocks) {
+        for (const name of Object.values(b.placement ?? {})) if (name && name !== b.name) variants.add(name);
+    }
+
     const blockEntries = blocks
-        .filter(b => b.id !== 0 && !covered.has(b.id))
+        .filter(b => b.id !== 0 && !covered.has(b.id) && !variants.has(b.name))
         .map(b => ({ id: b.name.toLowerCase(), name: _titleCaseName(b.name) }));
 
     return [...items, ...blockEntries];
@@ -1334,9 +1626,8 @@ function _populateCreativeGrid(filter) {
         el.appendChild(img);
 
         const lbl = document.createElement('span');
-        lbl.className = 'invGridKeybind';
-        lbl.textContent = (itemDef.name ?? itemDef.id).replace(/_/g, ' ').slice(0, 8);
-        lbl.style.cssText = 'font-size:0.55vw;bottom:0;top:auto;left:0;right:0;text-align:center;overflow:hidden;white-space:nowrap;';
+        lbl.className = 'invGridKeybind name';
+        lbl.textContent = (itemDef.name ?? itemDef.id).replace(/_/g, ' ').slice(0, 9);
         el.appendChild(lbl);
 
         el.addEventListener('click', () => {
@@ -1387,28 +1678,24 @@ function _renderInventory() {
         DOM.invHotbarRow.innerHTML = '';
         const label = document.createElement('div');
         label.className = 'invSectionTitle';
-        label.style.cssText = 'margin-bottom:0.3vw;';
         label.textContent = 'Hotbar';
         DOM.invHotbarRow.appendChild(label);
 
+        // The ten hotbar slots, then the off hand, set a little apart.
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;gap:0.3vw;flex-wrap:wrap;';
+        row.className = 'invRow';
         for (let i = 0; i < 10; i++) {
             const slot = inv.hotbar?.[i] ?? null;
             const el   = _makeSlotEl({ type: 'hotbar', index: i }, slot, `${i === 9 ? 0 : i + 1}`);
             row.appendChild(el);
         }
-        DOM.invHotbarRow.appendChild(row);
-
-        // Offhand slot
-        const offRow = document.createElement('div');
-        offRow.style.cssText = 'display:flex;align-items:center;gap:0.4vw;margin-top:0.3vw;';
         const offLabel = document.createElement('span');
-        offLabel.style.cssText = 'color:#888;font-size:0.85vw;';
-        offLabel.textContent = 'Offhand:';
-        offRow.appendChild(offLabel);
-        offRow.appendChild(_makeSlotEl({ type: 'offhand', index: 0 }, inv.offhand ?? null, ''));
-        DOM.invHotbarRow.appendChild(offRow);
+        offLabel.className = 'invRowLabel';
+        offLabel.style.marginLeft = '1.2vw';
+        offLabel.textContent = 'Off hand';
+        row.appendChild(offLabel);
+        row.appendChild(_makeSlotEl({ type: 'offhand', index: 0 }, inv.offhand ?? null, ''));
+        DOM.invHotbarRow.appendChild(row);
     }
 
     // General inventory grid
@@ -1665,7 +1952,7 @@ function _showCursorItem() {
         document.addEventListener('mousemove', _moveCursor);
     }
     if (_invCursor) {
-        _cursorEl.innerHTML = `<img src="${itemTextureSrc(_invCursor.itemId)}" alt="" style="width:2.5vw;height:2.5vw;image-rendering:pixelated;"><span style="font-size:0.8vw;color:#fff;position:absolute;bottom:0;right:0;">${_invCursor.count > 1 ? _invCursor.count : ''}</span>`;
+        _cursorEl.innerHTML = `<img src="${itemTextureSrc(_invCursor.itemId)}" alt=""><span>${_invCursor.count > 1 ? _invCursor.count : ''}</span>`;
         _cursorEl.style.display = 'flex';
     }
 }
@@ -1699,7 +1986,7 @@ function populateRecipeList(rawStation) {
     DOM.recipeList.innerHTML = '';
     DOM.recipeDetailName.textContent = '';
     DOM.recipeDetail.innerHTML = '';
-    DOM.craftBtn.style.opacity = '0.4';
+    DOM.craftBtn.classList.add('cannot');
     DOM.craftBtn.onclick = null;
 
     // A block's interactType ("crafting") doesn't always equal the recipe station
@@ -1713,7 +2000,6 @@ function populateRecipeList(rawStation) {
 
         const icon = document.createElement('img');
         icon.src = itemTextureSrc(recipe.result.itemId);
-        icon.style.cssText = 'width:1.6vw;height:1.6vw;image-rendering:pixelated;vertical-align:middle;margin-right:0.4vw;';
         itemEl.appendChild(icon);
 
         const lbl = document.createElement('span');
@@ -1735,22 +2021,22 @@ function selectRecipe(recipe, canCraft) {
     // Result header with icon
     const resultName = recipe.result.itemId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
     DOM.recipeDetailName.innerHTML =
-        `<img src="${itemTextureSrc(recipe.result.itemId)}" style="width:2vw;height:2vw;image-rendering:pixelated;vertical-align:middle;margin-right:0.4vw;">${resultName}` +
-        (recipe.result.count > 1 ? ` <span style="color:#aaa;font-size:1.1vw;">×${recipe.result.count}</span>` : '');
+        `<img src="${itemTextureSrc(recipe.result.itemId)}" alt="">${resultName}` +
+        (recipe.result.count > 1 ? ` <span class="count">×${recipe.result.count}</span>` : '');
 
     // Ingredient list with icons
     const inv = window.me.inventory;
     DOM.recipeDetail.innerHTML = recipe.ingredients.map(i => {
         const have = inv ? (inv.countItem?.(i.itemId) ?? 0) : 0;
         const ok   = have >= i.count;
-        const col  = ok ? '#88cc88' : '#cc6666';
-        return `<div style="display:flex;align-items:center;gap:0.4vw;margin-bottom:0.25vw;">` +
-               `<img src="${itemTextureSrc(i.itemId)}" style="width:1.6vw;height:1.6vw;image-rendering:pixelated;">` +
-               `<span style="color:${col};">${i.count}× ${i.itemId.replace(/_/g, ' ')} <span style="color:#777;font-size:0.85vw;">(${have})</span></span>` +
+        // Green for what you have enough of, red for what you are short of.
+        return `<div class="ingredient ${ok ? 'have' : 'need'}">` +
+               `<img src="${itemTextureSrc(i.itemId)}" alt="">` +
+               `<span>${i.count}× ${i.itemId.replace(/_/g, ' ')} <span class="owned">you have ${have}</span></span>` +
                `</div>`;
     }).join('');
 
-    DOM.craftBtn.style.opacity = canCraft ? '1' : '0.4';
+    DOM.craftBtn.classList.toggle('cannot', !canCraft);
     DOM.craftBtn.onclick = canCraft ? () => executeCraft(recipe) : null;
 }
 
@@ -1822,7 +2108,7 @@ async function loadAllGamePacks() {
 }
 
 async function loadFromManifest(manifest) {
-    const categories = ['blocks', 'items', 'biomes', 'entities', 'recipes'];
+    const categories = ['blocks', 'items', 'biomes', 'entities', 'recipes', 'terrain'];
     const total = categories.reduce((s, c) => s + (manifest[c]?.length ?? 0), 0) || 1;
     let loaded = 0;
 
@@ -1864,6 +2150,9 @@ function _mergeDefinition(category, def) {
         if (!mergedGamePackData.entities.find(e => e.id === def.id)) mergedGamePackData.entities.push(def);
     } else if (category === 'recipes') {
         if (!mergedGamePackData.recipes.find(r => r.id === def.id)) mergedGamePackData.recipes.push(def);
+    } else if (category === 'terrain') {
+        // World-generation settings (TerrainGenerator); the first of a name wins.
+        if (!mergedGamePackData.terrain.find(t => t.name === def.name)) mergedGamePackData.terrain.push(def);
     }
 }
 
@@ -1921,6 +2210,9 @@ function resumeGame() {
     // actually re-acquired. requestGameLock retries through the post-Esc cooldown,
     // and the pause screen stays up until the lock truly sticks (no limbo state).
     requestGameLock();
+    // With a controller there is no lock to wait for (a page can only take
+    // the pointer in answer to a click or a key), and play does not need one.
+    if (window.__wwPad?.active) paused = false;
 }
 
 async function leaveWorld() {
@@ -1951,11 +2243,33 @@ async function leaveWorld() {
 ========================================================= */
 
 let _lastFrameTime = 0;
+let _nextFrameAt = 0;      // when the next frame is due under a frame-rate cap (0 = now)
 let _fpsEnabled = false;
 let _fpsAccum = 0, _fpsFrames = 0, _fpsTimer = 0;
 let _loadingActive = false;
 let _loadFallbackTimer = null;
 let _loopActive = false;   // prevents two animation loops running after a world switch
+
+// Frame-rate limits while nobody is playing. The world behind the pause
+// screen, a menu or the death screen is dimmed and nearly still, and a window
+// in the background is not being looked at — but without these the GPU draws
+// it as often, and runs as hot, as in play. Never while the loading screen is
+// up: new terrain is installed a frame at a time.
+const MENU_FPS       = 30;   // pause screen (and settings from it), inventory, crafting, death
+const BACKGROUND_FPS = 15;   // the game window does not have focus, or is hidden
+let _appFocused = document.hasFocus();
+window.addEventListener('focus', () => { _appFocused = true; });
+window.addEventListener('blur',  () => { _appFocused = false; });
+
+/** The frame-rate cap right now (0 = none): the player's, or lower while idle. */
+function frameCap() {
+    // __wwNoIdleCap: the render benchmark measures play, where headless has no
+    // pointer lock and so sits on the pause screen.
+    if (_loadingActive || window.__wwNoIdleCap) return _maxFps;
+    const idle = (document.hidden || !_appFocused) ? BACKGROUND_FPS
+               : (paused || _menuOpen) ? MENU_FPS : 0;
+    return idle && (_maxFps === 0 || idle < _maxFps) ? idle : _maxFps;
+}
 
 function startLoop() {
     if (_loopActive) return;
@@ -1965,13 +2279,25 @@ function startLoop() {
 
 function gameLoop(timestamp) {
     if (!gameStarted) { _loopActive = false; return; }
-    // Frame-rate cap: skip this display refresh if the last frame was too
-    // recent. dt below is measured from the last frame actually run. The small
-    // tolerance stops a 60 cap on a 60 Hz display from dropping every other frame.
-    if (_maxFps > 0 && _lastFrameTime && timestamp &&
-        timestamp - _lastFrameTime < 1000 / _maxFps - 2) {
+    // Frame-rate cap: skip display refreshes until the next frame is due. Each
+    // frame is due one interval after the last one was due, not after it ran,
+    // so a cap that does not divide the display's refresh rate (60 on 144 Hz)
+    // still averages out to the cap rather than to the next lower divisor (48).
+    // The 2 ms of slack stops a 60 cap on a 60 Hz display from dropping every
+    // other frame. dt below is measured from the last frame actually run.
+    const cap = frameCap();
+    if (cap > 0 && _nextFrameAt && timestamp && timestamp < _nextFrameAt - 2) {
         requestAnimationFrame(gameLoop);
         return;
+    }
+    if (cap > 0 && timestamp) {
+        const interval = 1000 / cap;
+        // Behind by a whole frame (a stall, or the cap just changed): restart
+        // the schedule from now instead of rushing frames to catch up.
+        _nextFrameAt = _nextFrameAt && timestamp - _nextFrameAt < interval
+            ? _nextFrameAt + interval : timestamp + interval;
+    } else {
+        _nextFrameAt = 0;
     }
     // `timestamp` is undefined on the first (manual) call and when _lastFrameTime
     // was reset; in both cases fall back to a nominal frame so dt is never NaN.

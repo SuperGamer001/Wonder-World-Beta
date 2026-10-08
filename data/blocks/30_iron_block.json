@@ -14,5 +14,6 @@
       "itemId": "iron_block",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Iron_Block.png"
 }

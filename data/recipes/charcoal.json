@@ -1,0 +1,14 @@
+{
+  "id": "charcoal",
+  "station": "oven",
+  "result": {
+    "itemId": "charcoal",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 2
+    }
+  ]
+}

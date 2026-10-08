@@ -13,5 +13,6 @@
       "itemId": "wool_block",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Wool_Block.png"
 }

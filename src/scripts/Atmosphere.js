@@ -30,7 +30,7 @@ import {
 import { Climate, newClimate } from './engine/Climate.js';
 import { CloudField } from './engine/CloudField.js';
 import { CHUNK_SHIFT, CHUNK_MASK, WORLD_MIN_Y } from './engine/ChunkData.js';
-import { makeAtmosUniforms, CLOUD_BASE, CLOUD_TOP } from './AtmosGLSL.js';
+import { makeAtmosUniforms, CLOUD_BASE } from './AtmosGLSL.js';
 import { Sky } from './Sky.js';
 import { Clouds } from './Clouds.js';
 import { Precipitation } from './Precipitation.js';
@@ -90,12 +90,13 @@ export class Atmosphere {
     // ── World binding ────────────────────────────────────────────────────────
 
     /**
-     * @param {object} o { seed, biomes, world (WorldState), smooth (SmoothTerrain|null),
-     *                     saved (toJSON() output or null), daylightCycle, weather }
+     * @param {object} o { seed, biomes, world (WorldState),
+     *                     saved (toJSON() output or null), daylightCycle, weather,
+     *                     worldGen (the world's generator version, for its climate) }
      */
     startWorld(o) {
         this.world = o.world;
-        this.climateModel = new Climate(o.seed ?? 0, o.biomes ?? []);
+        this.climateModel = new Climate(o.seed ?? 0, o.biomes ?? [], o.worldGen ?? 1, o.flat ?? null);
         this.day = new DayCycle();
         this.weather = new WeatherSystem((o.seed ?? 1) | 0);
         const mode = o.weather ?? 'dynamic';
@@ -109,7 +110,7 @@ export class Atmosphere {
         if (!o.saved || o.saved.weather?.mode !== mode) this.weather.setMode(mode, true);
         else this.weather.mode = mode;
         this.day.running = o.daylightCycle !== false;
-        this.precip.heightmap.setWorld(o.world, o.smooth ?? null);
+        this.precip.heightmap.reset();
         this.precip.enabled = true;
         this._tor.on = false; this._tor.alpha = 0;
         this._climateT = 0;
@@ -121,7 +122,7 @@ export class Atmosphere {
         this.world = null;
         this.climateModel = null;
         this.precip.enabled = false;
-        this.precip.heightmap.setWorld(null, null);
+        this.precip.heightmap.reset();
         this.lightning.clear();
         this._tor.on = false; this._tor.alpha = 0;
         this.tornado.update(0, 0, 0, 0, this._light);
@@ -149,8 +150,15 @@ export class Atmosphere {
     setWeatherMode(mode, immediate = false) { this.weather.setMode(mode, immediate); }
     setHours(h) { this.day.setHours(h); }
 
-    /** A chunk was re-meshed: its rain heightmap is stale. */
-    invalidateColumn(cx, cz) { this.precip.heightmap.invalidate(cx, cz); }
+    /** Offscreen work for this frame (fancy clouds), after update() and before the scene renders. */
+    prerender(renderer, camera) { this.clouds.prerender(renderer, camera); }
+    /** Compile shaders that are drawn off screen, ahead of first use. */
+    warm(renderer, camera) { this.clouds.warm(renderer, camera); }
+
+    /** A chunk was (re-)meshed: `heights` is where rain stops in it (geo.rain from the worker). */
+    setColumnHeights(cx, cz, heights) { this.precip.heightmap.setChunk(cx, cz, heights); }
+    /** Chunk `key` unloaded. */
+    dropColumns(key) { this.precip.heightmap.drop(key); }
 
     /** Ground height at a column: the rain heightmap, else a column scan, else sea level. */
     groundAt(x, z) {
@@ -274,16 +282,12 @@ export class Atmosphere {
         f.background?.setRGB(fog[0], fog[1], fog[2], THREE.SRGBColorSpace);
         if (f.fog) f.fog.color.setRGB(fog[0], fog[1], fog[2], THREE.SRGBColorSpace);
 
-        // Fog density. Inside a cloud, visibility collapses.
+        // Fog density. (Being inside a cloud needs nothing here: the cloud
+        // itself is drawn over everything seen through it — Clouds.js.)
         u.uFogDensity.value = P[FOG];
         u.uFogScale.value = Math.max(8, P[FOG_SCALE]);
         u.uFogBase.value = FOG_BASE;
-        let haze = P[HAZE];
-        const cy = f.camera.position.y;
-        if (cy > CLOUD_BASE && cy < CLOUD_TOP) {
-            const n = this.field.noise(f.camera.position.x, f.camera.position.z);
-            haze += 0.15 * this.field.cover(n);
-        }
+        const haze = P[HAZE];
         u.uHaze.value = haze;
         if (f.fog) {
             const dens = haze + P[FOG] * Math.exp(-Math.max(-40, f.py - FOG_BASE) / Math.max(8, P[FOG_SCALE]));

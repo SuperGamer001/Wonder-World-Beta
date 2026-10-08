@@ -1,0 +1,20 @@
+{
+  "id": 54,
+  "name": "WHITE_TERRACOTTA",
+  "terrainType": "mesh",
+  "color": [
+    0.82,
+    0.7,
+    0.63
+  ],
+  "hardness": 1.25,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "white_terracotta",
+      "count": 1
+    }
+  ],
+  "texture": "White_Terracotta.png",
+  "blend": 24
+}

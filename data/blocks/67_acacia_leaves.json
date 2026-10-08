@@ -1,0 +1,17 @@
+{
+  "id": 67,
+  "name": "ACACIA_LEAVES",
+  "terrainType": "solid",
+  "transparent": true,
+  "noCollision": true,
+  "leaves": true,
+  "color": [
+    0.38,
+    0.45,
+    0.13
+  ],
+  "hardness": 0.2,
+  "drops": [],
+  "texture": "Acacia_Leaves.png",
+  "render": "cutout"
+}

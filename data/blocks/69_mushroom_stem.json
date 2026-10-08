@@ -1,0 +1,13 @@
+{
+  "id": 69,
+  "name": "MUSHROOM_STEM",
+  "terrainType": "solid",
+  "color": [
+    0.83,
+    0.79,
+    0.72
+  ],
+  "hardness": 0.2,
+  "drops": [],
+  "texture": "Mushroom_Stem.png"
+}

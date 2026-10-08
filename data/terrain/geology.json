@@ -1,0 +1,123 @@
+{
+  "name": "geology",
+  "comment": "World-wide materials and cave settings for the world generator (src/scripts/workers/TerrainGenerator.js). Biomes choose the surface; this chooses what lies beneath it everywhere.",
+  "bedrock": "BEDROCK",
+  "stone": "STONE",
+  "deepStone": {
+    "block": "SLATE",
+    "y": 0,
+    "wobble": 5,
+    "blend": 4
+  },
+  "rockBlobs": [
+    {
+      "block": "GRANITE",
+      "minY": -70,
+      "maxY": 180,
+      "frequency": 0.00012,
+      "radius": [
+        2.5,
+        4.5
+      ]
+    },
+    {
+      "block": "DIORITE",
+      "minY": -70,
+      "maxY": 180,
+      "frequency": 0.00012,
+      "radius": [
+        2.5,
+        4.5
+      ]
+    },
+    {
+      "block": "ANDESITE",
+      "minY": -70,
+      "maxY": 220,
+      "frequency": 0.00016,
+      "radius": [
+        2.5,
+        5
+      ]
+    },
+    {
+      "block": "DIRT",
+      "minY": 0,
+      "maxY": 220,
+      "frequency": 0.000078,
+      "radius": [
+        2,
+        3.5
+      ]
+    },
+    {
+      "block": "GRAVEL",
+      "minY": -60,
+      "maxY": 220,
+      "frequency": 0.000078,
+      "radius": [
+        2,
+        3.5
+      ]
+    },
+    {
+      "block": "LIMESTONE",
+      "minY": 20,
+      "maxY": 220,
+      "frequency": 0.000039,
+      "radius": [
+        2.5,
+        4.5
+      ]
+    }
+  ],
+  "blobHosts": [
+    "STONE",
+    "SLATE"
+  ],
+  "ores": [
+    {
+      "block": "COAL_ORE",
+      "minY": 0,
+      "maxY": 260,
+      "frequency": 0.0062,
+      "minSize": 4,
+      "maxSize": 14
+    },
+    {
+      "block": "IRON_ORE",
+      "minY": -110,
+      "maxY": 190,
+      "frequency": 0.0068,
+      "minSize": 3,
+      "maxSize": 9
+    },
+    {
+      "block": "GOLD_ORE",
+      "minY": -128,
+      "maxY": -30,
+      "frequency": 0.0045,
+      "minSize": 2,
+      "maxSize": 7
+    }
+  ],
+  "oreHosts": [
+    "STONE",
+    "SLATE",
+    "GRANITE",
+    "DIORITE",
+    "ANDESITE",
+    "LIMESTONE",
+    "SANDSTONE",
+    "RED_SANDSTONE",
+    "TERRACOTTA"
+  ],
+  "caves": {
+    "tunnels": 1,
+    "noodles": 1,
+    "caverns": 1,
+    "valleys": 1,
+    "shafts": 1,
+    "ravines": 1
+  }
+}

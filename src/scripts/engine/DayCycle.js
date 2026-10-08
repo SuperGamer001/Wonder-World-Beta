@@ -8,8 +8,8 @@
  * Time is a fraction of a day, `time` in [0, 1), plus a day counter for the
  * moon's phase. Hour 6 is sunrise (the sun on the eastern, +X, horizon), 12 is
  * noon and 18 is sunset. The sun's path is tilted toward +Z so that at noon it
- * sits close to Sun.js's SUN_DIR — the direction the meshers bake face shading
- * for — which keeps midday looking exactly like the fixed-sun game did.
+ * sits close to Sun.js's SUN_DIR — the direction the game was lit from before
+ * the sun moved — which keeps midday looking exactly like the fixed-sun game did.
  *
  * Every colour here is a raw display value (what ends up on screen), not a
  * linear one: the chunk shaders write their output without colour-space

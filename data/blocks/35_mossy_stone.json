@@ -14,5 +14,6 @@
       "itemId": "mossy_stone",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Mossy_Stone.png"
 }

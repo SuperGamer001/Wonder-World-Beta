@@ -2,7 +2,8 @@
  * Sky — the sky dome, sun, moon and stars (Graphics → Sky).
  *
  *   simple — one flat sky colour that follows the time of day (the original
- *            look), square sun and moon, square stars
+ *            look), a flat round sun with a faint glow, a flat round moon with
+ *            its phase, round stars
  *   pretty — a zenith-to-horizon gradient, sunrise/sunset glow toward the sun,
  *            a round sun with a halo, a moon lit as a sphere (real phase
  *            terminator, darker maria, faint earthshine), twinkling stars that
@@ -17,7 +18,7 @@
  */
 
 import * as THREE from 'three';
-import { ATMOS_GLSL } from './AtmosGLSL.js';
+import { ATMOS_GLSL, OUTPUT_GLSL } from './AtmosGLSL.js';
 import { SUN_TILT } from './engine/DayCycle.js';
 
 export const SKY_MODES = ['simple', 'pretty'];
@@ -30,7 +31,7 @@ void main() {
 }
 `;
 
-const FRAG = ATMOS_GLSL + `
+const FRAG = ATMOS_GLSL + OUTPUT_GLSL + `
 uniform int   uSkyMode;          // 0 simple, 1 pretty
 uniform vec3  uZenith;
 uniform vec3  uOvercast;         // colour of a fully overcast sky
@@ -73,6 +74,10 @@ vec2 discCoords(vec3 d, vec3 c) {
 
 void main() {
     vec3 d = normalize(vDir);
+    // One pixel as an angle (radians): the width of the anti-aliased rim of the
+    // sun and moon. Taken here, in uniform control flow, where derivatives are
+    // defined.
+    float px = max(length(fwidth(d)), 1e-5);
     float h = d.y;
     vec3 col = fogColorFor(d);
     if (uSkyMode == 1) {
@@ -95,9 +100,7 @@ void main() {
         if (r > 0.9968) {
             vec3 sp = c + 0.5 + (vec3(hash13(c + 1.7), hash13(c + 3.1), hash13(c + 5.3)) - 0.5) * 0.6;
             float mag = (r - 0.9968) / 0.0032;
-            float s = pretty
-                ? smoothstep(0.32, 0.0, length(p - sp))
-                : step(max(max(abs(p.x - sp.x), abs(p.y - sp.y)), abs(p.z - sp.z)), 0.16);
+            float s = smoothstep(0.32, 0.0, length(p - sp));
             float tw = pretty ? 0.7 + 0.3 * sin(uTime * (1.5 + mag * 4.0) + r * 400.0) : 1.0;
             vec3 sc = mix(vec3(0.85, 0.9, 1.0), vec3(1.0, 0.9, 0.75), hash13(c + 9.0));
             col += sc * s * (0.35 + 0.65 * mag) * tw * uStars * clearSky;
@@ -112,8 +115,12 @@ void main() {
             float halo = pow(mu, 1400.0) * 0.8 + pow(mu, 90.0) * 0.18 + pow(mu, 12.0) * 0.05;
             col += uSunColor * (disc * 2.5 + halo) * uSunVis * clearSky;
         } else {
-            vec2 q = discCoords(d, uSkySunDir);
-            if (max(abs(q.x), abs(q.y)) < 0.07) col = mix(col, uSunColor * 1.15, uSunVis * clearSky);
+            // A flat disc (the same area the old square had) with a one-pixel
+            // soft rim, and a faint glow so it does not look cut out.
+            float r = length(discCoords(d, uSkySunDir));
+            float disc = 1.0 - smoothstep(0.079 - px, 0.079 + px, r);
+            col = mix(col, uSunColor * 1.15, disc * uSunVis * clearSky);
+            col += uSunColor * (pow(mu, 220.0) * 0.25 * (1.0 - disc) * uSunVis * clearSky);
         }
     }
 
@@ -121,25 +128,25 @@ void main() {
     vec3 md = uMoonDir;
     float mm = dot(d, md);
     if (mm > 0.0 && uMoonVis > 0.001) {
-        vec2 q = discCoords(d, md) / (pretty ? 0.026 : 0.055);
-        if (!pretty) q = (floor(q * 4.0) + 0.5) / 4.0;   // blocky 8×8 moon
+        float size = pretty ? 0.026 : 0.055;
+        vec2 q = discCoords(d, md) / size;
         float r2 = dot(q, q);
-        bool inside = pretty ? r2 < 1.0 : max(abs(q.x), abs(q.y)) < 1.0;
-        if (inside) {
+        float rim = px / size;                    // one pixel, in moon radii
+        if (r2 < (1.0 + rim) * (1.0 + rim)) {
             vec3 n = vec3(q, sqrt(max(0.0, 1.0 - min(r2, 1.0))));
             // The sun lies along the moon's path, so the lit limb faces that way.
             vec3 ls = vec3(0.0, sin(uMoonPhase), -cos(uMoonPhase));
             float lit = smoothstep(-0.06, 0.08, dot(n, ls));
             float maria = pretty ? 0.72 + 0.28 * texture(uCloudMap, q * 0.09 + 0.3).r : 0.9;
             vec3 moon = vec3(0.92, 0.93, 0.98) * (lit * maria + 0.035);
-            float edge = pretty ? smoothstep(1.0, 0.9, r2) : 1.0;
+            float edge = pretty ? smoothstep(1.0, 0.9, r2) : 1.0 - smoothstep(1.0 - rim, 1.0 + rim, sqrt(r2));
             col = mix(col, moon, edge * uMoonVis * clearSky);
         }
         if (pretty) col += vec3(0.6, 0.65, 0.8) * pow(mm, 3000.0) * 0.15 * uMoonVis * clearSky * (0.5 + 0.5 * -cos(uMoonPhase));
     }
 
     col += uSkyFlash * above;
-    fragColor = vec4(col, 1.0);
+    fragColor = displayOut(vec4(col, 1.0));
 }
 `;
 

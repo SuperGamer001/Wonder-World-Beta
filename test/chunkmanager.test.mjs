@@ -108,11 +108,11 @@ function settle(cm, pool, pos, max = 4000) {
 }
 
 function invariants(label, { world, pool, cm, shown }, pos) {
-    const pcx = WorldState.worldToChunk(pos.x | 0), pcz = WorldState.worldToChunk(pos.z | 0);
-    const rd = cm.renderDistance, rdSq = (rd + 0.5) * (rd + 0.5);
+    const pcx = WorldState.worldToChunk(Math.floor(pos.x)), pcz = WorldState.worldToChunk(Math.floor(pos.z));
+    const rd = cm.renderDistance;
     let needed = 0, generated = 0, meshed = 0, onScreen = 0, stuck = 0;
+    // The loaded area is the full (2rd+1)² square around the player's chunk.
     for (let dx = -rd; dx <= rd; dx++) for (let dz = -rd; dz <= rd; dz++) {
-        if (dx * dx + dz * dz > rdSq) continue;
         needed++;
         const c = world.getChunk(pcx + dx, pcz + dz);
         if (c?.generated) generated++;
@@ -150,6 +150,12 @@ for (const smooth of [true, false]) {
     for (let i = 0; i < 90; i++)  { pos = { x: pos.x - 2, y: 80, z: pos.z - 0.5 }; step(cm, pos); }
     check(`${name}: settles after flying`, settle(cm, pool, pos) >= 0);
     invariants(`${name} after flight`, env, pos);
+
+    // Just below zero on both axes: the player's chunk is -1, not 0.
+    for (let i = 0; i < 12; i++) { pos = { x: pos.x - 2.625, y: 80, z: pos.z - 2.625 }; step(cm, pos); }
+    pos = { x: -0.5, y: 80, z: -0.25 };
+    check(`${name}: settles just below zero`, settle(cm, pool, pos) >= 0);
+    invariants(`${name} at negative coords`, env, pos);
 
     // ── Render distance change ──────────────────────────────────────────────
     cm.renderDistance = 3;

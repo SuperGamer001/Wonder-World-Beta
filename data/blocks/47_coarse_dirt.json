@@ -1,0 +1,19 @@
+{
+  "id": 47,
+  "name": "COARSE_DIRT",
+  "terrainType": "mesh",
+  "color": [
+    0.46,
+    0.34,
+    0.23
+  ],
+  "hardness": 0.5,
+  "drops": [
+    {
+      "itemId": "dirt",
+      "count": 1
+    }
+  ],
+  "texture": "Coarse_Dirt.png",
+  "blend": 42
+}

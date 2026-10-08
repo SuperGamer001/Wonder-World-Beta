@@ -1,0 +1,76 @@
+{
+  "name": "MEADOW",
+  "category": "land",
+  "temperature": 0.45,
+  "humidity": 0.55,
+  "mapColor": "#83bb6d",
+  "select": {
+    "temperature": [
+      0.26,
+      0.56
+    ],
+    "humidity": [
+      0.36,
+      0.85
+    ],
+    "elevation": [
+      112,
+      170
+    ],
+    "slope": [
+      0,
+      0.85
+    ]
+  },
+  "surface": {
+    "top": "GRASS",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 2
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "steep": {
+      "top": "STONE",
+      "layers": [
+        {
+          "block": "STONE",
+          "depth": 2
+        }
+      ]
+    },
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "COARSE_DIRT",
+        "scale": 18,
+        "threshold": 0.62
+      }
+    ]
+  },
+  "structures": {
+    "birch_tree": {
+      "frequency": 0.0006
+    },
+    "spruce_tree": {
+      "frequency": 0.0003
+    },
+    "boulder": {
+      "frequency": 0.0002
+    }
+  }
+}

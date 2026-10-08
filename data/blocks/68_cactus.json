@@ -1,0 +1,27 @@
+{
+  "id": 68,
+  "name": "CACTUS",
+  "terrainType": "solid",
+  "color": [
+    0.24,
+    0.46,
+    0.16
+  ],
+  "topColor": [
+    0.3,
+    0.52,
+    0.2
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "cactus",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Cactus_Top.png",
+    "side": "Cactus_Side.png",
+    "bottom": "Cactus_Top.png"
+  }
+}

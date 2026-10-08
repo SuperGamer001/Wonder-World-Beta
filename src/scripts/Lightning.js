@@ -19,7 +19,7 @@
  */
 
 import * as THREE from 'three';
-import { ATMOS_GLSL } from './AtmosGLSL.js';
+import { ATMOS_GLSL, OUTPUT_GLSL } from './AtmosGLSL.js';
 
 const MAX_BOLTS = 3;
 const SEGS_PER_BOLT = 256;
@@ -46,7 +46,7 @@ void main() {
 }
 `;
 
-const FRAG = `
+const FRAG = OUTPUT_GLSL + `
 in vec2 vUv;
 in float vB;
 out vec4 fragColor;
@@ -54,7 +54,7 @@ void main() {
     float core = 1.0 - abs(vUv.x * 2.0 - 1.0);
     float a = core * core * vB;
     if (a < 0.003) discard;
-    fragColor = vec4(vec3(0.82, 0.87, 1.0) * a * 2.5, 1.0);
+    fragColor = displayOut(vec4(vec3(0.82, 0.87, 1.0) * a * 2.5, 1.0));
 }
 `;
 
@@ -88,7 +88,7 @@ export class Lightning {
         });
         this.mesh = new THREE.Mesh(geo, this.material);
         this.mesh.frustumCulled = false;
-        this.mesh.renderOrder = 12;
+        this.mesh.renderOrder = 12;        // over the water and the cloud backdrop
         this.mesh.visible = false;
         scene.add(this.mesh);
 

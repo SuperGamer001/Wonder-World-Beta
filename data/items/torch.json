@@ -1,0 +1,9 @@
+{
+  "id": "torch",
+  "name": "Torch",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "heldLight": 13,
+  "icon": "data/textures/items/torch.png"
+}

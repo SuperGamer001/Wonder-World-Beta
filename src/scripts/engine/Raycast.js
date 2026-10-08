@@ -1,8 +1,9 @@
 /**
  * Raycast — DDA voxel traversal.
  *
- * Finds the first solid (non-passable) block hit by a ray from `origin`
- * in direction `dir` within `maxDist` blocks.
+ * Finds the first targetable block (BlockRegistry.isTargetable: anything
+ * solid, plus torches and lanterns) hit by a ray from `origin` in direction
+ * `dir` within `maxDist` blocks.
  *
  * Returns { x, y, z, blockId, face: {x,y,z} } or null.
  * `face` is the integer normal of the hit face (points back toward the ray origin).
@@ -41,7 +42,7 @@ export function raycast(worldState, registry, origin, dir, maxDist = 6) {
         }
 
         const id = worldState.getBlock(ix, iy, iz);
-        if (id > 0 && !registry.isNoCollision(id)) {
+        if (id > 0 && registry.isTargetable(id)) {
             return { x: ix, y: iy, z: iz, blockId: id, face };
         }
     }

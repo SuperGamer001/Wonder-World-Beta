@@ -1,0 +1,27 @@
+{
+  "id": 64,
+  "name": "BIRCH_LOG",
+  "terrainType": "solid",
+  "color": [
+    0.85,
+    0.83,
+    0.78
+  ],
+  "topColor": [
+    0.77,
+    0.69,
+    0.5
+  ],
+  "hardness": 2,
+  "drops": [
+    {
+      "itemId": "wood_log",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Birch_Log_Top.png",
+    "side": "Birch_Log.png",
+    "bottom": "Birch_Log_Top.png"
+  }
+}

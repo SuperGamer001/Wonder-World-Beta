@@ -1,0 +1,8 @@
+{
+  "id": "moss",
+  "name": "Moss",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "icon": "data/textures/blocks/Moss.png"
+}

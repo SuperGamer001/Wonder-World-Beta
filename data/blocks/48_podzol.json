@@ -1,0 +1,28 @@
+{
+  "id": 48,
+  "name": "PODZOL",
+  "terrainType": "mesh",
+  "color": [
+    0.5,
+    0.35,
+    0.2
+  ],
+  "topColor": [
+    0.45,
+    0.31,
+    0.13
+  ],
+  "hardness": 0.5,
+  "drops": [
+    {
+      "itemId": "dirt",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Podzol_Top.png",
+    "side": "Podzol_Side.png",
+    "bottom": "Dirt.png"
+  },
+  "blend": 54
+}

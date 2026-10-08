@@ -1,0 +1,28 @@
+{
+  "id": 61,
+  "name": "MYCELIUM",
+  "terrainType": "mesh",
+  "color": [
+    0.5,
+    0.35,
+    0.2
+  ],
+  "topColor": [
+    0.46,
+    0.39,
+    0.44
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "dirt",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Mycelium_Top.png",
+    "side": "Mycelium_Side.png",
+    "bottom": "Dirt.png"
+  },
+  "blend": 56
+}

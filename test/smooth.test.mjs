@@ -11,7 +11,7 @@ import {
 } from '../src/scripts/engine/ChunkData.js';
 import {
     SmoothTerrain, SmoothField, buildKindTable, describeVoxel, newShape, surfaceGrid, gridHeightAt,
-    KIND_CUBE, KIND_MESH, SMOOTH_REACH, SMOOTH_SAMPLES,
+    KIND_EMPTY, KIND_CUBE, KIND_MESH, SMOOTH_REACH, SMOOTH_SPREAD, SMOOTH_SAMPLES, SMOOTH_CREST,
 } from '../src/scripts/engine/SmoothShape.js';
 
 const AIR = 0, GRASS = 1, DIRT = 2, STONE = 3, WATER = 5, GLASS = 28, BRICKS = 27;
@@ -23,7 +23,10 @@ reg.register({ id: DIRT,   name: 'DIRT',   terrainType: 'mesh' });
 reg.register({ id: STONE,  name: 'STONE',  terrainType: 'mesh' });
 reg.register({ id: WATER,  name: 'WATER',  terrainType: 'solid', transparent: true, liquid: true, noCollision: true });
 reg.register({ id: BRICKS, name: 'BRICKS', terrainType: 'solid' });
-reg.register({ id: GLASS,  name: 'GLASS',  terrainType: 'solid', transparent: true });
+// Blended, like ice, so it is in the transparent mesh: the checks below are of
+// the ground's own surface. (A cutout — real glass, leaves — is drawn with the
+// opaque blocks, and the ground behind it is drawn too.)
+reg.register({ id: GLASS,  name: 'GLASS',  terrainType: 'solid', transparent: true, render: 'translucent' });
 
 const faceMap = { 1: { top: 1, side: 2, bottom: 0 }, 2: { top: 0, side: 0, bottom: 0 } };
 const greedy  = new GreedyMesher(reg, faceMap);
@@ -155,27 +158,55 @@ function segHit(o, d, tri) {
     return t > 0 && t < 1 ? t : -1;
 }
 
-// ── 1. Every smooth triangle stays inside one voxel ─────────────────────────
+// ── 1. Every smooth triangle stays inside its column, and the ground ────────
+// A triangle is over one block's footprint and reaches no higher than the top
+// of the voxel it belongs to. Where the ground leans it may go below that
+// voxel, into the ground it stands on — by less than two blocks.
+
+/** Count the triangles that leave their column or go two blocks below the voxel their top is in. */
+function outOfBounds(tris) {
+    let bad = 0;
+    for (const tri of tris) {
+        const e = 1e-9;
+        const cxl = Math.floor((tri[0] + tri[3] + tri[6]) / 3), czl = Math.floor((tri[2] + tri[5] + tri[8]) / 3);
+        const hi = Math.max(tri[1], tri[4], tri[7]), cyl = Math.ceil(hi - e) - 1;
+        for (let k = 0; k < 9; k += 3) {
+            if (tri[k]     < cxl - e || tri[k]     > cxl + 1 + e ||
+                tri[k + 1] < cyl - 2 - e ||
+                tri[k + 2] < czl - e || tri[k + 2] > czl + 1 + e) { bad++; break; }
+        }
+    }
+    return bad;
+}
 
 {
     let tris = 0, bad = 0;
     for (const [cx, cz] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
         // No greedy faces: the output is the smooth pass alone.
-        const geo = meshChunk(cx, cz, []);
-        for (const tri of soup(geo, 0, 0)) {
-            tris++;
-            const cxl = Math.floor((tri[0] + tri[3] + tri[6]) / 3);
-            const cyl = Math.floor((tri[1] + tri[4] + tri[7]) / 3);
-            const czl = Math.floor((tri[2] + tri[5] + tri[8]) / 3);
-            for (let k = 0; k < 9; k += 3) {
-                const e = 1e-9;
-                if (tri[k]     < cxl - e || tri[k]     > cxl + 1 + e ||
-                    tri[k + 1] < cyl - e || tri[k + 1] > cyl + 1 + e ||
-                    tri[k + 2] < czl - e || tri[k + 2] > czl + 1 + e) { bad++; break; }
-            }
-        }
+        const list = soup(meshChunk(cx, cz, []), 0, 0);
+        tris += list.length;
+        bad  += outOfBounds(list);
     }
-    check('smooth triangles never leave their voxel', tris > 0 && bad === 0, `${tris} tris, ${bad} outside`);
+    check('smooth triangles never leave their column', tris > 0 && bad === 0, `${tris} tris, ${bad} outside`);
+
+    // The dip itself, from the shapes: only below an open-topped voxel, only
+    // into Mesh ground under it, never two whole blocks, and never upward.
+    const kt = buildKindTable(reg);
+    const f = new SmoothField(kt, islandBlock, false), ff = new SmoothField(kt, islandBlock, true);
+    const s = newShape();
+    let dipped = 0, wrong = 0, deepest = 0;
+    for (let x = 4; x < 28; x++) for (let z = 4; z < 28; z++) for (let y = BASE_Y - 1; y < BASE_Y + 16; y++) {
+        if (kt[islandBlock(x, y, z)] !== KIND_MESH || !describeVoxel(f, ff, x, y, z, s)) continue;
+        const lo = Math.min(...s.top.c), hi = Math.max(...s.top.c);
+        if (hi > 1) wrong++;
+        if (lo >= 0) continue;
+        dipped++;
+        deepest = Math.min(deepest, lo);
+        if (lo <= -2 || kt[islandBlock(x, y + 1, z)] !== KIND_EMPTY || kt[islandBlock(x, y - 1, z)] !== KIND_MESH ||
+            (lo < -1 && kt[islandBlock(x, y - 2, z)] !== KIND_MESH)) wrong++;
+    }
+    check('a surface dips only into the ground it stands on, by less than two blocks', dipped > 10 && wrong === 0,
+          `${dipped} voxels dip, deepest ${deepest.toFixed(3)}, ${wrong} wrong`);
 }
 
 // ── 2. Watertight across chunk edges and the shared corner ──────────────────
@@ -235,7 +266,11 @@ function colliderTop(x, z, fromY) {
         if (!terrain.isMesh(id)) return ly + 1;
         const sh = terrain.shapeAt(bx, wy, bz);
         if (!sh) return ly + 1;
-        return ly + Math.max(gridHeightAt(sh.top, x - bx, z - bz), gridHeightAt(sh.bot, x - bx, z - bz));
+        const top = gridHeightAt(sh.top, x - bx, z - bz), bot = gridHeightAt(sh.bot, x - bx, z - bz);
+        // Where the ground leans, the surface here may be below this voxel: in
+        // the next one down, whose shape is cut to it.
+        if (top < bot - 1e-9) continue;
+        return ly + Math.max(top, bot);
     }
     return NaN;
 }
@@ -376,7 +411,7 @@ function topAt(fn, x, y, z, u, v) {
     const peak = g ? gridHeightAt(g, 0.5, 0.5) : 0;
     const rim  = g ? Math.max(...[0, 0.25, 0.5, 0.75, 1].flatMap(t =>
         [gridHeightAt(g, t, 0), gridHeightAt(g, t, 1), gridHeightAt(g, 0, t), gridHeightAt(g, 1, t)])) : 1;
-    check('an isolated placed Mesh block becomes a round dome', s && s.top.crest && peak === 1 && rim === 0,
+    check('an isolated placed Mesh block becomes a round dome', s && s.top.crest && peak === SMOOTH_CREST && rim === 0,
           s ? `corners ${topOf(s)}, peak ${peak}, rim ${rim}` : 'shape was full');
 }
 
@@ -417,6 +452,23 @@ function topAt(fn, x, y, z, u, v) {
     check('buried Mesh voxel is cubic', shapeIn(flat, 5, -3, 5) === null);
 }
 
+{
+    // Ground diagonal to a Solid block, with nothing beside both, does not
+    // reach for it: each of four lone blocks round a brick is a plain mound.
+    const cross = (x, y, z) => y < 0 ? BRICKS : y > 0 ? AIR : x === 0 && z === 0 ? BRICKS : Math.abs(x) === 1 && Math.abs(z) === 1 ? DIRT : AIR;
+    let plain = true;
+    for (const [x, z] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+        const s = shapeIn(cross, x, 0, z);
+        if (!s || !s.top.crest || topOf(s).some(c => c !== 0)) plain = false;
+    }
+    check('ground diagonal to a Solid block does not connect to it', plain);
+    // With a block beside both it does, at that corner only.
+    const joined = (x, y, z) => x === 0 && z === 1 && y === 0 ? DIRT : cross(x, y, z);
+    const a = shapeIn(joined, 1, 0, 1), b = shapeIn(joined, 1, 0, -1);
+    check('a common neighbour joins them', a && topOf(a).filter(c => c === 1).length >= 1 && b && topOf(b).every(c => c === 0),
+          `joined ${a ? topOf(a) : 'cube'}, the far one ${b ? topOf(b) : 'cube'}`);
+}
+
 // ── 5. The shape of the smoothing ───────────────────────────────────────────
 
 {
@@ -439,7 +491,7 @@ function topAt(fn, x, y, z, u, v) {
         }
     }
     const endCrest = topAt(ridge, 0, 0, 5, 0.5, 1);
-    check('a one-wide ridge is a continuous crest', minCrest === 1 && endCrest === 0,
+    check('a one-wide ridge is a continuous crest', minCrest === SMOOTH_CREST && endCrest === 0,
           `lowest crest point ${minCrest}, open end ${endCrest}`);
 }
 
@@ -460,7 +512,7 @@ function crestCheck(name, fn, cells) {
             joins++;
         }
     }
-    check(`${name} is joined into one crest`, low === 1 && joins > 0,
+    check(`${name} is joined into one crest`, Math.abs(low - SMOOTH_CREST) < 1e-12 && joins > 0,
           `${cells.length} blocks, ${joins / 2} joins, lowest crest ${low.toFixed(3)}`);
 }
 
@@ -485,7 +537,7 @@ function crestCheck(name, fn, cells) {
     // meets carries the crest on that side too, at the same height.
     const plateau = (x, y, z) => y < 0 ? DIRT : y === 0 && ((x >= -1 && x <= 1 && z >= -1 && z <= 1) || (z === 0 && (x === 2 || x === 3))) ? DIRT : AIR;
     const armSide = topAt(plateau, 2, 0, 0, 0, 0.5), groundSide = topAt(plateau, 1, 0, 0, 1, 0.5);
-    check('a thin arm flows into the ground it is attached to', armSide === 1 && groundSide === 1,
+    check('a thin arm flows into the ground it is attached to', armSide === SMOOTH_CREST && groundSide === SMOOTH_CREST,
           `arm side ${armSide}, ground side ${groundSide}`);
 }
 
@@ -523,7 +575,7 @@ function surfaceY(t, w, x, z, fromY) {
     // surface from one level into the next, so there is no S-bend per step.
     const top = BASE_Y + WORLD_MIN_Y + 12;
     let worst = 0;
-    for (const x of [6.25, 7.5, 9.0, 10.75, 11.9]) {
+    for (const x of [6.25, 7.5, 9.0, 10.75, 10.95]) {
         const y = surfaceY(hillTerrain, hillWorld, x, 8.5, top);
         worst = Math.max(worst, Math.abs(y - (BASE_Y + WORLD_MIN_Y + x - 4)));
     }
@@ -538,6 +590,123 @@ function surfaceY(t, w, x, z, fromY) {
     const footSlope = (y1 - y0) / first;
     check('a ramp meets flat ground tangentially', footSlope > 0 && footSlope < 0.6,
           `slope of the first segment ${footSlope.toFixed(3)} (a crease would be 1)`);
+}
+
+// ── 5a. Diagonal slopes ──────────────────────────────────────────────────────
+// Worlds made of plain functions, read through a collider: what it reports is
+// what is drawn (checked above).
+
+/** A collider over a world given as fn(x, y, z) → block id, y in world coordinates. */
+function colliderFor(fn) {
+    const fake = {
+        editVersion: 0,
+        getChunk: () => FAKE_CHUNK,
+    };
+    const t = new SmoothTerrain(fake, reg);
+    t._block = fn;
+    return { terrain: t, world: { getBlock: fn } };
+}
+const FAKE_CHUNK = { generated: true };
+
+/** Largest distance of the surface from `plane(x, z)` over a patch of ground. */
+function offPlane(fn, plane, x0, x1, z0, z1, fromY) {
+    const { terrain: t, world: w } = colliderFor(fn);
+    let worst = 0;
+    for (let i = 0; i <= 24; i++) for (let j = 0; j <= 24; j++) {
+        const x = x0 + (x1 - x0) * (i + 0.37) / 25, z = z0 + (z1 - z0) * (j + 0.61) / 25;
+        worst = Math.max(worst, Math.abs(surfaceY(t, w, x, z, fromY) - plane(x, z)));
+    }
+    return worst;
+}
+
+{
+    // A diagonal slope, where every step line is a zigzag: the corners along
+    // it used to be pinned to whole levels, which drew a row of dimples.
+    const diag = (x, y, z) => y <= Math.floor((x + z) / 2) ? DIRT : AIR;
+    const offDiag = offPlane(diag, (x, z) => (x + z - 1) / 2, 8, 20, 8, 20, 30);
+    check('diagonal steps 2 wide are one flat plane', offDiag < 2e-3, `furthest from the plane ${offDiag.toExponential(1)}`);
+
+    // A slope that climbs a block in x and a block in z at once: every corner
+    // on it has ground two levels apart across it, which used to be a spike.
+    const steep = (x, y, z) => y <= x + z ? DIRT : AIR;
+    const offSteep = offPlane(steep, (x, z) => x + z - 1, 4, 12, 4, 12, 40);
+    check('a steep diagonal slope is one flat plane', offSteep < 1e-9, `furthest from the plane ${offSteep.toExponential(1)}`);
+
+    // The same hill standing on a built floor: its foot is a plane too, and
+    // nothing of the floor is uncovered at its foot.
+    const onFloor = (x, y, z) => y < 0 ? BRICKS : y < 12 - Math.abs(x) - Math.abs(z) ? DIRT : AIR;
+    const offFloor = offPlane(onFloor, (x, z) => 12 - x - z, 2.1, 4.9, 2.1, 4.9, 16);
+    check('the side of a diagonal hill on a Solid floor is a plane', offFloor < 1e-9, `furthest from the plane ${offFloor.toExponential(1)}`);
+    const { terrain: ft, world: fw } = colliderFor(onFloor);
+    let under = 0;
+    for (let x = -13; x <= 13; x += 0.25) for (let z = -13; z <= 13; z += 0.25) if (surfaceY(ft, fw, x + 0.01, z + 0.01, 16) < -1e-9) under++;
+    check('no ground dips under the floor it stands on', under === 0, `${under} samples`);
+    // Its peak is a rounded cap on the slopes that meet under it, not a spike.
+    const apex = surfaceY(ft, fw, 0.5, 0.5, 16);
+    check('the peak of a diagonal hill is a low cap', apex > 10 && apex <= 10 + SMOOTH_CREST + 1e-9, `apex at ${apex.toFixed(3)} on a hill 12 blocks high`);
+
+    // A Solid block buried in such a slope, one block under the surface: the
+    // ground over it does not come down through it (it is still there to
+    // walk into), so nothing of the surface in its column is below its top.
+    for (const [bx, bz] of [[6, 6], [7, 5], [5, 8]]) {
+        const by = bx + bz - 1;
+        const buried = (x, y, z) => x === bx && z === bz && y === by ? BRICKS : steep(x, y, z);
+        const { terrain: st2, world: sw2 } = colliderFor(buried);
+        let low = Infinity;
+        for (let i = 0; i <= 10; i++) for (let j = 0; j <= 10; j++) low = Math.min(low, surfaceY(st2, sw2, bx + 0.005 + i * 0.099, bz + 0.005 + j * 0.099, 40));
+        check(`ground over a Solid block at ${bx},${bz} in a diagonal slope stays above it`, low >= by + 1 - 1e-9, `lowest ${low.toFixed(3)}, the block's top ${by + 1}`);
+    }
+
+    // Nothing else leans. Steps along an axis stay what the edge rule makes
+    // them, whatever their width: level ground up to a one-block ramp.
+    for (const wide of [2, 3, 8]) {
+        const steps = (x, y, z) => y <= Math.floor(x / wide) ? DIRT : AIR;
+        const { terrain: at, world: aw } = colliderFor(steps);
+        const prof = [];
+        for (let i = 0; i <= wide; i++) prof.push(surfaceY(at, aw, 4 * wide + i, 0.5, 20) - 4);
+        const want = prof.map((_, i) => i === 0 ? 0 : 1);
+        check(`steps ${wide} wide along an axis are level ground and a ramp`, prof.every((h, i) => Math.abs(h - want[i]) < 1e-9), prof.map(h => h.toFixed(2)).join(' '));
+    }
+    // So does the edge of a plateau, and the ground round a hole dug in it.
+    const hole = (x, y, z) => y < 0 ? DIRT : y === 0 && !(x === 0 && z === 0) ? DIRT : AIR;
+    const { terrain: ht, world: hw } = colliderFor(hole);
+    const round = [[2, 0.5], [2, 2], [-1.5, 0.5], [0.5, 3]].map(([x, z]) => surfaceY(ht, hw, x, z, 4));
+    check('digging a block leaves the ground beyond its rim level', round.every(h => Math.abs(h - 1) < 1e-9), round.join(' '));
+
+    // A pocket under an overhang, diagonally below a dip in the ground: the
+    // floor of the dip stays level instead of sloping into the pocket, which
+    // would open a dark slot into it.
+    const pocket = (x, y, z) => {
+        if (y > 2) return AIR;
+        if (y === 2) return x >= 0 && x <= 1 && z === 0 ? AIR : DIRT;      // the dip, one deep
+        if (y === 1) return x === -1 && z === 0 ? AIR : DIRT;              // the pocket, under the ground beside it
+        return DIRT;
+    };
+    const { terrain: kt2, world: kw2 } = colliderFor(pocket);
+    const floor = [0.01, 0.5, 0.99].map(v => surfaceY(kt2, kw2, 0.01, v, 5));
+    check('a dip does not open into a pocket under the ground beside it', floor.every(h => Math.abs(h - 2) < 1e-9), floor.join(' '));
+
+    // A small mound is whole: nothing leans off its top.
+    const mound = (x, y, z) => y < 0 ? DIRT : y === 0 && x >= 0 && x < 2 && z >= 0 && z < 2 ? DIRT : AIR;
+    const { terrain: mt, world: mw } = colliderFor(mound);
+    const peak = surfaceY(mt, mw, 1, 1, 4);
+    check('a two-by-two mound keeps its full height', Math.abs(peak - 1) < 1e-9, `centre at ${peak}`);
+
+    // Flat ground beside water stays level to the water's edge: leaning toward
+    // it would sink the shore under the level of the water beside it.
+    const shore = (x, y, z) => y < 0 ? DIRT : y === 0 ? (x < 0 ? WATER : DIRT) : AIR;
+    const { terrain: st, world: sw } = colliderFor(shore);
+    const back = [1, 2, 3].map(x => surfaceY(st, sw, x, 0.5, 4));
+    check('ground does not lean toward a waterline', back.every(h => Math.abs(h - 1) < 1e-9), back.join(' '));
+
+    // A Solid block in the ground keeps the ground level round it.
+    // (Read from the ground voxels diagonally off each of the block's corners.)
+    const paved = (x, y, z) => y < 0 ? DIRT : y === 0 ? (x === 2 && z === 0 ? BRICKS : x >= 0 ? DIRT : AIR) : AIR;
+    const { terrain: pt, world: pw } = colliderFor(paved);
+    const off = 1e-7;
+    const corners = [[2 - off, -off], [3 + off, -off], [2 - off, 1 + off], [3 + off, 1 + off]].map(([x, z]) => surfaceY(pt, pw, x, z, 4));
+    check('ground meets a Solid block set in it at full height', corners.every(h => Math.abs(h - 1) < 1e-5),
+          `at its corners ${corners.map(h => h.toFixed(3)).join(' ')}`);
 }
 
 {
@@ -619,16 +788,8 @@ function surfaceY(t, w, x, z, fromY) {
         soup(meshT(cx, cz, []), cx * CHUNK_SIZE, cz * CHUNK_SIZE, smoothOnly);
     }
 
-    let outside = 0;
-    for (const tri of smoothOnly) {
-        const cxl = Math.floor((tri[0] + tri[3] + tri[6]) / 3), cyl = Math.floor((tri[1] + tri[4] + tri[7]) / 3);
-        const czl = Math.floor((tri[2] + tri[5] + tri[8]) / 3);
-        for (let k = 0; k < 9; k += 3) {
-            if (tri[k] < cxl - 1e-9 || tri[k] > cxl + 1 + 1e-9 || tri[k + 1] < cyl - 1e-9 ||
-                tri[k + 1] > cyl + 1 + 1e-9 || tri[k + 2] < czl - 1e-9 || tri[k + 2] > czl + 1 + 1e-9) { outside++; break; }
-        }
-    }
-    check('thin structures stay inside their voxels', smoothOnly.length > 200 && outside === 0,
+    const outside = outOfBounds(smoothOnly);
+    check('thin structures stay inside their columns', smoothOnly.length > 200 && outside === 0,
           `${smoothOnly.length} tris, ${outside} outside`);
 
     let odd = 0;
@@ -676,13 +837,128 @@ function surfaceY(t, w, x, z, fromY) {
             const wy = ly + WORLD_MIN_Y, id = twWorld.getBlock(bx, wy, bz);
             if (id === 0 || reg.isNoCollision(id)) continue;
             const sh = twTerrain.isMesh(id) ? twTerrain.shapeAt(bx, wy, bz) : null;
-            top = sh ? ly + Math.max(gridHeightAt(sh.top, x - bx, z - bz), gridHeightAt(sh.bot, x - bx, z - bz)) : ly + 1;
+            const st = sh ? gridHeightAt(sh.top, x - bx, z - bz) : 1, sb = sh ? gridHeightAt(sh.bot, x - bx, z - bz) : 0;
+            if (st < sb - 1e-9) continue;   // the surface is in the voxel below here
+            top = ly + Math.max(st, sb);
             break;
         }
         samples++;
         if (!(Math.abs(top - h) < 1e-5)) bad++;
     }
     check('thin structures collide exactly as drawn', samples > 300 && bad === 0, `${samples} samples, ${bad} mismatched`);
+}
+
+// ── 5d. Rough ground ─────────────────────────────────────────────────────────
+// Columns of any height beside each other, with Solid blocks and water among
+// them: steps of one, two and more, diagonal and straight, walls with slopes
+// at their feet. Wherever two columns do not draw the same line along the edge
+// between them the mesher has to close the gap; this is where it would show.
+
+{
+    const hash = (x, z) => { let h = (x * 374761393 + z * 668265263) >>> 0; h = ((h ^ (h >>> 13)) * 1274126177) >>> 0; return (h ^ (h >>> 16)) >>> 0; };
+    const heightAt = (x, z) => {
+        const roll = Math.round(3 + 2.5 * Math.sin(x * 0.45) + 2.5 * Math.cos(z * 0.38) + 1.5 * Math.sin((x + z) * 0.8));
+        const r = hash(x, z) % 16;
+        return 100 + roll + (r === 0 ? 3 : r < 3 ? 1 : r === 3 ? -2 : 0);
+    };
+    const rough = (x, y, z) => {
+        if (x < 3 || x > 28 || z < 3 || z > 28 || y < 92) return AIR;
+        const top = heightAt(x, z);
+        if (y > top) return y <= 101 ? WATER : y === top + 1 && hash(x + 91, z) % 23 === 0 ? BRICKS : AIR;
+        if (y === top && hash(x, z + 57) % 29 === 0) return BRICKS;
+        return y === top ? GRASS : DIRT;
+    };
+
+    const rchunks = new Map();
+    for (let cx = -1; cx <= 2; cx++) for (let cz = -1; cz <= 2; cz++) rchunks.set(`${cx},${cz}`, makeChunk(cx, cz, rough));
+    const meshR = (cx, cz, faces = [0, 1, 2, 3, 4, 5]) => {
+        const v = rchunks.get(`${cx},${cz}`);
+        const nb = { '1,0': rchunks.get(`${cx + 1},${cz}`), '-1,0': rchunks.get(`${cx - 1},${cz}`),
+                     '0,1': rchunks.get(`${cx},${cz + 1}`), '0,-1': rchunks.get(`${cx},${cz - 1}`) };
+        const corners = {}, far = CHUNK_SIZE - SMOOTH_REACH;
+        for (const [dx, dz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+            const c = rchunks.get(`${cx + dx},${cz + dz}`);
+            if (c) corners[`${dx},${dz}`] = cornerBlock(c, dx > 0 ? 0 : far, dz > 0 ? 0 : far);
+        }
+        const yRange = filledRange(v);
+        return greedy.meshGroup(v, nb, faces, yRange, smooth.prepare(v, nb, corners, yRange));
+    };
+    const rWorld = new WorldState();
+    for (const [key, v] of rchunks) {
+        const [cx, cz] = key.split(',').map(Number);
+        const c = new ChunkData(cx, cz);
+        c.loadVoxels(v);
+        c.generated = true;
+        rWorld.setChunk(cx, cz, c);
+    }
+    const rTerrain = new SmoothTerrain(rWorld, reg);
+
+    const all = [], smoothOnly = [];
+    for (const [cx, cz] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+        soup(meshR(cx, cz), cx * CHUNK_SIZE, cz * CHUNK_SIZE, all);
+        soup(meshR(cx, cz, []), cx * CHUNK_SIZE, cz * CHUNK_SIZE, smoothOnly);
+    }
+    const outside = outOfBounds(smoothOnly);
+    check('rough ground stays inside its columns', smoothOnly.length > 2000 && outside === 0, `${smoothOnly.length} tris, ${outside} outside`);
+
+    let odd = 0;
+    const RAYS = 4000;
+    for (let r = 0; r < RAYS; r++) {
+        const a = [rand() * 30 + 1, 90, rand() * 30 + 1], b = [rand() * 30 + 1, 116, rand() * 30 + 1];
+        if (r % 2) { a[1] = 96 + rand() * 14; b[1] = 96 + rand() * 14; a[0] = -1; b[0] = 33; }
+        if (r % 4 === 3) { const s = a[0]; a[0] = a[2]; a[2] = s; const q = b[0]; b[0] = b[2]; b[2] = q; }
+        const d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let n = 0;
+        for (const tri of all) if (segHit(a, d, tri) >= 0) n++;
+        if (n % 2) odd++;
+    }
+    check('rough ground is a closed surface', odd === 0, `${odd} of ${RAYS} rays odd (${all.length} tris)`);
+
+    const occupied = (lx, ly, lz) => {
+        const wy = ly + WORLD_MIN_Y;
+        const id = rWorld.getBlock(Math.floor(lx), Math.floor(wy), Math.floor(lz));
+        if (rTerrain.isMesh(id)) return rTerrain.pointInMesh(lx, wy, lz);
+        return id !== 0 && reg.isSolid(id);
+    };
+    let inverted = 0, faced = 0;
+    for (const t of smoothOnly) {
+        const e1 = [t[3] - t[0], t[4] - t[1], t[5] - t[2]], e2 = [t[6] - t[0], t[7] - t[1], t[8] - t[2]];
+        const n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        const len = Math.hypot(n[0], n[1], n[2]);
+        if (len < 1e-6) continue;
+        const c = [(t[0] + t[3] + t[6]) / 3, (t[1] + t[4] + t[7]) / 3, (t[2] + t[5] + t[8]) / 3], k = 1e-3 / len;
+        faced++;
+        if (occupied(c[0] + n[0] * k, c[1] + n[1] * k, c[2] + n[2] * k) &&
+            !occupied(c[0] - n[0] * k, c[1] - n[1] * k, c[2] - n[2] * k)) inverted++;
+    }
+    check('rough ground faces outward', faced > 2000 && inverted === 0, `${faced} triangles, ${inverted} inverted`);
+
+    let samples = 0, bad = 0;
+    for (let i = 0; i < 1200; i++) {
+        const x = 3.5 + rand() * 25, z = 3.5 + rand() * 25;
+        const o = [x, 118, z], d = [0, -30, 0];
+        let best = -1;
+        for (const tri of all) { const t = segHit(o, d, tri); if (t >= 0 && (best < 0 || t < best)) best = t; }
+        if (best < 0) continue;
+        const h = o[1] + d[1] * best;
+        const bx = Math.floor(x), bz = Math.floor(z);
+        let top = NaN;
+        for (let ly = 117; ly > 88; ly--) {
+            const wy = ly + WORLD_MIN_Y, id = rWorld.getBlock(bx, wy, bz);
+            if (id === 0 || reg.isNoCollision(id)) continue;
+            const sh = rTerrain.isMesh(id) ? rTerrain.shapeAt(bx, wy, bz) : null;
+            const st = sh ? gridHeightAt(sh.top, x - bx, z - bz) : 1, sb = sh ? gridHeightAt(sh.bot, x - bx, z - bz) : 0;
+            if (st < sb - 1e-9) continue;
+            top = ly + Math.max(st, sb);
+            break;
+        }
+        samples++;
+        if (!(Math.abs(top - h) < 1e-5)) {
+            bad++;
+            if (process.env.DEBUG_SMOOTH) console.log('  mismatch at', x.toFixed(4), z.toFixed(4), 'rendered', h.toFixed(5), 'collider', top);
+        }
+    }
+    check('rough ground collides exactly as drawn', samples > 600 && bad === 0, `${samples} samples, ${bad} mismatched`);
 }
 
 // ── 6. Walking over smooth terrain ──────────────────────────────────────────

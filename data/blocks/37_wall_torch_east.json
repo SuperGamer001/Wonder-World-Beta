@@ -1,0 +1,27 @@
+{
+  "id": 37,
+  "name": "WALL_TORCH_EAST",
+  "terrainType": "solid",
+  "model": "wall_torch",
+  "transparent": true,
+  "noCollision": true,
+  "light": 14,
+  "color": [
+    1,
+    0.78,
+    0.36
+  ],
+  "hardness": 0.05,
+  "drops": [
+    {
+      "itemId": "torch",
+      "count": 1
+    }
+  ],
+  "facing": "east",
+  "support": [
+    -1,
+    0,
+    0
+  ]
+}

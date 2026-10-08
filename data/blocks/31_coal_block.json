@@ -14,5 +14,6 @@
       "itemId": "coal_block",
       "count": 1
     }
-  ]
+  ],
+  "texture": "Coal_Block.png"
 }

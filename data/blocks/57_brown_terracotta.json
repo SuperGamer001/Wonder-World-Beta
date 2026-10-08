@@ -1,0 +1,20 @@
+{
+  "id": 57,
+  "name": "BROWN_TERRACOTTA",
+  "terrainType": "mesh",
+  "color": [
+    0.31,
+    0.2,
+    0.14
+  ],
+  "hardness": 1.25,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "brown_terracotta",
+      "count": 1
+    }
+  ],
+  "texture": "Brown_Terracotta.png",
+  "blend": 19
+}

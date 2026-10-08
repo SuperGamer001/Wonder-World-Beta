@@ -14,5 +14,7 @@
       "itemId": "glass",
       "count": 1
     }
-  ]
+  ],
+  "render": "cutout",
+  "texture": "Glass.png"
 }

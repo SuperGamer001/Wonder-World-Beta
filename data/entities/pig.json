@@ -1,6 +1,8 @@
 {
   "id": "pig",
   "name": "Pig",
+  "model": "pig",
+  "grazes": true,
   "health": 10,
   "speed": 3.5,
   "width": 0.9,

@@ -1,0 +1,27 @@
+{
+  "id": 62,
+  "name": "SPRUCE_LOG",
+  "terrainType": "solid",
+  "color": [
+    0.3,
+    0.2,
+    0.12
+  ],
+  "topColor": [
+    0.44,
+    0.33,
+    0.2
+  ],
+  "hardness": 2,
+  "drops": [
+    {
+      "itemId": "wood_log",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Spruce_Log_Top.png",
+    "side": "Spruce_Log.png",
+    "bottom": "Spruce_Log_Top.png"
+  }
+}

@@ -83,17 +83,14 @@ if (!COLD) {
     const { TerrainGenerator } = await import('../src/scripts/workers/TerrainGenerator.js');
     const { BlockRegistry }    = await import('../src/scripts/engine/BlockRegistry.js');
     const { ChunkData }        = await import('../src/scripts/engine/ChunkData.js');
-    const { setSeed }          = await import('../src/scripts/workers/noise.js');
 
     const root = path.join(path.dirname(__filename), '..');
     const reg = new BlockRegistry();
     for (const f of fs.readdirSync(path.join(root, 'data/blocks')))
         reg.register(JSON.parse(fs.readFileSync(path.join(root, 'data/blocks', f), 'utf8')));
-    const biomes = fs.readdirSync(path.join(root, 'data/biomes'))
-        .map(f => JSON.parse(fs.readFileSync(path.join(root, 'data/biomes', f), 'utf8')));
+    const readDir = (d) => fs.readdirSync(path.join(root, d)).map(f => JSON.parse(fs.readFileSync(path.join(root, d, f), 'utf8')));
 
-    setSeed(4242);
-    const gen = new TerrainGenerator(4242, reg, biomes);
+    const gen = new TerrainGenerator(4242, reg, readDir('data/biomes'), readDir('data/terrain'));
 
     const world = await (await fetch(`${base}/api/worlds`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -104,7 +101,7 @@ if (!COLD) {
     let t = performance.now();
     const built = coords.map(([cx, cz]) => {
         const cd = new ChunkData(cx, cz);
-        cd.loadVoxels(gen.generateChunk(cx, cz));
+        cd.loadVoxels(gen.generate(cx, cz));
         return cd;
     });
     const genMs = performance.now() - t;
@@ -125,7 +122,7 @@ if (!COLD) {
         buf.writeInt32LE(cd.cz, o); o += 4;
         buf.writeUInt16LE(cd._palette.length, o); o += 2;
         for (const p of cd._palette) { buf.writeUInt16LE(p, o); o += 2; }
-        buf.set(cd._indices, o); o += CHUNK_VOLUME;
+        cd.writeIndices(buf, o); o += CHUNK_VOLUME;
     }
 
     t = performance.now();

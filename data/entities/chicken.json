@@ -1,6 +1,8 @@
 {
   "id": "chicken",
   "name": "Chicken",
+  "model": "chicken",
+  "grazes": true,
   "health": 4,
   "speed": 3.5,
   "width": 0.4,

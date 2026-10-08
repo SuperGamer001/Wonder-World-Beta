@@ -1,0 +1,19 @@
+{
+  "id": 51,
+  "name": "RED_SAND",
+  "terrainType": "mesh",
+  "color": [
+    0.74,
+    0.41,
+    0.19
+  ],
+  "hardness": 0.5,
+  "drops": [
+    {
+      "itemId": "red_sand",
+      "count": 1
+    }
+  ],
+  "texture": "Red_Sand.png",
+  "blend": 32
+}

@@ -1,6 +1,54 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Wonder World — the look of everything that is not the world itself.
+
+   Graphite: dark grey panels, soft at the corners and quiet, so the world
+   behind them stays the bright thing on screen. Nothing is outlined in ink or
+   leans or bounces; a control shows what it is by being a shade lighter than
+   what it sits on, and a shade lighter again under the pointer. Three colours
+   mean something and are used for nothing else — gold for the thing you most
+   likely want and for whatever is selected, green for "on" and "can do", red
+   for what cannot be undone. A short gold bar marks every heading.
+
+   Every length is in vw. The game is shown in a 16:9 frame (index.html), so a
+   size in vw is the same share of the screen on any display.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+:root {
+    --bg:         #2a2b2f;   /* a panel */
+    --bg-2:       #202125;   /* set into a panel: headers, lists, fields */
+    --bg-3:       #36383d;   /* raised from it: buttons, cards */
+    --bg-4:       #44474d;   /* the same under the pointer */
+    --edge:       #4b4e55;   /* the line round a control */
+    --edge-soft:  #3a3c42;   /* the line round a panel, and rules */
+    --text:       #eeece8;
+    --text-soft:  #a5a7ad;
+    --gold:       #e8b64a;
+    --gold-deep:  #c8942a;
+    --green:      #6cc070;
+    --green-deep: #3f9a4a;
+    --red:        #d9655a;
+    --red-deep:   #b3443a;
+    --slot:       #1a1b1e;   /* where an item sits */
+    --slot-edge:  #474a51;
+    --scrim:      rgba(14, 15, 17, 0.72);
+
+    --line:   0.1vw;
+    --r:      0.65vw;
+    --shadow: 0 1.1vw 3vw rgba(0, 0, 0, 0.5);
+    /* The faint light along the top edge of anything raised. */
+    --lip:    inset 0 0.08vw 0 rgba(255, 255, 255, 0.07);
+    --font:      "Segoe UI Variable Text", "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+    --font-head: "Segoe UI Variable Display", "Segoe UI Semibold", "Segoe UI", "Inter", "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
 body {
-    font-family: Arial, sans-serif;
-    background-color: #000000;
+    font-family: var(--font);
+    font-size: 1.12vw;
+    color: var(--text);
+    /* The title screen is the pack's gradient (main.js, loadTitleBackground). */
+    background-color: #2a5298;
     background-size: 100%;
     background-repeat: no-repeat;
     margin: 0;
@@ -10,276 +58,409 @@ body {
     height: 100vh;
 }
 
-.hidden {
-    display: none !important;
+.hidden { display: none !important; }
+
+/* ── Panels ───────────────────────────────────────────────────────────────── */
+
+.panel {
+    background: var(--bg);
+    color: var(--text);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: var(--r);
+    box-shadow: var(--shadow), var(--lip);
 }
 
+.panelHeader {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1vw;
+    padding: 0.8vw 1.2vw;
+    border-bottom: var(--line) solid var(--edge-soft);
+    background: var(--bg-2);
+    border-radius: calc(var(--r) - var(--line)) calc(var(--r) - var(--line)) 0 0;
+}
+.panelTitle {
+    display: flex;
+    align-items: center;
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 1.55vw;
+    letter-spacing: 0.01vw;
+}
+/* The gold bar that marks a heading. */
+.panelTitle::before, .popupTitle::before {
+    content: "";
+    flex-shrink: 0;
+    width: 0.28vw;
+    height: 1.25vw;
+    margin-right: 0.7vw;
+    border-radius: 0.2vw;
+    background: var(--gold);
+}
+.headerBtns { display: flex; align-items: center; gap: 0.6vw; }
 
+/* Everything that covers the screen behind a panel. */
+.scrim {
+    position: absolute;
+    inset: 0;
+    background: var(--scrim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9000;
+}
+.scrim.top { z-index: 10000; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+
+.menuButton {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 19vw;
+    padding: 0.8vw 1.8vw;
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 1.4vw;
+    line-height: 1.15;
+    color: var(--text);
+    background: var(--bg-3);
+    border: var(--line) solid var(--edge);
+    border-radius: 0.55vw;
+    box-shadow: var(--lip), 0 0.2vw 0.5vw rgba(0, 0, 0, 0.28);
+    cursor: pointer;
+    margin: 0.4vw;
+    transition: background-color 0.1s, border-color 0.1s, filter 0.1s;
+    white-space: nowrap;
+}
+.menuButton:hover  { background: var(--bg-4); border-color: #62666e; }
+.menuButton:active { filter: brightness(0.88); }
+
+.menuButton.primary        { background: var(--gold); border-color: var(--gold-deep); color: #2b2206; }
+.menuButton.primary:hover  { background: #f1c463; border-color: var(--gold); }
+.menuButton.danger         { background: var(--red-deep); border-color: var(--red); color: #fff; }
+.menuButton.danger:hover   { background: var(--red); }
+.menuButton.quiet          { background: transparent; box-shadow: none; color: var(--text-soft); }
+.menuButton.quiet:hover    { background: var(--bg-3); color: var(--text); }
+.menuButton.big            { font-size: 1.9vw; padding: 1vw 1.8vw; }
+.menuButton.small {
+    min-width: 0;
+    padding: 0.42vw 1.05vw;
+    font-size: 1.02vw;
+    margin: 0;
+    border-radius: 0.45vw;
+    box-shadow: var(--lip);
+}
+
+/* While a controller is the device in use the mouse pointer is put away. */
+body.usingPad { cursor: none; }
+
+/* What a controller (or the Tab key) is on. */
+.padFocus, .menuButton:focus-visible, .segBtn:focus-visible, .settingsTab:focus-visible {
+    outline: 0.22vw solid var(--gold);
+    outline-offset: 0.16vw;
+}
+.invGridSlot.padFocus, .hotbarSlot.padFocus { outline-offset: 0.05vw; }
+
+/* ── Title ────────────────────────────────────────────────────────────────── */
+
+img.logo {
+    display: block;
+    width: 38vw;
+    height: auto;
+    margin: 3.2vw auto 0;
+    position: relative;
+    z-index: 1;
+    filter: drop-shadow(0 0.5vw 1vw rgba(0, 0, 0, 0.4));
+}
+/* While a world loads the logo waits in the middle of the screen. */
+img.logo.Loading { width: 34vw; margin-top: 11vw; }
+
+#TitleScreen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+.titleMenu {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-top: 1.6vw;
+}
+.titleMenu .menuButton { min-width: 22vw; }
+
+#footerText {
+    position: absolute;
+    left: 0; right: 0; bottom: 0.8vw;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    padding: 0 1.2vw;
+    font-size: 0.85vw;
+    color: rgba(255, 255, 255, 0.75);
+    pointer-events: none;
+}
+#versionText {
+    color: var(--text);
+    background: var(--bg);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.4vw;
+    padding: 0.2vw 0.7vw;
+    font-weight: 600;
+}
+#copyrightText { max-width: 60vw; text-align: right; }
+
+/* ── Loading ──────────────────────────────────────────────────────────────── */
 
 .loadingContainer {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 10vw;
-    margin-top: calc(100vh - 10vw);
-    background-color: rgba(0, 0, 0, 0.8);
+    left: 50%;
+    bottom: 5vw;
+    transform: translateX(-50%);
+    width: 52vw;
+    padding: 1.2vw 1.5vw 1.4vw;
     display: flex;
-    justify-content: center;
-    align-items: center;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.8vw;
+    background: var(--bg);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: var(--r);
+    box-shadow: var(--shadow), var(--lip);
     z-index: 9999;
 }
 .loadingText {
-    color: #ffffff;
-    font-size: 1.5vw;
-    margin-bottom: 5vw;
+    font-size: 1.25vw;
+    min-height: 1.6vw;
+    text-align: center;
     animation: fade-in 0.5s ease-in-out;
 }
-.loadingText.fade-out {
-    animation: fade-out 0.5s ease-in-out;
-    opacity: 0;
-}
+.loadingText.fade-out { animation: fade-out 0.5s ease-in-out; opacity: 0; }
 .loadingBar {
-    position: absolute;
-    top: 70%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 95%;
-    height: 2vw;
-    background-color: #3a3a3a;
-    border-radius: 15px;
-    border: 0.2vw solid #b8b8b8;
+    height: 0.9vw;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 1vw;
     overflow: hidden;
 }
-
-#packName {
-    position: absolute;
-    color: #b8b8b8;
-    font-size: 2vw;
-    background-color: rgba(0, 0, 0, 0.8);
-    padding: 0.5vw 1vw;
-    border-radius: 0.5vw;
-    left: 5vw;
-    top: -5vw;
-    animation: fade-in 0.5s ease-in-out;
-    transform: translateY(0) !important;
-}
-#packName.fade-out {
-    animation: fade-out 0.5s ease-in-out;
-    opacity: 0;
-    transform: translateY(0vw) !important;
-}
-
-#versionText{
-    position: absolute;
-    left: -23vw;
-}
-
 .progressBar {
     height: 100%;
-    background-image: linear-gradient(to left, #00af0f, #005204);
-    background-size: 95vw;
     width: 0%;
+    background: linear-gradient(to right, var(--gold-deep), var(--gold));
+    border-radius: 1vw;
+    transition: width 0.2s ease-out;
 }
-
-
-#TitleScreen {
-    font-size: 8vw;
-    color: #ffffff;
-    text-align: center;
-    margin-bottom: 2vw;
-
-    /* width: 60%; */
-
-    /* Break every element into a new line */
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-img.logo {
-    display: block;
-    margin-top: 0;
-    font-weight: bold;
-    margin-left: auto;
-    margin-right: auto;
-    margin-bottom: 3vw;
-    z-index: 1;
-}
-img.logo.Loading {
-    width: 30%;
-    margin-left: 1%;
-    margin-top: -20%;
-}
-img.logo.game {
-    width: 20% !important;
-    margin-top: 0 !important;
-    margin-left: 0 !important;
-    margin-right: 0 !important;
-    margin-bottom: 0 !important;
-    margin-bottom: 0 !important;
-}
-
-#PauseScreen {
+#packName {
     position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    z-index: 700;   /* above the suffocation overlay (540) */
+    left: 1.4vw;
+    top: -1.25vw;
+    padding: 0.15vw 0.8vw;
+    font-size: 0.9vw;
+    font-weight: 600;
+    color: #2b2206;
+    background: var(--gold);
+    border-radius: 0.4vw 0.4vw 0 0;
 }
 
-.menuButton {
-    display: inline-block;
-    width: 20vw;
-    height: 5vw;
-    line-height: 5vw;
-    text-align: center;
+@keyframes fade-in  { from { opacity: 0; transform: translateY(0.4vw); }  to { opacity: 1; transform: none; } }
+@keyframes fade-out { from { opacity: 1; transform: none; }               to { opacity: 0; transform: translateY(-0.4vw); } }
 
-    font-size: 2vw;
-    color: #ffffff;
-    background-color: #3a3a3a;
-
-    border: none;
-    border-radius: 0.5vw;
-    cursor: pointer;
-
-    margin: 0.5vw;
-}
-
-.menuButton:hover {
-    background-color: #646464;
-}
-
-.menuButton:active {
-    background-color: #2f8000;
-}
+/* ── Popups and forms ─────────────────────────────────────────────────────── */
 
 .popup {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background-color: rgba(0, 0, 0);
-    color: #ffffff;
-    padding: 2vw;
-    border-radius: 1vw;
     display: flex;
     flex-direction: column;
     align-items: center;
-    z-index: 10000;
+    gap: 0.5vw;
+    min-width: 30vw;
+    max-width: 46vw;
+    padding: 1.6vw 2vw;
 }
-
+.popup.wide { min-width: 40vw; }
 .popupTitle {
-    font-size: 2vw;
-    margin-bottom: 1vw;
+    display: flex;
+    align-items: center;
+    align-self: flex-start;
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 1.7vw;
 }
-
 .popupMessage {
-    font-size: 1.5vw;
-    margin-bottom: 2vw;
-    background-color: rgba(61, 61, 61, 0.5);
     width: 100%;
-    padding: 2vw;
+    padding: 0.9vw 1.1vw;
+    margin: 0.3vw 0 0.6vw;
+    font-size: 1.15vw;
+    line-height: 1.5;
+    text-align: center;
+    white-space: pre-line;
+    color: var(--text);
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.5vw;
 }
+.popupButtons, .popupRow { display: flex; justify-content: center; gap: 0.7vw; }
+.popupButtons { align-self: flex-end; }
+.popupButtons .menuButton { min-width: 11vw; margin: 0.4vw 0; }
+.popupRow { margin: 0.2vw 0 0.5vw; }
 
-
-@keyframes fade-in {
-    0% {
-        opacity: 0;
-        transform: translateX(5vw);
-    }
-    100% {
-        opacity: 1;
-        transform: translateX(0);
-    }
-}
-@keyframes fade-out {
-    0% {
-        opacity: 1;
-        transform: translateX(0);
-    }
-    100% {
-        opacity: 0;
-        transform: translateX(-5vw);
-    }
-}
-
-
-#gameCanvas, #gameUI {
-    position: absolute;
-    top: 0;
-    left: 0;
+.formGrid {
+    display: grid;
+    grid-template-columns: 11vw 1fr;
+    align-items: center;
+    gap: 0.9vw 1.2vw;
     width: 100%;
-    height: 100%;
+    margin: 0.6vw 0 0.4vw;
+}
+.formLabel { font-weight: 600; font-size: 1.1vw; }
+.formLabel small { display: block; font-weight: normal; font-size: 0.82vw; color: var(--text-soft); }
+
+/* A Flat world's layers (New World): a row each — block, thickness, up, down, remove. */
+.layerList {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25vw;
+    max-height: 10vw;
+    overflow-y: auto;
+    padding: 0.35vw;
+    margin: 0.35vw 0;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.5vw;
+}
+.layerRow { display: flex; align-items: center; gap: 0.4vw; }
+.layerRow .layerSwatch {
+    width: 1.9vw; height: 1.9vw;
+    flex-shrink: 0;
+    border-radius: 0.3vw;
+    border: var(--line) solid rgba(0, 0, 0, 0.5);
+    background-size: cover;
     image-rendering: pixelated;
 }
-
-#gameCanvas {
-    z-index: -10;
+.layerRow .settingsSelect { min-width: 0; padding: 0.3vw 0.5vw; font-size: 1vw; }
+.layerRow .layerBlock { flex: 1; }
+.layerRow .layerDepth { width: 6.4vw; }
+.layerRow .menuButton.small { padding: 0.3vw 0.6vw; min-width: 2vw; }
+.layerRow .menuButton.off { opacity: 0.3; pointer-events: none; }
+.layerTools { display: flex; align-items: center; gap: 0.7vw; }
+.layerTools .formNote { margin: 0; }
+.layerTools .settingsSelect { min-width: 12vw; }
+.flatFeatures { display: flex; gap: 2vw; }
+.featureToggle { display: flex; align-items: center; gap: 0.6vw; font-size: 1.05vw; cursor: pointer; }
+.popup.wide { max-height: 92vh; overflow-y: auto; }
+/* The form can outgrow the screen (a Flat world's layers): its buttons stay in view. */
+.popup.wide .popupButtons {
+    position: sticky;
+    bottom: -1.6vw;
+    align-self: stretch;
+    justify-content: flex-end;
+    margin: 0 -2vw -1.6vw;
+    padding: 0.5vw 2vw 1.2vw;
+    background: var(--bg);
+    border-top: var(--line) solid var(--edge-soft);
+}
+/* In a form the choices share the row evenly. */
+.formGrid .segGroup { display: flex; }
+.formGrid .segGroup .segBtn { flex: 1; text-align: center; }
+.formNote {
+    font-size: 0.95vw;
+    color: var(--text-soft);
+    text-align: center;
+    margin: 0.3vw 0;
 }
 
-#playerInfo {
-    position: absolute;
+.worldFormInput, .settingsSelect {
+    font-family: var(--font);
+    font-size: 1.08vw;
+    color: var(--text);
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge);
+    border-radius: 0.45vw;
+    padding: 0.45vw 0.7vw;
+    outline: none;
+    width: 100%;
+}
+.worldFormInput::placeholder { color: var(--text-soft); }
+.worldFormInput:focus, .settingsSelect:focus { border-color: var(--gold); box-shadow: 0 0 0 0.14vw rgba(232, 182, 74, 0.35); }
+.settingsSelect { width: auto; min-width: 17vw; cursor: pointer; }
+.settingsSelect option { background: var(--bg-2); color: var(--text); }
 
-    margin-left: 0;
-    margin-right: 0;
-    left: 0;
-    right: 0;
-
-    width: 15%;
-    height: 15%;
-
-    background-color: rgba(61, 61, 61, 0.5);
-    border-radius: 0.1vw;
-    color: #ffffff;
+/* A short list of choices, as buttons side by side: built from a
+   <select class="seg"> by main.js (buildSegments), which stays in the page,
+   hidden, and keeps the value. */
+select.seg { display: none; }
+.segGroup {
+    display: inline-flex;
+    gap: 0.18vw;
+    padding: 0.18vw;
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.5vw;
+    background: var(--bg-2);
+}
+.segGroup .segBtn {
+    padding: 0.34vw 0.9vw;
     font-size: 1vw;
-    display: flex;
-    flex-direction: column;
-    /* align-items: center; */
-    justify-content: center;
+    font-weight: 600;
+    color: var(--text-soft);
+    border-radius: 0.35vw;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.1s, color 0.1s;
 }
+.segGroup .segBtn:hover { background: var(--bg-3); color: var(--text); }
+.segGroup .segBtn.on    { background: var(--gold); color: #2b2206; }
 
-#hotbar {
+/* On/off switch */
+.settingsToggle { position: relative; display: inline-block; width: 3.5vw; height: 1.8vw; cursor: pointer; flex-shrink: 0; }
+.settingsToggle input { opacity: 0; width: 0; height: 0; }
+.settingsToggle .track {
+    position: absolute; inset: 0;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge);
+    border-radius: 1vw;
+    transition: background 0.12s, border-color 0.12s;
+}
+.settingsToggle .track::before {
+    content: "";
     position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    border-radius: 0.1vw;
-    display: flex;
-    justify-content: space-around;
-    align-items: center;
+    left: 0.2vw; top: 50%;
+    width: 1.2vw; height: 1.2vw;
+    transform: translateY(-50%);
+    background: var(--text-soft);
+    border-radius: 50%;
+    transition: left 0.12s, background 0.12s;
 }
-.hotbarSlot {
-    width: 3vw;
-    height: 3vw;
-    background-color: rgba(61, 61, 61, 0.5);
-    border-radius: 0.1vw;
-    border: 0.3vw solid #686868;
+.settingsToggle input:checked + .track { background: var(--green-deep); border-color: var(--green); }
+.settingsToggle input:checked + .track::before { left: 1.9vw; background: #fff; }
+
+/* Slider: the part below the handle is filled (--fill, set by main.js). */
+.settingsSlider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 17vw;
+    height: 0.5vw;
+    border-radius: 1vw;
+    background: linear-gradient(to right, var(--gold) 0 var(--fill, 50%), var(--bg-2) var(--fill, 50%) 100%);
+    box-shadow: 0 0 0 var(--line) var(--edge);
+    outline: none;
+    cursor: pointer;
 }
-.hotbarSlot.selected {
-    border-color: #c5c5c5;
+.settingsSlider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 1.35vw; height: 1.35vw;
+    background: var(--text);
+    border: 0.22vw solid var(--gold-deep);
+    border-radius: 50%;
+    box-shadow: 0 0.15vw 0.4vw rgba(0, 0, 0, 0.45);
 }
-.hotbarSlot.offhand, .hotbarSlot.offhand.leftHand {
-    position: absolute;
-    margin-left: -42vw;
-}
-.hotbarSlot.offhand.rightHand {
-    margin-left: 42vw;
+.settingsSlider::-moz-range-thumb {
+    width: 1.1vw; height: 1.1vw;
+    background: var(--text);
+    border: 0.22vw solid var(--gold-deep);
+    border-radius: 50%;
 }
 
-.hotbarSlot img {
-    width:  100%;
-    height: 100%;
-    object-fit: contain;
-    border: none;
-}
-
-/* ── World List Screen ────────────────────────────────────────────────────── */
+/* ── World list ───────────────────────────────────────────────────────────── */
 
 #WorldListScreen {
     position: absolute;
@@ -288,190 +469,372 @@ img.logo.game {
     align-items: center;
     justify-content: center;
 }
-
 #worldListPanel {
     display: flex;
     flex-direction: column;
-    width: 64%;
-    max-width: 70vw;
-    height: 80vh;
-    background: rgba(20, 20, 22, 0.92);
-    border: 0.15vw solid #555;
-    border-radius: 0.8vw;
+    width: 62vw;
+    height: 44vw;
+    max-height: 86vh;
     overflow: hidden;
-    box-shadow: 0 0.5vw 2vw rgba(0,0,0,0.6);
 }
-
-#worldListHeader {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1vw 1.5vw;
-    border-bottom: 0.12vw solid #444;
-    background: rgba(0,0,0,0.3);
-}
-
-#worldListTitle {
-    color: #ffffff;
-    font-size: 1.8vw;
-    font-weight: bold;
-}
-
-.worldListHeaderBtns {
-    display: flex;
-    gap: 0.6vw;
-}
-
-.worldListHeaderBtns .menuButton {
-    width: auto;
-    height: auto;
-    line-height: normal;
-    margin: 0;
-    padding: 0.6vw 1.2vw;
-    font-size: 1.1vw;
-}
-
+.worldListHeaderBtns { display: flex; gap: 0.6vw; }
 #worldListContainer {
     display: flex;
     flex-direction: column;
-    gap: 0.8vw;
-    padding: 1.2vw;
+    gap: 0.6vw;
+    padding: 1.1vw;
     overflow-y: auto;
     flex: 1;
+}
+.listNote {
+    margin: auto;
+    padding: 2vw;
+    font-size: 1.2vw;
+    color: var(--text-soft);
+    text-align: center;
+    line-height: 1.6;
 }
 
 .worldCard {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background-color: rgba(40, 40, 40, 0.9);
-    border: 0.15vw solid #555;
-    border-radius: 0.5vw;
-    padding: 0.8vw 1.2vw;
-    cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
-}
-
-.worldCard:hover {
-    background-color: rgba(80, 80, 80, 0.9);
-    border-color: #88cc88;
-}
-
-.worldCardLeft {
-    display: flex;
-    align-items: center;
     gap: 1vw;
-    min-width: 0;
+    background: var(--bg-3);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.6vw;
+    padding: 0.55vw 0.9vw 0.55vw 0.55vw;
+    cursor: pointer;
+    transition: background-color 0.1s, border-color 0.1s;
 }
-
+.worldCard:hover { background: var(--bg-4); border-color: var(--edge); }
+.worldCardLeft { display: flex; align-items: center; gap: 1vw; min-width: 0; }
 .worldCardThumb {
-    width: 9vw;
-    height: 5vw;
+    width: 9.6vw;
+    height: 5.4vw;
     object-fit: cover;
     border-radius: 0.4vw;
-    background: #111;
-    border: 0.1vw solid #333;
+    border: var(--line) solid rgba(0, 0, 0, 0.5);
+    background: #4f7396;
     flex-shrink: 0;
     image-rendering: auto;
 }
-
-.worldCardThumb.noThumb {
-    visibility: hidden;       /* keep layout stable when a world has no screenshot */
-}
-
+/* No screenshot yet: a patch of sky and ground stands in. */
+.worldCardThumb.noThumb { background: linear-gradient(to bottom, #5b83a8 0 58%, #55865a 58% 100%); }
+.worldCardInfo { display: flex; flex-direction: column; min-width: 0; gap: 0.35vw; }
 .worldCardName {
-    color: #ffffff;
-    font-size: 1.5vw;
-    font-weight: bold;
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 1.35vw;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
-
-.worldCardMeta {
-    color: #aaaaaa;
-    font-size: 0.95vw;
-    margin-top: 0.3vw;
+.worldCardMeta { display: flex; flex-wrap: wrap; gap: 0.35vw; font-size: 0.88vw; color: var(--text-soft); }
+.worldCardMeta .tag {
+    padding: 0.08vw 0.55vw;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.8vw;
+    white-space: nowrap;
 }
+.worldCardMeta .tag.mode { border-color: var(--green-deep); color: #a9e0ac; font-weight: 600; }
+.worldCardBtns { display: flex; align-items: center; gap: 0.5vw; flex-shrink: 0; }
 
-.worldCardInfo {
+/* ── Settings ─────────────────────────────────────────────────────────────── */
+
+#SettingsScreen, #HowToPlayScreen { position: fixed; z-index: 9500; }
+
+#settingsPanelBox {
     display: flex;
     flex-direction: column;
-    min-width: 0;
+    width: 62vw;
+    height: 44vw;
+    max-height: 90vh;
+    overflow: hidden;
 }
-
-.worldCardPlay {
-    font-size: 1.2vw;
-    color: #88cc88;
+.settingsBody { display: flex; flex: 1; min-height: 0; }
+.settingsTabs {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25vw;
+    width: 13.5vw;
+    padding: 0.9vw 0.7vw;
+    background: var(--bg-2);
+    border-right: var(--line) solid var(--edge-soft);
     flex-shrink: 0;
-    margin-left: 1vw;
+}
+.settingsTab {
+    padding: 0.55vw 0.9vw;
+    font-weight: 600;
+    font-size: 1.08vw;
+    color: var(--text-soft);
+    border-radius: 0.45vw;
+    cursor: pointer;
+    position: relative;
+    transition: background-color 0.1s, color 0.1s;
+}
+.settingsTab:hover { background: var(--bg-3); color: var(--text); }
+.settingsTab.active { background: var(--bg-3); color: var(--text); }
+/* The section that is open carries the gold bar. */
+.settingsTab.active::after {
+    content: "";
+    position: absolute;
+    left: 0; top: 22%; bottom: 22%;
+    width: 0.24vw;
+    border-radius: 0.2vw;
+    background: var(--gold);
+}
+.settingsTab.worldTab { margin-top: auto; }
+.settingsTab.worldTab::before {
+    content: "";
+    display: inline-block;
+    width: 0.6vw; height: 0.6vw;
+    margin-right: 0.5vw;
+    border-radius: 50%;
+    background: var(--green);
 }
 
-/* ── World Detail Modal ───────────────────────────────────────────────────── */
+.settingsScroll { flex: 1; overflow-y: auto; padding: 1vw 1.4vw 1.3vw; }
+.settingsPanel { display: flex; flex-direction: column; }
+.settingsSectionTitle {
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 0.92vw;
+    text-transform: uppercase;
+    letter-spacing: 0.1vw;
+    color: var(--text-soft);
+    margin: 1.1vw 0 0.3vw;
+    padding-bottom: 0.3vw;
+    border-bottom: var(--line) solid var(--edge-soft);
+}
+.settingsRow {
+    display: flex;
+    align-items: center;
+    gap: 1vw;
+    min-height: 2.9vw;
+    padding: 0.35vw 0.6vw;
+    font-size: 1.1vw;
+    border-radius: 0.45vw;
+}
+.settingsRow:hover { background: rgba(255, 255, 255, 0.04); }
+.settingsRow.tall { align-items: flex-start; padding-bottom: 0.7vw; }
+.settingsLabel { flex: 1; font-weight: 600; }
+.settingsLabel small {
+    display: block;
+    font-weight: normal;
+    font-size: 0.86vw;
+    color: var(--text-soft);
+    margin-top: 0.08vw;
+}
+.settingsValue {
+    width: 3.6vw;
+    text-align: right;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
 
-#WorldDetailModal, #CreateWorldModal {
+.keyGrid {
+    display: grid;
+    grid-template-columns: 14vw 1fr;
+    gap: 0.55vw 1vw;
+    padding: 0.6vw 0.5vw;
+    font-size: 1.05vw;
+    align-items: center;
+}
+/* Three columns: what it does, the key, the controller. */
+.keyGrid.pad { grid-template-columns: 13vw 1fr 1fr; }
+.keyGrid .keyHead { font-size: 0.86vw; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08vw; color: var(--text-soft); }
+kbd {
+    display: inline-block;
+    font-family: var(--font);
+    font-size: 0.92em;
+    font-weight: 600;
+    padding: 0.04vw 0.5vw;
+    margin: 0 0.1vw;
+    color: var(--text);
+    background: var(--bg-3);
+    border: var(--line) solid var(--edge);
+    border-bottom-width: 0.22vw;
+    border-radius: 0.35vw;
+}
+/* A controller button: round, where a key is square. */
+kbd.pad { border-radius: 1vw; border-bottom-width: var(--line); background: var(--bg-2); color: var(--gold); }
+
+/* ── How to Play ──────────────────────────────────────────────────────────── */
+
+#howToBox {
+    display: flex;
+    flex-direction: column;
+    width: 66vw;
+    height: 44vw;
+    max-height: 90vh;
+    overflow: hidden;
+}
+.howToScroll { flex: 1; overflow-y: auto; padding: 1vw 1.6vw; font-size: 1.03vw; line-height: 1.55; }
+.howToGoal {
+    background: var(--bg-2);
+    border-left: 0.28vw solid var(--gold);
+    border-radius: 0.45vw;
+    padding: 0.8vw 1.1vw;
+    font-size: 1.12vw;
+}
+.howToColumns { display: grid; grid-template-columns: 1fr 1fr; gap: 0 2vw; }
+.howToSectionTitle { font-family: var(--font-head); font-weight: 600; font-size: 1.15vw; color: var(--gold); margin: 0.9vw 0 0.2vw; }
+.howToList { margin: 0; padding-left: 1.3vw; }
+.howToList li { margin: 0.32vw 0; }
+
+/* ── In the game ──────────────────────────────────────────────────────────── */
+
+#gameCanvas, #gameUI {
     position: absolute;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9000;
+}
+#gameCanvas { z-index: -10; }
+#gameUI { pointer-events: none; }
+
+/* A small label over the world. */
+.chip {
+    font-size: 0.92vw;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(26, 27, 30, 0.68);
+    border: var(--line) solid rgba(255, 255, 255, 0.16);
+    border-radius: 0.4vw;
+    padding: 0.18vw 0.65vw;
+    font-variant-numeric: tabular-nums;
 }
 
-#WorldDetailModal .popup,
-#CreateWorldModal .popup {
-    position: static;
-    transform: none;
-    gap: 0.8vw;
-    padding: 2.5vw 3vw;
-}
-
-#worldDeleteBtn:hover { background: #9b2020 !important; }
-
-/* ── Create World Form ────────────────────────────────────────────────────── */
-
-.worldFormRow {
+#playerInfo {
+    position: absolute;
+    left: 1vw; bottom: 1vw;
     display: flex;
     flex-direction: column;
-    width: 100%;
-    gap: 0.3vw;
+    gap: 0.32vw;
+    padding: 0.55vw 0.7vw;
+    background: rgba(26, 27, 30, 0.62);
+    border: var(--line) solid rgba(255, 255, 255, 0.14);
+    border-radius: 0.6vw;
 }
-
-.worldFormLabel {
-    color: #bbbbbb;
-    font-size: 1.1vw;
+.meter { display: flex; align-items: center; gap: 0.5vw; }
+.meter img { width: 1.5vw; height: 1.5vw; image-rendering: pixelated; }
+.meterBar {
+    width: 11vw; height: 0.7vw;
+    background: rgba(0, 0, 0, 0.5);
+    border: var(--line) solid rgba(255, 255, 255, 0.3);
+    border-radius: 0.6vw;
+    overflow: hidden;
 }
+.meterFill { height: 100%; width: 100%; border-radius: 0.5vw; transition: width 0.15s ease-out; }
+.meterFill.health { background: linear-gradient(to bottom, #ef7d70, #d4483b); }
+.meterFill.hunger { background: linear-gradient(to bottom, #f1c463, #cf8f2c); }
+.meterFill.energy { background: linear-gradient(to bottom, #8ad58c, #4aa651); }
+.meterVal { width: 2.1vw; text-align: right; font-size: 0.92vw; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+.chipRow { display: flex; gap: 0.35vw; }
+.chipRow:empty { display: none; }
 
-.worldFormInput {
-    background: #2a2a2a;
-    border: 0.15vw solid #666;
-    border-radius: 0.3vw;
-    color: #ffffff;
-    font-size: 1.3vw;
-    padding: 0.5vw 0.8vw;
-    outline: none;
-    width: 100%;
-    box-sizing: border-box;
+#playerCoords { position: absolute; top: 1vw; right: 1vw; z-index: 120; }
+#fpsCounter   { position: absolute; top: 1vw; left: 1vw;  z-index: 120; color: #b9e6bb; }
+#playerCoords.forceHidden, #crosshair.forceHidden { display: none !important; }
+
+#hotbar {
+    position: absolute;
+    bottom: 0.9vw;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: flex-end;
+    gap: 1vw;
 }
-
-.worldFormInput:focus {
-    border-color: #88cc88;
+.hotbarTray {
+    display: flex;
+    gap: 0.26vw;
+    padding: 0.3vw;
+    background: rgba(26, 27, 30, 0.66);
+    border: var(--line) solid rgba(255, 255, 255, 0.14);
+    border-radius: 0.65vw;
 }
-
-/* ── Crosshair ────────────────────────────────────────────────────────────── */
+.hotbarSlot {
+    position: relative;
+    width: 3.5vw;
+    height: 3.5vw;
+    background: rgba(20, 21, 23, 0.7);
+    border: 0.14vw solid var(--slot-edge);
+    border-radius: 0.45vw;
+    transition: border-color 0.08s, background-color 0.08s;
+}
+.hotbarSlot.selected {
+    border-color: var(--gold);
+    background: rgba(74, 66, 42, 0.85);
+    box-shadow: 0 0 0 0.12vw rgba(232, 182, 74, 0.3);
+}
+.hotbarSlot::after {
+    content: attr(data-key);
+    position: absolute;
+    left: 0.25vw; top: 0.08vw;
+    font-size: 0.66vw;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+}
+.hotbarSlot.offhand { margin-bottom: 0.3vw; border-style: dashed; }
+.hotbarSlot img {
+    width: 100%; height: 100%;
+    padding: 0.3vw;
+    object-fit: contain;
+    image-rendering: pixelated;
+}
+.hotbarSlot img[src=""] { display: none; }
+.hotbarCount, .invGridCount {
+    position: absolute;
+    right: 0.2vw; bottom: 0.05vw;
+    font-size: 0.92vw;
+    font-weight: 700;
+    color: #fff;
+    line-height: 1;
+    pointer-events: none;
+    text-shadow: 0.08vw 0.08vw 0 #000, -0.08vw 0.08vw 0 #000, 0.08vw -0.08vw 0 #000, -0.08vw -0.08vw 0 #000;
+}
 
 #crosshair {
     position: absolute;
-    top: 50%;
-    left: 50%;
+    top: 50%; left: 50%;
     transform: translate(-50%, -50%);
-    width: 1vw;
-    height: 1vw;
-    background-color: transparent;
-    border: 0.2vw solid #ffffff;
+    width: 1.1vw; height: 1.1vw;
+    border: 0.14vw solid rgba(255, 255, 255, 0.9);
+    border-radius: 50%;
+    box-shadow: 0 0 0 0.08vw rgba(0, 0, 0, 0.45), inset 0 0 0 0.08vw rgba(0, 0, 0, 0.45);
+}
+#crosshair::after {
+    content: "";
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 0.22vw; height: 0.22vw;
+    transform: translate(-50%, -50%);
+    background: #fff;
     border-radius: 50%;
 }
 
-/* ── Damage overlays ──────────────────────────────────────────────────────── */
+/* Bars near the crosshair and the hotbar. */
+#attackChargeBar, #mineProgressBar, #eatProgressBar {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.5);
+    border: var(--line) solid rgba(255, 255, 255, 0.4);
+    border-radius: 0.4vw;
+    overflow: hidden;
+    z-index: 100;
+}
+#attackChargeBar { bottom: 5.6vw; width: 12vw; height: 0.5vw; }
+#mineProgressBar { top: calc(50% + 2vw);   width: 10vw; height: 0.6vw; }
+#eatProgressBar  { top: calc(50% + 3vw);   width: 10vw; height: 0.6vw; }
+#attackChargeFill, #mineProgressFill, #eatProgressFill { height: 100%; width: 0%; transition: width 0.05s linear; }
+#attackChargeFill { background: linear-gradient(to right, var(--red), var(--gold)); }
+#mineProgressFill { background: linear-gradient(to right, #b9bcc4, #fff); }
+#eatProgressFill  { background: linear-gradient(to right, var(--gold-deep), #f6dc8b); }
+
+/* ── Damage ───────────────────────────────────────────────────────────────── */
 
 #damageVignette {
     position: absolute;
@@ -479,791 +842,357 @@ img.logo.game {
     pointer-events: none;
     z-index: 500;
     opacity: 0;
-    background: radial-gradient(ellipse at center, transparent 45%, rgba(180,0,0,0.85) 100%);
+    background: radial-gradient(ellipse at center, transparent 45%, rgba(180, 0, 0, 0.85) 100%);
     transition: opacity 0.05s linear;
 }
-
-#actionLines {
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    z-index: 501;
-    opacity: 0;
+#actionLines { position: absolute; inset: 0; pointer-events: none; z-index: 501; opacity: 0; }
+#actionLines.flash { animation: actionFlash 0.25s ease-out forwards; }
+@keyframes actionFlash {
+    0%   { opacity: 1; background: repeating-conic-gradient(rgba(255, 0, 0, 0.18) 0deg 6deg, transparent 6deg 18deg) center/cover; }
+    100% { opacity: 0; }
 }
-
-#actionLines.flash {
-    animation: actionFlash 0.25s ease-out forwards;
-}
-
 #suffocateOverlay {
     position: absolute;
     inset: 0;
     pointer-events: none;
     z-index: 140;                       /* above the HUD, below every menu (550+) */
-    opacity: 1;                         /* fully opaque block fill */
     background-repeat: repeat;
-    background-size: 178vmin 178vmin; /* tiled block texture */
+    background-size: 178vmin 178vmin;   /* tiled block texture */
     image-rendering: pixelated;
 }
 
-@keyframes actionFlash {
-    0%   { opacity: 1; background: repeating-conic-gradient(rgba(255,0,0,0.18) 0deg 6deg, transparent 6deg 18deg) center/cover; }
-    100% { opacity: 0; }
-}
+/* ── Pause and death ──────────────────────────────────────────────────────── */
 
-/* ── Attack charge bar ────────────────────────────────────────────────────── */
-
-#attackChargeBar {
+#PauseScreen {
     position: absolute;
-    bottom: 4.5vw;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 12vw;
-    height: 0.5vw;
-    background: rgba(0,0,0,0.5);
-    border-radius: 0.25vw;
-    overflow: hidden;
-    z-index: 100;
+    inset: 0;
+    background: var(--scrim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 700;   /* above the suffocation overlay */
 }
-
-#attackChargeFill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(to right, #cc4400, #ffaa00);
-    border-radius: 0.25vw;
-    transition: width 0.05s linear;
+.pausePanel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 1.4vw 2.2vw 1.5vw;
 }
-
-/* ── Mining progress bar ──────────────────────────────────────────────────── */
-
-#mineProgressBar {
-    position: absolute;
-    top: calc(50% + 2vw);
-    left: 50%;
-    transform: translateX(-50%);
-    width: 10vw;
-    height: 0.55vw;
-    background: rgba(0,0,0,0.55);
-    border-radius: 0.3vw;
-    overflow: hidden;
-    z-index: 100;
-}
-
-#mineProgressFill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(to right, #888, #fff);
-    border-radius: 0.3vw;
-    transition: width 0.05s linear;
-}
-
-/* ── Eating progress bar ──────────────────────────────────────────────────── */
-
-#eatProgressBar {
-    position: absolute;
-    top: calc(50% + 2.8vw);
-    left: 50%;
-    transform: translateX(-50%);
-    width: 10vw;
-    height: 0.55vw;
-    background: rgba(0,0,0,0.55);
-    border-radius: 0.3vw;
-    overflow: hidden;
-    z-index: 100;
-}
-
-#eatProgressFill {
-    height: 100%;
-    width: 0%;
-    background: linear-gradient(to right, #e07000, #ffe050);
-    border-radius: 0.3vw;
-    transition: width 0.05s linear;
-}
-
-/* ── Hotbar stack count ───────────────────────────────────────────────────── */
-
-.hotbarSlot { position: relative; }
-
-.hotbarCount {
-    position: absolute;
-    right: 0.15vw;
-    bottom: 0.05vw;
+.pauseLogo { width: 15vw; height: auto; margin-bottom: 0.2vw; }
+.pauseTitle {
+    font-family: var(--font-head);
+    font-weight: 600;
     font-size: 1vw;
-    font-weight: bold;
-    color: #fff;
-    line-height: 1;
-    pointer-events: none;
-    text-shadow: 0.08vw 0.08vw 0 #000, -0.08vw 0.08vw 0 #000,
-                 0.08vw -0.08vw 0 #000, -0.08vw -0.08vw 0 #000;
+    letter-spacing: 0.3vw;
+    text-transform: uppercase;
+    color: var(--text-soft);
+    margin-bottom: 0.6vw;
 }
-
-/* ── Player coordinates (top-right) ───────────────────────────────────────── */
-
-#playerCoords {
-    position: absolute;
-    top: 1vw;
-    right: 1.2vw;
-    font-family: monospace;
-    font-size: 1.1vw;
-    color: #fff;
-    text-shadow: 0.1vw 0.1vw 0.2vw #000;
-    z-index: 120;
-    pointer-events: none;
-}
-
-/* ── Software-renderer warning ─────────────────────────────────────────────── */
-
-#gpuWarning {
-    position: fixed;
-    bottom: 2vw;
-    left: 50%;
-    transform: translateX(-50%);
-    max-width: 46vw;
-    font-size: 1vw;
-    line-height: 1.5;
-    color: #ffd9a0;
-    background: rgba(70, 30, 0, 0.88);
-    border: 0.1vw solid #c98a3a;
-    padding: 0.8vw 1.2vw;
-    border-radius: 0.4vw;
-    text-align: center;
-    z-index: 3000;
-    pointer-events: none;
-}
-
-/* ── "Saving World..." indicator (below coords, all screens) ──────────────── */
-
-#savingIndicator {
-    position: fixed;
-    top: 3vw;
-    right: 1.2vw;
-    font-size: 1.1vw;
-    color: #ffe28a;
-    background: rgba(0, 0, 0, 0.45);
-    padding: 0.3vw 0.8vw;
-    border-radius: 0.3vw;
-    text-shadow: 0.05vw 0.05vw 0.1vw #000;
-    z-index: 2000;
-    pointer-events: none;
-    animation: savingPulse 1s ease-in-out infinite;
-}
-
-@keyframes savingPulse {
-    0%, 100% { opacity: 1; }
-    50%      { opacity: 0.55; }
-}
-
-/* ── Death screen ─────────────────────────────────────────────────────────── */
 
 #DeathScreen {
     position: absolute;
     inset: 0;
-    background: rgba(60, 0, 0, 0.82);
+    background: radial-gradient(ellipse at center, rgba(90, 22, 18, 0.74), rgba(22, 8, 8, 0.94));
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     z-index: 600;
 }
-
 .deathTitle {
-    font-size: 5vw;
-    color: #ff4444;
-    font-weight: bold;
-    margin-bottom: 1vw;
-    text-shadow: 0 0 2vw #ff0000;
+    font-family: var(--font-head);
+    font-weight: 700;
+    font-size: 4.6vw;
+    letter-spacing: 0.1vw;
+    color: #fff;
+    text-shadow: 0 0.3vw 1.2vw rgba(0, 0, 0, 0.6);
 }
+.deathSub { font-size: 1.3vw; color: #e9c7c2; margin: 0.6vw 0 2vw; }
 
-.deathSub {
-    font-size: 1.4vw;
-    color: #ccaaaa;
-    margin-bottom: 3vw;
+/* ── Inventory, crafting, creative ────────────────────────────────────────── */
+
+#InventoryScreen { z-index: 560; }
+.invPanel { width: 66vw; display: flex; flex-direction: column; }
+#invWeightLabel { font-family: var(--font); font-size: 0.98vw; font-weight: normal; color: var(--text-soft); margin-left: 0.8vw; }
+.invBody { display: flex; gap: 1.5vw; padding: 1.1vw 1.3vw 0.6vw; }
+.invEquipCol { display: flex; flex-direction: column; gap: 0.35vw; min-width: 12vw; }
+#invEquip { display: flex; flex-direction: column; gap: 0.35vw; }
+.invItemsCol { flex: 1; display: flex; flex-direction: column; gap: 0.45vw; min-width: 0; }
+.invSectionTitle {
+    font-family: var(--font-head);
+    font-weight: 600;
+    font-size: 0.86vw;
+    text-transform: uppercase;
+    letter-spacing: 0.1vw;
+    color: var(--text-soft);
 }
+.invSlotsGrid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3vw;
+    overflow-y: auto;
+    max-height: 17vw;
+    min-height: 8vw;
+    align-content: flex-start;
+    padding: 0.5vw;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.5vw;
+}
+.invHotbarSection { margin-top: 0.3vw; display: flex; flex-direction: column; gap: 0.4vw; }
+.invRow { display: flex; gap: 0.3vw; flex-wrap: wrap; align-items: center; }
+.invRow .invRowLabel { font-size: 0.88vw; color: var(--text-soft); font-weight: 600; margin-right: 0.3vw; }
 
-/* ── Creative Inventory panel ────────────────────────────────────────────── */
-
-#CreativeInventoryPanel {
+.invGridSlot {
+    position: relative;
+    width: 3.7vw;
+    height: 3.7vw;
+    background: var(--slot);
+    border: 0.14vw solid var(--slot-edge);
+    border-radius: 0.4vw;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: border-color 0.06s, background-color 0.06s;
+}
+.invGridSlot:hover { border-color: var(--gold); background: #232428; }
+.invGridSlot.inv-can-drop { border-color: #8fa3e0; }
+.invGridSlot.inv-held { border-color: var(--gold-deep); background: #3d3622; }
+.invGridSlot img { width: 2.7vw; height: 2.7vw; object-fit: contain; image-rendering: pixelated; pointer-events: none; }
+.invGridKeybind {
     position: absolute;
-    top: 50%;
-    left: 50%;
+    top: 0.1vw; left: 0.25vw;
+    font-size: 0.65vw;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    pointer-events: none;
+    line-height: 1;
+}
+/* A name under the picture (the creative list). */
+.invGridKeybind.name {
+    top: auto; bottom: 0.12vw; left: 0; right: 0;
+    font-size: 0.55vw;
+    text-align: center;
+    overflow: hidden;
+    white-space: nowrap;
+    color: rgba(255, 255, 255, 0.78);
+}
+
+/* Equipment slots: a row each, named. */
+.invGridSlot[data-slot-type="equip"] {
+    width: 12vw;
+    height: 2.9vw;
+    justify-content: flex-start;
+    gap: 0.5vw;
+    padding: 0 0.6vw;
+}
+.invGridSlot[data-slot-type="equip"] img { width: 2.1vw; height: 2.1vw; }
+.invGridSlot[data-slot-type="equip"]::before {
+    content: attr(data-slot-index);
+    font-size: 0.82vw;
+    font-weight: 600;
+    color: var(--text-soft);
+    min-width: 3.6vw;
+    text-transform: capitalize;
+}
+.invGridSlot[data-slot-type="equip"] .invGridKeybind { display: none; }
+
+#invTooltip {
+    position: fixed;
+    display: none;
+    pointer-events: none;
+    z-index: 9910;
+    background: var(--bg-2);
+    color: var(--text);
+    border: var(--line) solid var(--edge);
+    border-radius: 0.4vw;
+    box-shadow: 0 0.4vw 1.2vw rgba(0, 0, 0, 0.5);
+    padding: 0.3vw 0.7vw;
+    font-size: 0.98vw;
+    font-weight: 600;
+    text-transform: capitalize;
+    white-space: pre;
+    line-height: 1.5;
+    max-width: 22vw;
+}
+#invCursorItem { position: fixed; pointer-events: none; z-index: 9900; display: none; align-items: center; justify-content: center; }
+#invCursorItem img { width: 2.6vw; height: 2.6vw; image-rendering: pixelated; filter: drop-shadow(0 0.2vw 0.3vw rgba(0, 0, 0, 0.6)); }
+#invCursorItem span { position: absolute; right: 0; bottom: 0; font-size: 0.85vw; font-weight: 700; color: #fff; text-shadow: 0.08vw 0.08vw 0 #000; }
+
+#InteractivePanel, #CreativeInventoryPanel {
+    position: absolute;
+    top: 50%; left: 50%;
     transform: translate(-50%, -50%);
     width: 62vw;
-    max-height: 80vh;
-    background: rgba(10, 10, 10, 0.96);
-    border: 0.15vw solid #444;
-    border-radius: 1vw;
+    max-height: 86vh;
     display: flex;
     flex-direction: column;
     z-index: 550;
     overflow: hidden;
-    padding: 1.5vw;
-    gap: 0.8vw;
 }
-
+#creativeInvFilter { width: 17vw; }
 #creativeInvGrid {
     display: flex;
     flex-wrap: wrap;
     gap: 0.3vw;
     overflow-y: auto;
-    max-height: 56vh;
-    padding-right: 0.4vw;
-}
-
-/* ── Interactive block panel (crafting, chests, etc.) ─────────────────────── */
-
-#InteractivePanel {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    width: 60vw;
-    max-height: 80vh;
-    background: rgba(10, 10, 10, 0.96);
-    border: 0.15vw solid #444;
-    border-radius: 1vw;
-    display: flex;
-    flex-direction: column;
-    z-index: 550;
-    overflow: hidden;
-    padding: 1.5vw;
-    gap: 1vw;
-}
-
-.interactiveHeader {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    border-bottom: 0.1vw solid #333;
-    padding-bottom: 0.8vw;
-    font-size: 1.8vw;
-    color: #fff;
-}
-
-#craftingContainer {
-    display: flex;
-    gap: 1.5vw;
-    flex: 1;
-    overflow: hidden;
-}
-
-#recipeList {
-    width: 40%;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4vw;
-}
-
-.recipeListItem {
-    padding: 0.6vw 1vw;
-    background: rgba(50,50,50,0.8);
-    border-radius: 0.4vw;
-    display: flex;
-    align-items: center;
-    color: #ddd;
-    font-size: 1.1vw;
-    cursor: pointer;
-    border: 0.1vw solid transparent;
-}
-
-.recipeListItem:hover  { background: rgba(80,80,80,0.8); }
-.recipeListItem.active { border-color: #88cc88; color: #fff; }
-.recipeListItem.locked { color: #666; cursor: default; }
-
-#recipeDetail {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.6vw;
-}
-
-#recipeDetailName {
-    font-size: 1.6vw;
-    color: #fff;
-    font-weight: bold;
-}
-
-#recipeDetailIngredients {
-    font-size: 1.1vw;
-    color: #bbb;
-    line-height: 1.8;
-    flex: 1;
-}
-
-/* ── Settings screen ──────────────────────────────────────────────────────── */
-
-#SettingsScreen {
-    position: fixed;
-    inset: 0;
-    z-index: 9500;
-    background: rgba(0, 0, 0, 0.85);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-#settingsPanelBox {
-    display: flex;
-    flex-direction: column;
-    width: 50vw;
-    height: 82vh;
-    background: rgba(20, 20, 22, 0.96);
-    border: 0.15vw solid #555;
-    border-radius: 0.8vw;
-    overflow: hidden;
-    box-shadow: 0 0.5vw 2vw rgba(0,0,0,0.6);
-}
-
-.settingsHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1vw 1.5vw;
-    border-bottom: 0.12vw solid #444;
-    color: #fff;
-    font-size: 1.7vw;
-    font-weight: bold;
-}
-
-.settingsHeader .menuButton {
-    width: auto; height: auto; line-height: normal; margin: 0;
-    padding: 0.5vw 1.2vw; font-size: 1.1vw;
-}
-
-.settingsTabs {
-    display: flex;
-    gap: 0.4vw;
-    padding: 0.8vw 1.5vw 0;
-}
-
-.settingsTab {
-    padding: 0.5vw 1.6vw;
-    background: #2a2a2a;
-    color: #aaa;
-    border-radius: 0.4vw 0.4vw 0 0;
-    cursor: pointer;
-    font-size: 1.15vw;
-    border-bottom: 0.2vw solid transparent;
-}
-
-.settingsTab.active {
-    background: #444;
-    color: #fff;
-    border-bottom-color: #88cc88;
-}
-
-.settingsScroll {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1.2vw 1.5vw;
-}
-
-.settingsPanel {
-    display: flex;
-    flex-direction: column;
-    gap: 0.7vw;
-}
-
-.settingsSectionTitle {
-    color: #88cc88;
-    font-size: 1.25vw;
-    font-weight: bold;
-    margin-top: 0.8vw;
-    padding-bottom: 0.3vw;
-    border-bottom: 0.1vw solid #383838;
-}
-.settingsSectionTitle:first-child { margin-top: 0; }
-
-.settingsRow {
-    display: flex;
-    align-items: center;
-    gap: 1vw;
-    color: #ddd;
-    font-size: 1.1vw;
-    padding: 0.2vw 0.3vw;
-}
-
-.settingsLabel { flex: 1; }
-
-.settingsSlider {
-    width: 14vw;
-    accent-color: #88cc88;
-}
-
-.settingsValue {
-    width: 4vw;
-    text-align: right;
-    color: #88cc88;
-    font-size: 1.1vw;
-}
-
-.settingsSelect {
-    background: #2a2a2a;
-    color: #fff;
-    border: 0.1vw solid #555;
-    border-radius: 0.3vw;
-    padding: 0.4vw 0.6vw;
-    font-size: 1vw;
-    min-width: 12vw;
-}
-
-/* Toggle switch */
-.settingsToggle { position: relative; display: inline-block; width: 3.4vw; height: 1.7vw; cursor: pointer; }
-.settingsToggle input { opacity: 0; width: 0; height: 0; }
-.settingsToggle .track {
-    position: absolute; inset: 0; background: #555; border-radius: 1vw;
-    transition: background 0.15s;
-}
-.settingsToggle .track::before {
-    content: ""; position: absolute; height: 1.3vw; width: 1.3vw; left: 0.2vw; top: 0.2vw;
-    background: #ddd; border-radius: 50%; transition: transform 0.15s;
-}
-.settingsToggle input:checked + .track { background: #2f8000; }
-.settingsToggle input:checked + .track::before { transform: translateX(1.7vw); }
-
-/* HUD elements force-hidden by settings (overrides their normal display) */
-#playerCoords.forceHidden, #crosshair.forceHidden { display: none !important; }
-
-#fpsCounter {
-    position: absolute;
-    top: 1vw;
-    left: 1.2vw;
-    font-family: monospace;
-    font-size: 1.1vw;
-    color: #9f9;
-    text-shadow: 0.1vw 0.1vw 0.2vw #000;
-    z-index: 120;
-    pointer-events: none;
-}
-
-/* ── Accessibility ────────────────────────────────────────────────────────── */
-body.a11y-reduce *, body.a11y-reduce *::before, body.a11y-reduce *::after {
-    animation-duration: 0.001s !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001s !important;
-}
-body.a11y-large-text .settingsRow,
-body.a11y-large-text .worldCardName,
-body.a11y-large-text #playerInfo,
-body.a11y-large-text .menuButton { font-size: 1.25em; }
-body.a11y-contrast .worldCard,
-body.a11y-contrast .settingsSelect,
-body.a11y-contrast #worldListPanel,
-body.a11y-contrast #settingsPanelBox { border-color: #fff !important; }
-body.a11y-contrast .worldCardMeta,
-body.a11y-contrast .settingsRow { color: #fff !important; }
-body.a11y-contrast #playerInfo,
-body.a11y-contrast #playerCoords,
-body.a11y-contrast #fpsCounter { background: #000; }
-
-/* ── How To Play ──────────────────────────────────────────────────────────── */
-
-#HowToPlayScreen {
-    position: fixed;
-    inset: 0;
-    z-index: 9500;
-    background: rgba(0, 0, 0, 0.85);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-#howToBox {
-    display: flex;
-    flex-direction: column;
-    width: 52vw;
-    height: 82vh;
-    background: rgba(20, 20, 22, 0.96);
-    border: 0.15vw solid #555;
-    border-radius: 0.8vw;
-    overflow: hidden;
-    box-shadow: 0 0.5vw 2vw rgba(0,0,0,0.6);
-}
-
-.howToHeader {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 1vw 1.5vw;
-    border-bottom: 0.12vw solid #444;
-    color: #fff;
-    font-size: 1.7vw;
-    font-weight: bold;
-}
-.howToHeader .menuButton {
-    width: auto; height: auto; line-height: normal; margin: 0;
-    padding: 0.5vw 1.2vw; font-size: 1.1vw;
-}
-
-.howToScroll {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1.2vw 1.8vw;
-    color: #ddd;
-    font-size: 1.1vw;
-    line-height: 1.5;
-}
-
-.howToGoal {
-    background: rgba(47, 128, 0, 0.18);
-    border: 0.1vw solid #2f8000;
+    max-height: 30vw;
+    margin: 1.1vw 1.2vw 0.2vw;
+    padding: 0.5vw;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
     border-radius: 0.5vw;
-    padding: 1vw 1.2vw;
-    font-size: 1.2vw;
-    line-height: 1.5;
-    color: #eaffea;
-}
-
-.howToSectionTitle {
-    color: #88cc88;
-    font-size: 1.35vw;
-    font-weight: bold;
-    margin: 1.2vw 0 0.4vw;
-}
-
-.howToList {
-    margin: 0;
-    padding-left: 1.6vw;
-}
-.howToList li { margin: 0.35vw 0; }
-.howToList b { color: #fff; }
-
-/* ── Inventory Screen ─────────────────────────────────────────────────────── */
-
-#InventoryScreen {
-    position: absolute;
-    inset: 0;
-    z-index: 560;
-    background: rgba(5, 5, 10, 0.93);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 1.5vw;
-    user-select: none;
-}
-
-.invHeader {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    width: 72vw;
-    font-size: 1.8vw;
-    color: #fff;
-    margin-bottom: 0.8vw;
-    border-bottom: 0.1vw solid #333;
-    padding-bottom: 0.5vw;
-}
-
-.invBody {
-    display: flex;
-    gap: 1.5vw;
-    width: 72vw;
-    max-height: 80vh;
-    overflow: hidden;
-}
-
-.invEquipCol {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3vw;
-    min-width: 11vw;
-}
-
-.invItemsCol {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5vw;
-    overflow: hidden;
-}
-
-.invSectionTitle {
-    color: #aaa;
-    font-size: 0.9vw;
-    text-transform: uppercase;
-    letter-spacing: 0.08vw;
-    margin-bottom: 0.2vw;
-}
-
-/* ── Grid slots (inventory + hotbar) ── */
-
-.invSlotsGrid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.25vw;
-    overflow-y: auto;
-    max-height: 42vh;
     align-content: flex-start;
 }
 
-.invHotbarSection {
-    border-top: 0.1vw solid #333;
-    padding-top: 0.5vw;
-    margin-top: 0.2vw;
+#craftingContainer { display: flex; gap: 1.2vw; padding: 1.1vw 1.2vw; min-height: 22vw; max-height: 34vw; }
+#recipeList {
+    width: 44%;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25vw;
+    padding: 0.45vw;
+    background: var(--bg-2);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.5vw;
 }
-
-.invGridSlot {
-    position: relative;
-    width: 3.6vw;
-    height: 3.6vw;
-    background: rgba(35,35,35,0.9);
-    border: 0.12vw solid #555;
-    border-radius: 0.2vw;
+.recipeListItem {
     display: flex;
     align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    box-sizing: border-box;
-    transition: border-color 0.08s;
-    overflow: visible;
-}
-
-.invGridSlot:hover {
-    border-color: #aaa;
-    background: rgba(60,60,60,0.9);
-}
-
-.invGridSlot.inv-can-drop {
-    border-color: #88a;
-}
-
-.invGridSlot.inv-held {
-    border-color: #f80;
-    background: rgba(80,50,10,0.7);
-}
-
-.invGridSlot img {
-    width: 2.6vw;
-    height: 2.6vw;
-    object-fit: contain;
-    image-rendering: pixelated;
-    pointer-events: none;
-}
-
-.invGridCount {
-    position: absolute;
-    bottom: 0.1vw;
-    right: 0.2vw;
-    font-size: 0.75vw;
-    color: #fff;
-    text-shadow: 0 0 2px #000, 1px 1px 0 #000;
-    pointer-events: none;
-    line-height: 1;
-}
-
-.invGridKeybind {
-    position: absolute;
-    top: 0.1vw;
-    left: 0.2vw;
-    font-size: 0.65vw;
-    color: #888;
-    pointer-events: none;
-    line-height: 1;
-}
-
-/* Equipment slots (taller, labelled) */
-.invGridSlot[data-slot-type="equip"] {
-    width: 10.5vw;
-    height: 2.8vw;
-    flex-direction: row;
-    justify-content: flex-start;
-    gap: 0.4vw;
-    padding: 0 0.5vw;
-    background: rgba(25,25,45,0.9);
-    border-color: #446;
-}
-
-.invGridSlot[data-slot-type="equip"] img {
-    width: 2vw;
-    height: 2vw;
-}
-
-.invGridSlot[data-slot-type="equip"]::before {
-    content: attr(data-slot-index);
-    font-size: 0.8vw;
-    color: #666;
-    min-width: 3.5vw;
+    gap: 0.5vw;
+    padding: 0.35vw 0.7vw;
+    font-size: 1.02vw;
+    font-weight: 600;
     text-transform: capitalize;
-}
-
-/* Inventory tooltip */
-#invTooltip {
-    position: fixed;
-    display: none;
-    pointer-events: none;
-    z-index: 910;
-    background: rgba(15, 15, 20, 0.96);
-    border: 0.1vw solid #555;
+    background: var(--bg-3);
+    border: var(--line) solid transparent;
     border-radius: 0.4vw;
-    padding: 0.4vw 0.7vw;
-    color: #eee;
-    font-size: 1vw;
-    white-space: pre;
-    line-height: 1.5;
-    max-width: 20vw;
+    cursor: pointer;
 }
+.recipeListItem img, .ingredient img { width: 1.7vw; height: 1.7vw; image-rendering: pixelated; }
+.recipeListItem:hover  { background: var(--bg-4); }
+.recipeListItem.active { background: var(--gold); color: #2b2206; }
+/* Missing something for it. */
+.recipeListItem.locked { color: var(--text-soft); background: transparent; border: var(--line) dashed var(--edge); font-weight: normal; }
+.recipeListItem.locked img { opacity: 0.5; }
+.recipeListItem.locked.active { background: var(--bg-3); color: var(--text); border-color: var(--gold-deep); }
 
-/* Cursor item (follows mouse) */
-#invCursorItem {
+#recipeDetail { flex: 1; display: flex; flex-direction: column; gap: 0.6vw; padding: 0.3vw 0.4vw; }
+#recipeDetailName { display: flex; align-items: center; gap: 0.5vw; font-family: var(--font-head); font-weight: 600; font-size: 1.4vw; min-height: 2.4vw; }
+#recipeDetailName img { width: 2.2vw; height: 2.2vw; image-rendering: pixelated; }
+#recipeDetailName .count { font-family: var(--font); font-weight: normal; font-size: 1.05vw; color: var(--text-soft); }
+#recipeDetailIngredients { flex: 1; font-size: 1.05vw; }
+#recipeDetailIngredients:empty::before { content: "Pick something to make from the list."; color: var(--text-soft); }
+.ingredient { display: flex; align-items: center; gap: 0.5vw; margin-bottom: 0.3vw; text-transform: capitalize; font-weight: 600; }
+.ingredient.have { color: #9bdb9e; }
+.ingredient.need { color: #f09a90; }
+.ingredient .owned { font-weight: normal; font-size: 0.9vw; color: var(--text-soft); text-transform: none; }
+#craftBtn { align-self: flex-start; margin-left: 0; }
+#craftBtn.cannot { opacity: 0.4; cursor: default; pointer-events: none; }
+
+/* ── Notices ──────────────────────────────────────────────────────────────── */
+
+#savingIndicator {
     position: fixed;
+    top: 3.2vw; right: 1vw;
+    color: #f6dc8b;
+    z-index: 2000;
     pointer-events: none;
-    z-index: 900;
-    display: none;
-    align-items: center;
-    justify-content: center;
+    animation: savingPulse 1s ease-in-out infinite;
+}
+@keyframes savingPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+
+/* A controller was plugged in or taken out. */
+#padNotice {
     position: fixed;
+    top: 1vw; left: 50%;
+    transform: translateX(-50%);
+    z-index: 9700;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.25s;
 }
+#padNotice.show { opacity: 1; }
 
-/* ── World Settings Modal ─────────────────────────────────────────────────── */
-
-#WorldSettingsModal {
-    position: absolute;
-    top: 0; left: 0;
-    width: 100%; height: 100%;
-    background: rgba(0,0,0,0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 9000;
+#gpuWarning {
+    position: fixed;
+    bottom: 2vw; left: 50%;
+    transform: translateX(-50%);
+    max-width: 46vw;
+    font-size: 0.98vw;
+    line-height: 1.5;
+    text-align: center;
+    color: var(--text);
+    background: var(--bg);
+    border: var(--line) solid var(--gold-deep);
+    border-left-width: 0.28vw;
+    border-radius: 0.5vw;
+    box-shadow: var(--shadow);
+    padding: 0.7vw 1.2vw;
+    z-index: 3000;
+    pointer-events: none;
 }
-
-#WorldSettingsModal .popup {
-    position: static;
-    transform: none;
-    gap: 0.8vw;
-    padding: 2.5vw 3vw;
-}
-/* ── Update banner ─────────────────────────────────────────────────────────── */
-/* Deliberately follows the existing vw-based conventions of this file so a
-   later restyle can pick it up with everything else. */
 
 #updateBanner {
     position: fixed;
-    top: 1.2vw;
-    left: 50%;
+    top: 1.1vw; left: 50%;
     transform: translateX(-50%);
     display: flex;
     align-items: center;
     gap: 1vw;
     max-width: 60vw;
-    padding: 0.7vw 1.2vw;
-    font-size: 1.1vw;
-    color: #e9edf2;
-    background: rgba(20, 26, 34, 0.95);
-    border: 0.1vw solid #88cc88;
-    border-radius: 0.4vw;
-    box-shadow: 0 0.4vw 1.2vw rgba(0, 0, 0, 0.55);
-    z-index: 4000;
+    padding: 0.45vw 0.55vw 0.45vw 1.1vw;
+    font-size: 1.02vw;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--bg);
+    border: var(--line) solid var(--green-deep);
+    border-left-width: 0.28vw;
+    border-radius: 0.5vw;
+    box-shadow: var(--shadow);
+    z-index: 9800;
 }
 
-#updateBanner .updateBannerBtn {
-    width: auto;
-    height: auto;
-    line-height: normal;
-    margin: 0;
-    padding: 0.45vw 1.1vw;
-    font-size: 1vw;
-    background: #2f8000;
+/* ── Scrollbars ───────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 0.7vw; height: 0.7vw; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+    background: var(--edge);
+    border: 0.16vw solid transparent;
+    background-clip: content-box;
+    border-radius: 0.6vw;
 }
-#updateBanner .updateBannerBtn:hover { background: #3da000; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-soft); background-clip: content-box; }
+
+/* ── Accessibility ────────────────────────────────────────────────────────── */
+
+body.a11y-reduce *, body.a11y-reduce *::before, body.a11y-reduce *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+}
+body.a11y-large-text { font-size: 1.32vw; }
+body.a11y-large-text .settingsRow,
+body.a11y-large-text .howToScroll,
+body.a11y-large-text .popupMessage,
+body.a11y-large-text .recipeListItem,
+body.a11y-large-text .chip,
+body.a11y-large-text .meterVal,
+body.a11y-large-text .segGroup .segBtn,
+body.a11y-large-text .settingsTab { font-size: 1.3vw; }
+body.a11y-large-text .settingsLabel small, body.a11y-large-text .formNote, body.a11y-large-text .worldCardMeta { font-size: 1.05vw; }
+body.a11y-large-text .menuButton.small { font-size: 1.22vw; }
+/* High contrast: white on black, heavier lines, no see-through. */
+body.a11y-contrast {
+    --bg: #000; --bg-2: #000; --bg-3: #1c1c1c; --bg-4: #333;
+    --edge: #fff; --edge-soft: #fff; --text: #fff; --text-soft: #e6e6e6;
+    --gold: #ffd24a; --green: #7dff86; --red: #ff7a6e;
+    --slot: #000; --slot-edge: #fff;
+    --line: 0.18vw; --scrim: rgba(0, 0, 0, 0.9);
+}
+body.a11y-contrast .chip, body.a11y-contrast #playerInfo, body.a11y-contrast .hotbarTray { background: #000; border-color: #fff; }
+body.a11y-contrast .hotbarSlot { background: #000; border-color: #fff; }
+body.a11y-contrast .hotbarSlot.selected { border-color: var(--gold); }

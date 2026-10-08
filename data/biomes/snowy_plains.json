@@ -1,39 +1,51 @@
 {
   "name": "SNOWY_PLAINS",
-  "temperature": 0.1,
-  "humidity": 0.3,
-  "baseHeight": 64,
-  "heightVariation": 20,
-  "heightOctaves": 5,
-  "heightFrequency": 0.0022,
-  "mountainBlend": 0.06,
-  "surfaceBlock": "SNOW",
-  "subsurfaceBlock": "SNOW_DIRT",
-  "stoneBlock": "STONE",
-  "deepBlock": "DIORITE",
-  "structures": {
-    "tree": {
-      "frequency": 0.004,
-      "minSpacing": 6,
-      "spawnInWater": false
-    }
+  "category": "land",
+  "temperature": 0.06,
+  "humidity": 0.25,
+  "mapColor": "#f0f4f8",
+  "select": {
+    "temperature": [
+      -0.3,
+      0.14
+    ],
+    "humidity": [
+      0,
+      0.36
+    ],
+    "elevation": [
+      58,
+      135
+    ]
   },
-  "ores": [
-    {
-      "block": "COAL_ORE",
-      "minY": -90,
-      "maxY": 279,
-      "frequency": 0.0072,
-      "minSize": 4,
-      "maxSize": 14
+  "surface": {
+    "top": "SNOW_DIRT",
+    "layers": [
+      {
+        "block": "DIRT",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW_DIRT",
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
     },
-    {
-      "block": "IRON_ORE",
-      "minY": -128,
-      "maxY": 200,
-      "frequency": 0.008,
-      "minSize": 3,
-      "maxSize": 10
+    "deep": null
+  },
+  "structures": {
+    "spruce_tree": {
+      "frequency": 0.0008
     }
-  ]
+  }
 }

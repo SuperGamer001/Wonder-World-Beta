@@ -13,8 +13,8 @@
  * cloud cores rain hardest, exactly under the clouds that are drawn.
  *
  * Nothing falls through roofs, trees or into caves: a heightmap of the highest
- * block in each column around the player (RainHeightmap) hides particles below
- * it, and splashes sit on it — on water too.
+ * block in each column around the player (RainHeightmap, fed by the mesh
+ * workers) hides particles below it, and splashes sit on it — on water too.
  *
  * Density scales with Graphics → Particles (particles.scale), as Particles.js
  * asks of weather. Off means no weather particles; the fog, sound and wet
@@ -22,10 +22,9 @@
  */
 
 import * as THREE from 'three';
-import { ATMOS_GLSL } from './AtmosGLSL.js';
-import { CHUNK_SIZE, CHUNK_SHIFT, WORLD_MIN_Y } from './engine/ChunkData.js';
+import { ATMOS_GLSL, OUTPUT_GLSL } from './AtmosGLSL.js';
+import { CHUNK_SIZE, CHUNK_SHIFT } from './engine/ChunkData.js';
 import { WorldState } from './engine/WorldState.js';
-import { gridHeightAt } from './engine/SmoothShape.js';
 import { PRECIP, PELLET_SIZE, DUST, ASH, precipShares } from './engine/Weather.js';
 
 // ── Heightmap ─────────────────────────────────────────────────────────────────
@@ -38,8 +37,14 @@ const NO_GROUND = -1e4;
  * Height of the rain-stopping surface in each column around the player: the top
  * of the highest non-air block (leaves, glass and water included). In smooth
  * worlds a deformed top voxel contributes its actual surface height at the
- * column centre. Per-chunk results are cached and dropped when the chunk is
- * re-meshed (invalidate), and at most `budget` chunks are computed per frame.
+ * column centre.
+ *
+ * The heights are worked out by the worker with each mesh job (`geo.rain`, see
+ * worldWorker) and handed in through setChunk. They used to be computed here,
+ * on the render thread, a couple of chunks per frame — in smooth worlds that
+ * meant evaluating hundreds of smooth shapes per chunk against the live world,
+ * which was a third of the main thread's time while new terrain streamed in.
+ * The worker has those shapes already from meshing the chunk.
  */
 export class RainHeightmap {
     constructor() {
@@ -50,15 +55,12 @@ export class RainHeightmap {
         this.texture.needsUpdate = true;
         this.rect = new THREE.Vector4(0, 0, HM_SIZE, 0);   // x0, z0, size
         this.cache = new Map();                             // chunk key → Float32Array(256)
-        this.world = null;
-        this.smooth = null;
         this.cx0 = null; this.cz0 = null;
         this._stale = true;
     }
 
-    setWorld(world, smooth) {
-        this.world = world;
-        this.smooth = smooth;
+    /** Forget every chunk (world load / quit). */
+    reset() {
         this.cache.clear();
         this.data.fill(NO_GROUND);
         this.texture.needsUpdate = true;
@@ -66,34 +68,35 @@ export class RainHeightmap {
         this._stale = true;
     }
 
-    invalidate(cx, cz) {
-        if (this.cache.delete(WorldState.key(cx, cz))) this._stale = true;
+    _inWindow(cx, cz) {
+        return this.cx0 !== null && cx >= this.cx0 && cx < this.cx0 + HM_CHUNKS &&
+               cz >= this.cz0 && cz < this.cz0 + HM_CHUNKS;
     }
 
-    _compute(chunk, cx, cz) {
+    /**
+     * Rain heights of chunk (cx, cz), from its latest mesh job: world Y per
+     * column, x fastest, NaN where the column is empty.
+     */
+    setChunk(cx, cz, heights) {
+        if (!heights) return;
         const out = new Float32Array(CHUNK_SIZE * CHUNK_SIZE);
-        const smooth = this.smooth;
-        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-            for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-                const ly = chunk.columnTop(lx, lz);
-                let h = NO_GROUND;
-                if (ly >= 0) {
-                    const y = WORLD_MIN_Y + ly;
-                    h = y + 1;
-                    if (smooth && smooth.isMesh(chunk.getVoxel(lx, ly, lz))) {
-                        const shape = smooth.shapeAt((cx << CHUNK_SHIFT) + lx, y, (cz << CHUNK_SHIFT) + lz);
-                        if (shape) h = y + gridHeightAt(shape.top, 0.5, 0.5);
-                    }
-                }
-                out[lx + lz * CHUNK_SIZE] = h;
-            }
+        for (let i = 0; i < out.length; i++) {
+            const h = heights[i];
+            out[i] = h === h ? h : NO_GROUND;
         }
-        return out;
+        this.cache.set(WorldState.key(cx, cz), out);
+        if (this._inWindow(cx, cz)) this._stale = true;
     }
 
-    /** Recentre on the player and fill in missing chunks, a few per call. */
-    update(px, pz, budget = 2) {
-        if (!this.world) return;
+    /** Chunk `key` ("cx,cz") unloaded. */
+    drop(key) {
+        if (!this.cache.delete(key)) return;
+        const c = key.indexOf(',');
+        if (this._inWindow(+key.slice(0, c), +key.slice(c + 1))) this._stale = true;
+    }
+
+    /** Recentre on the player; rebuild the texture if anything in the window changed. */
+    update(px, pz) {
         const half = HM_CHUNKS >> 1;
         const cx0 = (Math.floor(px) >> CHUNK_SHIFT) - half;
         const cz0 = (Math.floor(pz) >> CHUNK_SHIFT) - half;
@@ -101,17 +104,6 @@ export class RainHeightmap {
             this.cx0 = cx0; this.cz0 = cz0;
             this.rect.set(cx0 * CHUNK_SIZE, cz0 * CHUNK_SIZE, HM_SIZE, 0);
             this._stale = true;
-        }
-        for (let j = 0; j < HM_CHUNKS && budget > 0; j++) {
-            for (let i = 0; i < HM_CHUNKS && budget > 0; i++) {
-                const cx = cx0 + i, cz = cz0 + j, key = WorldState.key(cx, cz);
-                if (this.cache.has(key)) continue;
-                const chunk = this.world.getChunk(cx, cz);
-                if (!chunk?.generated) continue;
-                this.cache.set(key, this._compute(chunk, cx, cz));
-                this._stale = true;
-                budget--;
-            }
         }
         if (this._stale) this._assemble();
     }
@@ -239,7 +231,7 @@ void main() {
 }
 `;
 
-const FRAG = `
+const FRAG = OUTPUT_GLSL + `
 uniform int   uKind;
 uniform vec3  uColor;
 uniform float uOpacity;
@@ -257,7 +249,7 @@ void main() {
     else                 a = 1.0 - smoothstep(0.3, 1.0, length(c));
     a *= vAlpha * uOpacity * (1.0 - vFog * 0.75);
     if (a < 0.01) discard;
-    fragColor = vec4(mix(uColor, vFogCol, vFog), a);
+    fragColor = displayOut(vec4(mix(uColor, vFogCol, vFog), a));
 }
 `;
 

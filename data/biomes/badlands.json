@@ -1,0 +1,92 @@
+{
+  "name": "BADLANDS",
+  "category": "land",
+  "temperature": 0.88,
+  "humidity": 0.12,
+  "mapColor": "#d94515",
+  "select": {
+    "temperature": [
+      0.64,
+      1.2
+    ],
+    "humidity": [
+      -0.2,
+      0.36
+    ],
+    "elevation": [
+      58,
+      320
+    ],
+    "plateau": [
+      0.2,
+      1
+    ]
+  },
+  "surface": {
+    "top": "RED_SAND",
+    "layers": [
+      {
+        "block": "RED_SAND",
+        "depth": 1
+      },
+      {
+        "block": "RED_SANDSTONE",
+        "depth": 3
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "steep": {
+      "top": "TERRACOTTA",
+      "layers": [
+        {
+          "block": "TERRACOTTA",
+          "depth": 1
+        }
+      ]
+    },
+    "underwater": {
+      "top": "RED_SAND",
+      "layers": [
+        {
+          "block": "RED_SAND",
+          "depth": 3
+        }
+      ]
+    },
+    "bands": [
+      "TERRACOTTA",
+      "ORANGE_TERRACOTTA",
+      "TERRACOTTA",
+      "YELLOW_TERRACOTTA",
+      "WHITE_TERRACOTTA",
+      "TERRACOTTA",
+      "RED_TERRACOTTA",
+      "BROWN_TERRACOTTA",
+      "ORANGE_TERRACOTTA",
+      "TERRACOTTA",
+      "RED_TERRACOTTA",
+      "YELLOW_TERRACOTTA"
+    ],
+    "bandDepth": 48
+  },
+  "weather": {
+    "precipitation": 0.1,
+    "dusty": 0.8
+  },
+  "structures": {
+    "cactus": {
+      "frequency": 0.0012
+    }
+  },
+  "ores": [
+    {
+      "block": "GOLD_ORE",
+      "minY": 30,
+      "maxY": 150,
+      "frequency": 0.004,
+      "minSize": 2,
+      "maxSize": 7
+    }
+  ]
+}

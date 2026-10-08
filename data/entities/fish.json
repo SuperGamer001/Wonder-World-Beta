@@ -1,6 +1,7 @@
 {
   "id": "fish",
   "name": "Fish",
+  "model": "fish",
   "health": 3,
   "speed": 4.0,
   "width": 0.4,

@@ -1,0 +1,72 @@
+{
+  "name": "SNOWY_PEAKS",
+  "category": "land",
+  "temperature": 0,
+  "humidity": 0.4,
+  "mapColor": "#d0e0f0",
+  "select": {
+    "temperature": [
+      -1,
+      0.14
+    ],
+    "humidity": [
+      0,
+      1.2
+    ],
+    "elevation": [
+      145,
+      400
+    ]
+  },
+  "surface": {
+    "top": "SNOW",
+    "topDepth": 3,
+    "layers": [
+      {
+        "block": "STONE",
+        "depth": 2
+      }
+    ],
+    "stone": "STONE",
+    "snow": "SNOW",
+    "steep": {
+      "top": "STONE",
+      "layers": [
+        {
+          "block": "STONE",
+          "depth": 2
+        }
+      ]
+    },
+    "underwater": {
+      "top": "GRAVEL",
+      "layers": [
+        {
+          "block": "GRAVEL",
+          "depth": 2
+        },
+        {
+          "block": "CLAY",
+          "depth": 1
+        }
+      ]
+    },
+    "patches": [
+      {
+        "block": "PACKED_ICE",
+        "scale": 18,
+        "threshold": 0.72
+      }
+    ]
+  },
+  "ores": [
+    {
+      "block": "IRON_ORE",
+      "minY": 100,
+      "maxY": 290,
+      "frequency": 0.005,
+      "minSize": 3,
+      "maxSize": 9
+    }
+  ]
+}

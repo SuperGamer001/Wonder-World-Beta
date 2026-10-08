@@ -147,9 +147,13 @@ export class PlayerPhysics {
         if (input.right)    { dx -= rd.x;  dz -= rd.z;    }
         if (input.jump)     dy += 1;
         if (input.sneak)    dy -= 1;
+        // A controller's stick (see _groundUpdate).
+        const mf = input.moveF ?? 0, mr = input.moveR ?? 0;
+        dx += fwd.x * mf - rd.x * mr;
+        dz += fwd.z * mf - rd.z * mr;
 
         const len = Math.sqrt(dx * dx + dz * dz);
-        if (len > 0) { dx /= len; dz /= len; }
+        if (len > 1) { dx /= len; dz /= len; }
 
         const nx = pos.x + dx * speed * dt;
         const ny = pos.y + dy * speed * dt;
@@ -187,8 +191,16 @@ export class PlayerPhysics {
         if (input.backward) { dx -= fwd.x; dz -= fwd.z; }
         if (input.left)     { dx += rd.x;  dz += rd.z;  }
         if (input.right)    { dx -= rd.x;  dz -= rd.z;  }
+        // A controller's stick: forward and right, −1 … 1, as far as it is
+        // pushed. (`rightDir` points to the player's left, hence the minus.)
+        const mf = input.moveF ?? 0, mr = input.moveR ?? 0;
+        dx += fwd.x * mf - rd.x * mr;
+        dz += fwd.z * mf - rd.z * mr;
+        // Never faster than full speed (two keys at once, a stick in a corner);
+        // a stick pushed part way walks slower. Keys alone are 0, 1 or √2 long,
+        // so for them this is what it always was.
         const len = Math.sqrt(dx * dx + dz * dz);
-        if (len > 0) { dx /= len; dz /= len; }
+        if (len > 1) { dx /= len; dz /= len; }
 
         this.inWater = this._isLiquidAt(pos.x, pos.y + 0.5, pos.z);
 
