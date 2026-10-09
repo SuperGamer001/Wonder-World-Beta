@@ -3,11 +3,18 @@
 // fjord and a handful of biomes, each found on the seed's geography first and
 // then flown to.
 //
-//   node test/terrainshots.mjs [--seed 4242] [--out dir] [--preset normal] [--only name,name] [--far chunks] [--terrain blocky] [--mobs]
+//   node test/terrainshots.mjs [--seed 4242] [--out dir] [--preset normal] [--only name,name] [--far chunks] [--terrain blocky] [--mobs] [--cull-check]
 //
 // Also reports, per view, how long its chunks took to arrive. BROWSER=<path>
 // picks the browser (Chrome first: headless Edge can stop drawing with the
 // display off).
+//
+// --cull-check: at each view — and looking down from it, and from inside the
+// caves under it in four directions — draws the frame with and without leaving
+// out what the camera cannot see (engine/Visibility.js), and compares the two:
+// no patch of pixels may differ (what is left out is hidden), and no more
+// pinholes may open onto the sky (see cullCompare). Exits 1 otherwise. Best
+// with --preset classic: Eye Adaptation drifts from frame to frame.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -28,6 +35,7 @@ const FAR = arg('far', null);   // Far Terrain, in chunks past the render distan
 const TERRAIN = arg('terrain', null);   // 'blocky' or 'smooth' (else what new worlds get)
 const MOBS = process.argv.includes('--mobs');   // stand one of every mob in front of each view
 const PITCH = arg('pitch', null);   // look this far up (+) or down (−) instead, radians
+const CULL_CHECK = process.argv.includes('--cull-check');
 fs.mkdirSync(OUT, { recursive: true });
 
 // ── Find the views on the geography ──────────────────────────────────────────
@@ -157,8 +165,8 @@ ws.on('message', (raw) => {
 const send = (method, params = {}) => new Promise((res, rej) => {
     const id = ++msgId; pending.set(id, { res, rej }); ws.send(JSON.stringify({ id, method, params }));
 });
-const evalJs = async (expr) => {
-    const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true });
+const evalJs = async (expr, awaitPromise = false) => {
+    const r = await send('Runtime.evaluate', { expression: expr, returnByValue: true, awaitPromise });
     if (r.exceptionDetails) throw new Error(r.exceptionDetails.exception?.description ?? r.exceptionDetails.text);
     return r.result.value;
 };
@@ -167,6 +175,10 @@ const dispatch = (name, data) => evalJs(`(() => { const e = new Event('WorldJS_$
 await send('Runtime.enable');
 await send('Page.enable');
 await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+// A new data folder has no player yet, and the game would stop to ask for a
+// name (src/players.js). This run is not about that: say who is playing.
+await fetch(`${base}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Tester' }) });
+await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: 'Tester' }) });
 await send('Page.navigate', { url: `${base}/game.html` });
 for (let i = 0; i < 80; i++) {
     await sleep(500);
@@ -209,6 +221,137 @@ async function settle(label, limitMs = 60000) {
     return { ms: Date.now() - t0, s };
 }
 
+// ── --cull-check ─────────────────────────────────────────────────────────────
+let cullChecks = 0, cullFailures = 0;
+const CRACK_PIXELS = 30;    // grouped pixels that may differ in a frame of 1600 × 900
+
+/**
+ * Draw the frame leaving out what cannot be seen, then everything, then
+ * leaving out again, and compare the first two; the first and last are the
+ * same picture, so what differs between those is whatever still moves (mobs).
+ *
+ * A face left out that should have been drawn is a patch of pixels, so what
+ * counts is pixels that differ in a group. Lone pixels do differ, a handful a
+ * frame, and must: the mesh has pinholes — gaps a pixel wide where triangles
+ * meet, now and then a crack a few pixels long — and through one you see
+ * whatever comes next behind the land, which with everything drawn can be a
+ * cave wall nobody could otherwise see. So the pinholes are counted too, with
+ * the sky and fog turned an unmistakable colour: leaving things out must not
+ * open any more of them onto the sky.
+ */
+async function cullCompare(label) {
+    const r = await evalJs(`(async () => {
+        const wait = (ms) => new Promise(r => setTimeout(r, ms));
+        const grab = async (on) => { window.__wwCaveCull(on); await wait(350); return (await window.__wwGrabFrame())?.data ?? null; };
+        const a = await grab(true);
+        const d = window.__wwDebug();       // what is being left out, while it is
+        const b = await grab(false), c = await grab(true);
+        if (!a || !b || !c) return null;
+        const w = document.getElementById('gameCanvas').width, h = a.length / 4 / w;
+        // Pixels that differ, how many of them have another beside them, and the first of those.
+        const diff = (p, q) => {
+            const m = new Uint8Array(w * h);
+            let all = 0, grouped = 0, at = -1;
+            for (let i = 0, k = 0; i < p.length; i += 4, k++) {
+                if (Math.abs(p[i] - q[i]) + Math.abs(p[i + 1] - q[i + 1]) + Math.abs(p[i + 2] - q[i + 2]) > 4) { m[k] = 1; all++; }
+            }
+            for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+                const k = y * w + x;
+                if (m[k] === 0) continue;
+                if (m[k - 1] + m[k + 1] + m[k - w] + m[k + w] + m[k - w - 1] + m[k - w + 1] + m[k + w - 1] + m[k + w + 1] > 0) {
+                    grouped++;
+                    if (at < 0) at = k;
+                }
+            }
+            return { all, grouped, at };
+        };
+        const ab = diff(a, b), ac = diff(a, c);
+        // The surroundings of the first patch, eight times enlarged, from each picture side by side.
+        let crop = null;
+        if (ab.grouped > ac.grouped) {
+            const px = ab.at % w, py = Math.floor(ab.at / w), R = 24, Z = 8;
+            const cv = document.createElement('canvas');
+            cv.width = (2 * R + 1) * Z * 2 + Z; cv.height = (2 * R + 1) * Z;
+            const g = cv.getContext('2d');
+            [a, b].forEach((img, side) => {
+                for (let dy = -R; dy <= R; dy++) for (let dx = -R; dx <= R; dx++) {
+                    const x = px + dx, y = py + dy;
+                    if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                    const i = (y * w + x) * 4;
+                    g.fillStyle = 'rgb(' + img[i] + ',' + img[i + 1] + ',' + img[i + 2] + ')';
+                    g.fillRect(side * ((2 * R + 1) * Z + Z) + (dx + R) * Z, (dy + R) * Z, Z, Z);
+                }
+            });
+            crop = cv.toDataURL('image/png').split(',')[1];
+        }
+        // Pinholes onto the sky: single pixels of it with land all round.
+        const fog = window.__wwAtmos().uniforms.uFogColor.value, set = fog.set;
+        fog.set = function () { return set.call(this, 1, 0, 1); };
+        const holes = (img) => {
+            const sky = (x, y) => { const i = (y * w + x) * 4; return img[i] > 200 && img[i + 1] < 70 && img[i + 2] > 200; };
+            let n = 0;
+            for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+                if (!sky(x, y)) continue;
+                let land = 0;
+                for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if ((dx || dy) && !sky(x + dx, y + dy)) land++;
+                if (land >= 7) n++;
+            }
+            return n;
+        };
+        const holesOn = holes(await grab(true)), holesOff = holes(await grab(false));
+        delete fog.set;
+        window.__wwCaveCull(true);
+        return { ab, ac, crop, holesOn, holesOff, share: d.visibility.drawnShare, hidden: d.visibility.hiddenChunks, on: d.visibility.on };
+    })()`, true);
+    cullChecks++;
+    if (!r) { cullFailures++; console.log(`   cull check ${label}: no frame`); return; }
+    // A crack between triangles can be a few pixels long, and what shows
+    // through it changes like a pinhole's: a few grouped pixels are allowed for.
+    // (And where the picture is still settling — the fog easing after a
+    // move — two frames of the same differ by more, so more is allowed.)
+    const ok = r.ab.grouped <= r.ac.grouped * 1.3 + CRACK_PIXELS && r.holesOn <= r.holesOff + Math.max(2, r.holesOff * 0.05);
+    if (!ok) cullFailures++;
+    if (!ok && r.crop) {
+        // Left: with what cannot be seen left out. Right: with everything drawn.
+        const file = path.join(OUT, `${SEED}-cull-${cullChecks}-${label.replace(/[^a-z0-9]+/gi, '-')}.png`);
+        fs.writeFileSync(file, Buffer.from(r.crop, 'base64'));
+        console.log(`          round the first patch: ${file}`);
+    }
+    console.log(`   ${ok ? 'same  ' : 'DIFFER'} ${label.padEnd(22)} ${r.ab.grouped} pixels differ in groups, ${r.ab.all - r.ab.grouped} alone (${r.ac.grouped} and ${r.ac.all - r.ac.grouped} between two frames of the same); ` +
+        `sky pinholes ${r.holesOn} (${r.holesOff} with everything drawn) — ${Math.round(r.share * 100)}% of triangles kept, ${r.hidden} chunks hidden${r.on ? '' : ' [camera in rock: nothing left out]'}`);
+}
+
+/** Open cells under the land round (x, z) with a roof over them: places to stand in a cave. */
+function findCaves(x, z, top) {
+    return evalJs(`(() => {
+        const out = [], air = (x, y, z) => window.__wwBlockAt(x, y, z) === 0;
+        for (let r = 0; r <= 28 && out.length < 3; r += 4) {
+            for (let k = 0; k < 8 && out.length < 3; k++) {
+                const a = k / 8 * Math.PI * 2, cx = Math.floor(${x} + Math.cos(a) * r), cz = Math.floor(${z} + Math.sin(a) * r);
+                let roof = false;
+                for (let y = ${Math.floor(top)} + 40; y > -110; y--) {
+                    if (!air(cx, y, cz)) { roof = true; continue; }
+                    if (roof && air(cx, y - 1, cz) && !air(cx, y - 2, cz) && !out.some(o => Math.abs(o.y - y) < 24)) {
+                        out.push({ x: cx + 0.5, y: y - 1, z: cz + 0.5 });
+                        break;
+                    }
+                }
+                if (r === 0) break;
+            }
+        }
+        return out;
+    })()`);
+}
+
+if (CULL_CHECK) {
+    // Nothing may move between the frames compared: no swaying leaves, no flicker.
+    await evalJs(`(() => { const u = window.__wwAtmos().uniforms.uTime; Object.defineProperty(u, 'value', { get: () => 0, set: () => {} }); return 1; })()`);
+    await dispatch('applySettings', { reduceMotion: true });
+    await dispatch('setAtmosphere', { hours: 11, weather: 'clear', immediate: true, daylightCycle: false });
+    // A spectator: no mobs come to wander through the picture, and the camera stays where it is put.
+    await dispatch('setGameMode', { gameMode: 'SPECTATOR' });
+}
+
 for (const v of todo) {
     if (PITCH !== null) v.cam.pitch = Number(PITCH);
     await evalJs(`window.__wwTeleport(${v.cam.x}, ${v.cam.y}, ${v.cam.z}); window.__wwLook(${v.cam.yaw}, ${v.cam.pitch}); 1`);
@@ -236,10 +379,26 @@ for (const v of todo) {
     fs.writeFileSync(file, Buffer.from(data, 'base64'));
     await evalJs(`document.getElementById('PauseScreen').style.visibility = ''; 1`);
     console.log(`${v.name.padEnd(14)} loaded in ${(ms / 1000).toFixed(1)}s  chunks ${s?.chunks} meshes ${s?.meshes} calls ${s?.drawCalls} tris ${s?.tris}${s?.far?.extra ? `  far ${s.far.shown} tiles` : ''}  → ${file}`);
+    if (CULL_CHECK) {
+        await evalJs(`document.getElementById('PauseScreen').style.visibility = 'hidden'; 1`);
+        await cullCompare('the view');
+        await evalJs(`window.__wwLook(${v.cam.yaw}, -1.35); 1`);
+        await cullCompare('looking down');
+        for (const c of await findCaves(v.cam.x, v.cam.z, v.cam.y)) {
+            await evalJs(`window.__wwTeleport(${c.x}, ${c.y}, ${c.z}); 1`);
+            await sleep(400);
+            for (const [yaw, pitch] of [[0, 0.1], [1.6, -0.3], [3.1, 0.5], [4.7, 0]]) {
+                await evalJs(`window.__wwLook(${yaw}, ${pitch}); 1`);
+                await cullCompare(`cave y ${c.y}, yaw ${yaw}`);
+            }
+        }
+        await evalJs(`document.getElementById('PauseScreen').style.visibility = ''; 1`);
+    }
 }
+if (CULL_CHECK) console.log(`\ncull check: ${cullChecks} frames compared, ${cullFailures} differ`);
 
 console.log(`\nerrors: ${errors.length}`);
 for (const e of errors.slice(0, 10)) console.log('  ', String(e).slice(0, 300));
 try { ws.close(); } catch {}
 kill();
-process.exit(errors.length ? 1 : 0);
+process.exit(errors.length || cullFailures ? 1 : 0);

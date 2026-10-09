@@ -9,9 +9,13 @@
  *            terminator, darker maria, faint earthshine), twinkling stars that
  *            wheel across the sky with the time of day
  *
- * One camera-centred sphere drawn first, without depth, so everything else
- * draws over it. Both modes are one shader (a uniform branch), so switching is
- * free. Colours come from DayCycle via Atmosphere.
+ * One camera-centred sphere, put at the far plane and drawn after the terrain,
+ * so it is only worked out for the pixels no land covers. (It used to be drawn
+ * first, without depth, over the whole screen: every pixel of terrain was
+ * shaded as sky first — about a tenth of a frame on integrated graphics — and
+ * then painted over.) Everything blended — clouds, water, rain — is drawn
+ * after it, as before. Both modes are one shader (a uniform branch), so
+ * switching is free. Colours come from DayCycle via Atmosphere.
  *
  * The horizon is always fogColorFor(dir) — exactly what the terrain fades into —
  * so distant land never shows a seam against the sky.
@@ -28,6 +32,7 @@ out vec3 vDir;
 void main() {
     vDir = position;
     gl_Position = projectionMatrix * viewMatrix * (modelMatrix * vec4(position, 1.0));
+    gl_Position.z = gl_Position.w;     // at the far plane: behind everything that was drawn
 }
 `;
 
@@ -180,11 +185,12 @@ export class Sky {
             fragmentShader: FRAG,
             uniforms: this.uniforms,
             side: THREE.BackSide,
-            depthTest: false,
             depthWrite: false,
         });
         this.mesh = new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), this.material);
-        this.mesh.renderOrder = -1000;     // before everything; nothing tests against it
+        // Last of the opaque things (chunks are 0, far terrain 1): by then the
+        // depth buffer says which pixels are still sky.
+        this.mesh.renderOrder = 1000;
         this.mesh.frustumCulled = false;
         scene.add(this.mesh);
         this._m4 = new THREE.Matrix4();

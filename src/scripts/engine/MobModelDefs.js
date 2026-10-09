@@ -7,8 +7,9 @@
  * definitions by tools/gen_mob_textures.mjs — **changing a shape moves its
  * texels: repaint (`npm run mobtex`)**.
  *
- * Everything is in pixels, 16 to a block, and to scale: a block is a metre, a
- * Quiddle is a person 1.8 m tall and a cow stands 1.35 m at the shoulder.
+ * Everything is in pixels, 16 to a block. The animals are to scale — a block
+ * is a metre, a cow stands 1.35 m at the shoulder — and a Quiddle is as tall
+ * as a person (1.8 m) but drawn as a character, with a head a quarter of that.
  * +Y is up, +Z the way the mob faces, +X its left; feet stand on y = 0.
  *
  * The models are anatomy, not solids: a body is one skin with a topline, a
@@ -496,6 +497,17 @@ export const QUIDDLE_ONLY = {
 };
 
 /**
+ * Where a Quiddle's joints and edges are, px above the ground — for the model
+ * below, for the build, and for the painters (which draw clothes to these
+ * lines). The figure is a drawn character's: about four heads tall where a
+ * person is seven and a half, with a person's trunk on short, sturdy legs.
+ */
+export const QUIDDLE_Y = {
+    ankle: 1.5, knee: 5.9, crotch: 10.2, hip: 11.0, waist: 14.25, chest: 17.85, shoulder: 19.3, neck: 20.4, chin: 21.5,
+    elbow: 15.65, wrist: 12.25, knuckle: 10.95, tip: 9.75,
+};
+
+/**
  * A Quiddle's build: the one model, with its vertices moved. The trunk is
  * widened by height — shoulders, waist and hips each by their own amount, which
  * is where a man and a woman differ — the arms and legs are thickened about
@@ -506,14 +518,15 @@ export const QUIDDLE_ONLY = {
  * fore-and-aft plane, wherever that is), `scale` and a `key` for the shape.
  */
 function quiddleBuild(v) {
-    const sex = v.sex ?? 0, b = [0.94, 1, 1.09][v.build ?? 1];
+    const Y = QUIDDLE_Y, sex = v.sex ?? 0, b = [0.94, 1, 1.07][v.build ?? 1];
     // Limbs go with the frame they are on: a slight build has slighter ones.
-    const arm = [1.25, 1.45, 1.7][v.arms ?? 0] * (1 + (b - 1) * 0.5), leg = [1, 1.15, 1.3][v.legs ?? 0] * b;
-    const shoulders = (sex ? 0.93 : 1.07) * b, waist = (sex ? 0.9 : 1.04) * b, hips = (sex ? 1.07 : 0.97) * b;
+    const arm = [1, 1.12, 1.26][v.arms ?? 0] * (1 + (b - 1) * 0.5), leg = [1, 1.09, 1.2][v.legs ?? 0] * b;
+    const shoulders = (sex ? 0.92 : 1.05) * b, waist = (sex ? 0.9 : 1.03) * b, hips = (sex ? 1.06 : 0.97) * b;
     const ease = (t) => t * t * (3 - 2 * t);
-    const wide = (y) => y >= 22.2 ? shoulders : y >= 17.6 ? waist + (shoulders - waist) * ease((y - 17.6) / 4.6)
-        : y >= 15.6 ? hips + (waist - hips) * (y - 15.6) / 2 : hips;
-    const armOut = 3.5 * (shoulders - 1) + 0.5 * (arm - 1), legOut = 1.05 * (hips - 1) + 0.55 * (leg - 1);
+    const top = Y.shoulder - 0.45, low = Y.waist - 2;
+    const wide = (y) => y >= top ? shoulders : y >= Y.waist ? waist + (shoulders - waist) * ease((y - Y.waist) / (top - Y.waist))
+        : y >= low ? hips + (waist - hips) * (y - low) / 2 : hips;
+    const armOut = 3.95 * (shoulders - 1) + 0.5 * (arm - 1), legOut = 1.2 * (hips - 1) + 0.6 * (leg - 1);
     return {
         key: `${sex}${v.build ?? 1}${v.arms ?? 0}${v.legs ?? 0}`,
         scale: [0.93, 0.965, 1, 1.035, 1.07][v.height ?? 2],
@@ -522,20 +535,21 @@ function quiddleBuild(v) {
             if (tag === 'torso' || tag === 'skirt') {
                 // A woman's chest is fuller in front.
                 if (sex && tag === 'torso' && p[2] > 0) {
-                    const up = 1 - Math.abs(y - 20.9) / 1.4, across = 1 - (p[0] / 3.1) ** 2;
+                    const up = 1 - Math.abs(y - (Y.chest - 0.3)) / 1.4, across = 1 - (p[0] / 3.5) ** 2;
                     if (up > 0 && across > 0) p[2] += 0.5 * ease(up) * across;
                 }
                 // A skirt has to go round the legs under it, however heavy they are.
-                const round = tag === 'skirt' ? 1 + (leg / b - 1) * Math.min(1, Math.max(0, (17.5 - y) / 1.7)) : 1;
+                const round = tag === 'skirt' ? 1 + (leg / b - 1) * Math.min(1, Math.max(0, (Y.waist - y) / 1.7)) : 1;
                 p[0] *= wide(y) * round;
                 p[2] *= b * round;
             } else if (tag === 'arm' || tag === 'finger') {
                 // Thickest from the shoulder to the wrist; a hand grows less than the arm it is on.
-                const k = y > 22 ? 1 + (arm - 1) * 0.6 : y > 14.6 ? arm : 1 + (arm - 1) * 0.4, ax = 4.05 * side, az = y > 14.6 ? 0.05 : 0.4;
+                const k = y > Y.shoulder - 0.6 ? 1 + (arm - 1) * 0.6 : y > Y.wrist ? arm : 1 + (arm - 1) * 0.4;
+                const ax = 4.6 * side, az = y > Y.wrist ? 0.05 : 0.4;
                 p[0] = ax + (p[0] - ax) * k + armOut * side;
                 p[2] = az + (p[2] - az) * k;
             } else if (tag === 'leg' || tag === 'shoe') {
-                const k = tag === 'shoe' ? 1 + (leg - 1) * 0.4 : y > 3 ? leg : 1 + (leg - 1) * 0.5, lx = 1.6 * side;
+                const k = tag === 'shoe' ? 1 + (leg - 1) * 0.4 : y > 2.8 ? leg : 1 + (leg - 1) * 0.5, lx = 1.8 * side;
                 p[0] = lx + (p[0] - lx) * k + legOut * side;
                 if (tag === 'leg') p[2] = 0.05 + (p[2] - 0.05) * k;
             }
@@ -550,106 +564,125 @@ function quiddleBuild(v) {
 }
 
 /**
- * A Quiddle's head is drawn to the proportions of a real one and then made
- * this much bigger, about the top of the neck: a little larger than life, as
- * a drawn character's is, so the face reads from further off.
+ * A Quiddle's head is drawn in a head's own measure — a skull four and a bit
+ * px from chin to crown standing on `from`, as a life-size one would — and
+ * then made `scale` times bigger and set on the neck at `at`. That is most of
+ * what makes a Quiddle a character and not a small person: the head is nearly
+ * a quarter of its height, and the face on it is big enough to read across a
+ * field. The painters work in the head's own measure (the texture tool takes
+ * a texel back with these numbers), so the head can be resized without
+ * touching them.
  */
-export const QUIDDLE_HEAD = { scale: 1.9, at: [0, 24.5, 0] };
-const headPoint = (p) => p.map((v, i) => QUIDDLE_HEAD.at[i] + (v - QUIDDLE_HEAD.at[i]) * QUIDDLE_HEAD.scale);
+export const QUIDDLE_HEAD = { scale: 1.7, from: [0, 24.5, 0], at: [0, 21.63, 0] };
+const headPoint = (p) => p.map((v, i) => QUIDDLE_HEAD.at[i] + (v - QUIDDLE_HEAD.from[i]) * QUIDDLE_HEAD.scale);
 /** Stations of something on the head, enlarged with it. */
 const onHead = (list) => list.map((s) => {
     const n = s.filter(v => typeof v === 'number'), rest = s.filter(v => typeof v !== 'number');
     return [...headPoint(n.slice(0, 3)), ...n.slice(3).map(v => v * QUIDDLE_HEAD.scale), ...rest];
 });
+/**
+ * The face, in texels of the skull's own grid (the painters draw it there, so
+ * it is sharp and the same both sides): an eye is `w` texels across and `h`
+ * down and begins `gap` texels out from the middle of the face. The eyelids
+ * are cut to the same numbers.
+ */
+export const QUIDDLE_FACE = { density: 7, eye: { w: 6, h: 6, gap: 3 } };
 
 /**
- * The people of Wonder World, to the proportions of a person — eyes half way
- * down the head, hands to mid thigh — but for a head a little larger than life. Three outfits, three
- * eye colours, three kinds of hair or hat, three skin tones — each a texture
- * layer or a set of parts, so they combine freely. The player model will be
- * this one.
+ * The people of Wonder World, and the player. A drawn character, not a small
+ * person: a big round head with big eyes on a short neck, a person's trunk
+ * and shoulders, and short sturdy arms and legs ending in big hands and
+ * boots — about four heads tall. Under that it is still made as a body is:
+ * one skin from the shoulder to the knuckles and from the hip to the ankle,
+ * bending at real joints. What it wears and how it is built are choices
+ * (`QUIDDLE_LOOKS`), each a texture layer or a set of parts, so they combine
+ * freely.
  */
 function quiddle() {
+    const Y = QUIDDLE_Y;
     const b = new Builder('quiddle', {
         variants: QUIDDLE_LOOKS,
         layers: v => [`quiddle_skin_${v.skin + 1}`, `quiddle_outfit_${v.outfit + 1}`,
                       `quiddle_eyes_${v.eyes + 1}`, `quiddle_hair_${v.hair + 1}_${v.hairColor + 1}`],
         density: 3,
     });
-    // The head and all that is on it has about twice the texels of the body,
-    // set so that an eye is four across — a fifth of the width of the face.
-    const FACE = 6 / QUIDDLE_HEAD.scale;
-    b.mark('eye', headPoint([0.64, 26.5, 1.7])).mark('mouth', headPoint([0, 25.25, 1.86]))
-        .mark('brow', headPoint([0, 26.95, 1.87])).mark('noseBase', headPoint([0, 25.68, 1.8]));
+    // The head and all that is on it has more texels than the body: enough for
+    // a face that is drawn, not suggested.
+    const FACE = QUIDDLE_FACE.density / QUIDDLE_HEAD.scale, EYE = QUIDDLE_FACE.eye;
+    // The middle of an eye, out from the middle of the face by its place on the grid.
+    const eyeX = (EYE.gap + EYE.w / 2) / QUIDDLE_FACE.density, eyeY = 26.18, eyeZ = 1.79;
+    b.mark('eye', headPoint([eyeX, eyeY, eyeZ])).mark('mouth', headPoint([0, 25.12, 1.9]))
+        .mark('brow', headPoint([0, 27.0, 1.9])).mark('noseBase', headPoint([0, 25.66, 1.86]));
 
     // The trunk, shoulders to crotch, in level slices: [x, y, z, half width,
     // to the front, to the back]. Above the waist it follows the torso, below
     // it the hips, so it can turn and bend there.
-    b.part('hips', 'root', [0, 15.4, 0]);
-    b.part('torso', 'hips', [0, 17.6, 0]).loft([
-        [0, 24.1, -0.15, 1.15, 1.0, 1.05],
-        [0, 23.5, -0.1, 2.9, 1.45, 1.6],
-        [0, 22.7, 0, 3.5, 1.8, 1.9],
-        [0, 21.2, 0.1, 3.2, 2.1, 1.9],
-        [0, 19.3, 0.1, 2.9, 1.9, 1.75],
-        [0, 17.6, 0.05, 2.6, 1.7, 1.6, { bone: ['torso', 'hips', 0.5] }],
-        [0, 16.0, 0, 2.95, 1.8, 1.95, { bone: 'hips' }],
-        [0, 14.4, 0, 2.9, 1.7, 2.0, { bone: 'hips' }],
-        [0, 13.5, 0, 1.7, 1.2, 1.4, { bone: 'hips' }],
+    b.part('hips', 'root', [0, 12.05, 0]);
+    b.part('torso', 'hips', [0, Y.waist, 0]).loft([
+        [0, 20.75, -0.1, 1.55, 1.3, 1.35],
+        [0, 20.15, -0.05, 3.2, 1.7, 1.85],
+        [0, 19.35, 0, 3.95, 2.05, 2.15],
+        [0, Y.chest, 0.1, 3.7, 2.4, 2.15],
+        [0, 15.95, 0.1, 3.35, 2.2, 2.0],
+        [0, Y.waist, 0.05, 3.1, 2.0, 1.9, { bone: ['torso', 'hips', 0.5] }],
+        [0, 12.65, 0, 3.4, 2.1, 2.2, { bone: 'hips' }],
+        [0, 11.05, 0, 3.35, 2.0, 2.25, { bone: 'hips' }],
+        [0, 10.15, 0, 2.0, 1.4, 1.6, { bone: 'hips' }],
     ], { along: DOWN, sq: 2.8, seg: 12, caps: [true, 0.4] });
 
-    b.part('head', 'torso', [0, 24.8, -0.15]);
+    // A short, sturdy neck, from between the shoulders up into the skull.
+    b.part('head', 'torso', [0, 21.45, -0.1]);
     b.on('torso').loft([
-        [0, 23.6, -0.25, 1.0, 1.0, 0.95],
-        [0, 24.4, -0.15, 0.92, 0.95, 0.9, { bone: ['torso', 'head', 0.5] }],
-        [0, 25.3, 0, 0.95, 0.95, 0.9, { bone: 'head' }],
+        [0, 20.2, -0.2, 1.5, 1.4, 1.35],
+        [0, 21.0, -0.1, 1.4, 1.35, 1.3, { bone: ['torso', 'head', 0.5] }],
+        [0, 21.95, 0, 1.45, 1.35, 1.3, { bone: 'head' }],
     ], { along: [0, 1, 0], seg: 8, tag: 'neck' });
 
-    // The head, crown to chin, in level slices: the skull round and widest at
-    // the brow, the face flat, the jaw narrowing to the chin and set forward of
-    // the neck.
+    // The head, crown to chin, in level slices: a round skull, full in the
+    // cheek, the jaw soft and the chin small.
     b.on('head').loft(onHead([
-        [0, 28.62, 0.1, 0.75, 0.85, 0.95],
-        [0, 28.25, 0.1, 1.2, 1.38, 1.5],
-        [0, 27.6, 0.12, 1.42, 1.66, 1.78],
-        [0, 26.9, 0.15, 1.46, 1.72, 1.82],
-        [0, 26.5, 0.15, 1.44, 1.62, 1.78],
-        [0, 25.9, 0.15, 1.4, 1.68, 1.55],
-        [0, 25.3, 0.2, 1.24, 1.66, 1.15, { sq: 2.6 }],
-        [0, 24.75, 0.3, 0.96, 1.5, 0.75, { sq: 2.6 }],
-        [0, 24.42, 0.4, 0.62, 1.1, 0.35, { sq: 2.6 }],
+        [0, 28.62, 0.05, 0.95, 0.95, 1.05],
+        [0, 28.3, 0.05, 1.42, 1.45, 1.58],
+        [0, 27.7, 0.08, 1.72, 1.74, 1.88],
+        [0, 27.0, 0.1, 1.84, 1.82, 1.96],
+        [0, 26.4, 0.1, 1.86, 1.82, 1.92],
+        [0, 25.8, 0.12, 1.82, 1.8, 1.74],
+        [0, 25.25, 0.15, 1.66, 1.74, 1.44, { sq: 2.5 }],
+        [0, 24.8, 0.22, 1.34, 1.54, 1.04, { sq: 2.5 }],
+        [0, 24.45, 0.3, 0.86, 1.1, 0.58, { sq: 2.5 }],
     ]), { along: DOWN, sq: 2.35, seg: 16, caps: [0.22, 0.1], density: FACE, tag: 'skull' });
+    // A small, round nose.
     b.loft(onHead([
-        [0, 26.6, 1.62, 0.2, 0.18, 0.1],
-        [0, 26.1, 1.75, 0.26, 0.3, 0.1],
-        [0, 25.8, 1.82, 0.36, 0.42, 0.1],
-        [0, 25.68, 1.8, 0.3, 0.3, 0.1],
+        [0, 26.02, 1.8, 0.15, 0.15, 0.1],
+        [0, 25.82, 1.87, 0.26, 0.33, 0.1],
+        [0, 25.66, 1.85, 0.23, 0.25, 0.1],
     ]), { along: DOWN, seg: 6, caps: [false, true], density: FACE, tag: 'nose' });
     for (const [, sx] of SIDES) {
         // An ear, from the brow down to the base of the nose: [x, y, z, half depth, half height].
         b.loft(onHead(sided(sx, [
-            [1.34, 26.3, -0.05, 0.28, 0.48],
-            [1.58, 26.32, -0.14, 0.36, 0.58],
-            [1.7, 26.32, -0.2, 0.26, 0.46],
+            [1.72, 26.2, -0.1, 0.3, 0.5],
+            [1.98, 26.22, -0.2, 0.4, 0.62],
+            [2.1, 26.22, -0.26, 0.28, 0.48],
         ])), { side: [0, 0, 1], seg: 8, caps: [false, 0.05], density: FACE, tag: 'ear' });
     }
     // Eyelids: a patch of skin over each eye, scaled away except in a blink.
-    b.part('lids', 'head', headPoint([0, 26.4, 1.2]));
+    const lidW = (EYE.w + 0.6) / QUIDDLE_FACE.density, lidH = (EYE.h + 1.6) / QUIDDLE_FACE.density;
+    b.part('lids', 'head', headPoint([0, eyeY, 1.2]));
     for (const [s, sx] of SIDES) {
-        b.part(`lid${s}`, 'lids', headPoint([0.68 * sx, 26.4, 1.66]), { rot: [0, 22 * sx, 0] })
-            .box(headPoint([0.68 * sx - 0.38, 26.13, 1.6]), [0.76, 0.56, 0.1].map(v => v * QUIDDLE_HEAD.scale), { faces: ['pz'], density: FACE, tag: 'lid' });
+        b.part(`lid${s}`, 'lids', headPoint([eyeX * sx, eyeY, eyeZ]), { rot: [0, 21 * sx, 0] })
+            .box(headPoint([eyeX * sx - lidW / 2, eyeY - lidH / 2, eyeZ - 0.03]), [lidW, lidH, 0.1].map(v => v * QUIDDLE_HEAD.scale), { faces: ['pz'], density: FACE, tag: 'lid' });
     }
 
     // Hair is its own shape over the skull, fuller than it at the crown and
     // the back; the texture cuts its edge — the fringe, round the ears, the nape.
     const hair = (tag) => b.loft(onHead([
-        [0, 28.85, 0.05, 0.8, 0.9, 1.0],
-        [0, 28.45, 0.05, 1.33, 1.5, 1.63],
-        [0, 27.75, 0.08, 1.6, 1.8, 1.95],
-        [0, 26.95, 0.1, 1.66, 1.84, 2.0],
-        [0, 26.3, 0.1, 1.62, 1.76, 1.95],
-        [0, 25.6, 0.1, 1.5, 1.7, 1.7],
-        [0, 25.0, 0.1, 1.3, 1.6, 1.3],
+        [0, 28.86, 0.03, 1.0, 1.0, 1.1],
+        [0, 28.5, 0.03, 1.56, 1.58, 1.72],
+        [0, 27.85, 0.06, 1.9, 1.88, 2.06],
+        [0, 27.05, 0.08, 2.02, 1.95, 2.14],
+        [0, 26.35, 0.08, 2.03, 1.94, 2.1],
+        [0, 25.7, 0.1, 1.96, 1.9, 1.92],
+        [0, 25.1, 0.12, 1.76, 1.82, 1.58],
     ]), { along: DOWN, sq: 2.35, seg: 16, caps: [0.25, false], density: FACE, tag });
     // Hair 1: short.
     b.part('hairShort', 'head', headPoint([0, 28, 0]), { show: { hair: [0, 3, 5] } });
@@ -657,34 +690,34 @@ function quiddle() {
     // Hair 2: long, with a length down the back that swings.
     b.part('hairLong', 'head', headPoint([0, 28, 0]), { show: { hair: [1, 4] } });
     hair('hairLong');
-    // It leaves the back of the head, however big that is, and falls from there.
-    const nape = headPoint([0, 24.9, -1.5]), fall = Math.min(-1.9, nape[2] - 0.3), wide = Math.min(1.5, QUIDDLE_HEAD.scale);
+    // It leaves the back of the head and falls from there to the shoulder blades.
+    const nape = headPoint([0, 24.9, -1.6]), fall = nape[2] - 0.25;
     b.part('hairBack', 'head', [0, nape[1] + 0.6, nape[2]], { show: { hair: 1 } }).loft([
-        ...onHead([[0, 26.2, -1.2, 1.6, 0.7, 0.9, { bone: 'head' }]]),
-        [0, nape[1], nape[2], 1.7 * wide, 0.6, 0.75, { bone: ['head', 'hairBack', 0.6] }],
-        [0, 22.6, fall, 1.75 * wide, 0.45, 0.6],
-        [0, 20.6, fall - 0.1, 1.5 * wide, 0.3, 0.45],
-        [0, 19.6, fall - 0.1, 1.0 * wide, 0.15, 0.25],
+        ...onHead([[0, 26.2, -1.25, 1.9, 0.7, 0.9, { bone: 'head' }]]),
+        [0, nape[1], nape[2], 3.0, 0.6, 0.75, { bone: ['head', 'hairBack', 0.6] }],
+        [0, 19.4, fall, 3.05, 0.45, 0.6],
+        [0, 17.5, fall - 0.1, 2.6, 0.3, 0.45],
+        [0, 16.5, fall - 0.1, 1.7, 0.15, 0.25],
     ], { along: DOWN, sq: 2.6, seg: 8, caps: [false, 0.1], density: FACE });
     // Hair 5: drawn back into a bun.
-    b.part('bun', 'head', headPoint([0, 27.6, -1.8]), { show: { hair: 4 } }).loft(onHead([
-        [0, 27.55, -1.6, 0.55, 0.55],
-        [0, 27.65, -2.2, 0.8, 0.8],
-        [0, 27.6, -2.75, 0.5, 0.5],
+    b.part('bun', 'head', headPoint([0, 27.6, -1.9]), { show: { hair: 4 } }).loft(onHead([
+        [0, 27.55, -1.7, 0.6, 0.6],
+        [0, 27.65, -2.3, 0.86, 0.86],
+        [0, 27.6, -2.85, 0.54, 0.54],
     ]), { along: [0, 0, -1], seg: 8, caps: [0.2, 0.2], density: FACE });
     // Hair 3: a brimmed straw hat, with hair showing under it.
     b.part('hat', 'head', headPoint([0, 28, 0]), { show: { hair: 2 } });
     hair('hairUnderHat');
     b.loft(onHead([
-        [0, 29.95, 0.1, 1.5, 1.6, 1.7],
-        [0, 29.5, 0.1, 1.85, 1.95, 2.05],
-        [0, 28.35, 0.1, 1.9, 2.0, 2.1],
+        [0, 29.95, 0.05, 1.62, 1.66, 1.8],
+        [0, 29.5, 0.05, 2.04, 2.04, 2.2],
+        [0, 28.35, 0.05, 2.12, 2.1, 2.26],
     ]), { along: DOWN, seg: 12, caps: [0.15, false], density: FACE, tag: 'hatCrown' });
     b.loft(onHead([
-        [0, 28.42, 0.1, 1.9, 2.0, 2.1],
-        [0, 28.3, 0.1, 3.5, 3.7, 3.6],
-        [0, 28.14, 0.1, 3.55, 3.75, 3.65],
-        [0, 28.1, 0.1, 1.8, 1.9, 2.0],
+        [0, 28.42, 0.05, 2.12, 2.1, 2.26],
+        [0, 28.3, 0.05, 3.8, 3.95, 3.85],
+        [0, 28.14, 0.05, 3.85, 4.0, 3.9],
+        [0, 28.1, 0.05, 2.02, 2.0, 2.16],
     ]), { along: DOWN, seg: 12, smooth: false, density: FACE, tag: 'hatBrim' });
 
     for (const [s, sx] of SIDES) {
@@ -693,65 +726,66 @@ function quiddle() {
         // Its top lies in the slope of the shoulder and goes mostly with the
         // trunk, so the arm grows out of the body rather than being set on it.
         const arm = `arm${s}`, fore = `fore${s}`, hand = `hand${s}`, fingers = `fingers${s}`;
-        b.part(arm, 'torso', [3.7 * sx, 22.7, 0]);
-        b.part(fore, arm, [4.05 * sx, 18.5, -0.05]);
-        b.part(hand, fore, [4.2 * sx, 14.6, 0.15]);
-        b.part(fingers, hand, [4.18 * sx, 12.95, 0.5]);
+        b.part(arm, 'torso', [4.15 * sx, Y.shoulder, 0]);
+        b.part(fore, arm, [4.6 * sx, Y.elbow, -0.05]);
+        b.part(hand, fore, [4.75 * sx, Y.wrist, 0.15]);
+        b.part(fingers, hand, [4.72 * sx, Y.knuckle, 0.45]);
         b.on(arm).loft(sided(sx, [
-            [3.35, 23.05, 0, 0.8, 0.45, { bone: ['torso', arm, 0.3] }],
-            [3.72, 22.5, 0, 1.02, 0.74, { bone: ['torso', arm, 0.65] }],
-            [3.98, 21.7, 0, 1.0, 0.78],
-            [4.05, 20.6, 0, 0.92, 0.76],
-            [4.05, 19.4, 0, 0.8, 0.7],
-            [4.05, 18.5, -0.05, 0.77, 0.68, { bone: [arm, fore, 0.5] }],
-            [4.1, 17.5, 0.05, 0.8, 0.72, { bone: fore }],
-            [4.15, 15.6, 0.15, 0.58, 0.55, { bone: fore }],
-            [4.2, 14.6, 0.18, 0.43, 0.46, { bone: [fore, hand, 0.5] }],
-            [4.22, 13.95, 0.3, 0.58, 0.3, { bone: hand }],
-            [4.2, 13.3, 0.42, 0.62, 0.27, { bone: hand }],
-            [4.18, 12.9, 0.5, 0.58, 0.23, { bone: hand }],
+            [3.7, 19.75, 0, 0.9, 0.5, { bone: ['torso', arm, 0.3] }],
+            [4.15, 19.2, 0, 1.2, 0.9, { bone: ['torso', arm, 0.65] }],
+            [4.5, 18.4, 0, 1.2, 0.98],
+            [4.6, 17.3, 0, 1.12, 0.96],
+            [4.6, 16.3, 0, 1.0, 0.9],
+            [4.6, Y.elbow, -0.05, 0.96, 0.86, { bone: [arm, fore, 0.5] }],
+            [4.65, 14.8, 0.05, 1.0, 0.9, { bone: fore }],
+            [4.7, 13.2, 0.15, 0.8, 0.74, { bone: fore }],
+            [4.75, Y.wrist, 0.18, 0.62, 0.6, { bone: [fore, hand, 0.5] }],
+            [4.77, 11.7, 0.3, 0.8, 0.44, { bone: hand }],
+            [4.75, 11.2, 0.4, 0.86, 0.42, { bone: hand }],
+            [4.72, 10.9, 0.45, 0.8, 0.36, { bone: hand }],
         ]), { along: DOWN, side: [0, 0, 1], seg: 8, caps: [0.12, 0.05], tag: 'arm' });
-        // The hand: a flat palm turned to the thigh, four fingers of their
-        // own lengths, a little curled as a hand hangs, and a thumb set
-        // forward of them. The fingers close from the knuckles.
-        [[0.06, 0.98], [0.36, 1.18], [0.66, 1.3], [0.95, 1.12]].forEach(([z, long]) => b.on(hand).loft(sided(sx, [
-            [4.18, 13.0, z, 0.15, 0.14],
-            [4.13, 12.95 - long * 0.5, z + 0.03, 0.14, 0.13, { bone: [hand, fingers, 0.6] }],
-            [3.98, 12.95 - long, z + 0.05, 0.11, 0.1, { bone: fingers }],
-        ]), { side: [0, 0, 1], seg: 4, caps: [false, 0.06], tag: 'finger' }));
+        // The hand: a big one, with a palm turned to the thigh, the four
+        // fingers together as one (the texture draws the lines between them)
+        // and a thumb set forward of them. The fingers close from the knuckles.
         b.on(hand).loft(sided(sx, [
-            [4.12, 13.95, 0.78, 0.22, 0.2],
-            [4.02, 13.35, 1.14, 0.18, 0.17],
-            [3.96, 12.85, 1.3, 0.13, 0.12],
-        ]), { side: [0, 0, 1], seg: 4, caps: [false, 0.06], tag: 'finger' });
+            [4.72, 11.0, 0.42, 0.74, 0.3],
+            [4.66, 10.35, 0.44, 0.7, 0.28, { bone: [hand, fingers, 0.6] }],
+            [4.5, Y.tip, 0.46, 0.54, 0.2, { bone: fingers }],
+        ]), { side: [0, 0, 1], seg: 6, caps: [false, 0.12], tag: 'finger' });
+        b.on(hand).loft(sided(sx, [
+            [4.66, 11.75, 0.95, 0.3, 0.28],
+            [4.52, 11.2, 1.3, 0.26, 0.24],
+            [4.42, 10.75, 1.42, 0.2, 0.18],
+        ]), { side: [0, 0, 1], seg: 4, caps: [false, 0.08], tag: 'finger' });
 
         // A leg: from inside the hip to the ankle, turning at the hip and the
-        // knee; the shoe turns at the ankle.
+        // knee; the boot turns at the ankle.
         const leg = `leg${s}`, shin = `shin${s}`, foot = `foot${s}`;
-        b.part(leg, 'hips', [1.55 * sx, 15.3, 0]);
-        b.part(shin, leg, [1.6 * sx, 8.3, 0.1]);
-        b.part(foot, shin, [1.6 * sx, 1.45, -0.25]);
+        b.part(leg, 'hips', [1.75 * sx, Y.hip, 0]);
+        b.part(shin, leg, [1.8 * sx, Y.knee, 0.1]);
+        b.part(foot, shin, [1.8 * sx, Y.ankle, -0.2]);
         b.on(leg).loft(sided(sx, [
-            [1.5, 16.4, 0, 1.4, 1.65, 1.85, { bone: 'hips' }],
-            [1.58, 14.3, 0, 1.42, 1.6, 1.75, { bone: ['hips', leg, 0.6] }],
-            [1.62, 12.8, 0.05, 1.36, 1.55, 1.5],
-            [1.62, 10.6, 0.1, 1.14, 1.3, 1.2],
-            [1.6, 9.0, 0.15, 0.95, 1.05, 0.95],
-            [1.6, 8.3, 0.2, 0.95, 1.1, 0.9, { bone: [leg, shin, 0.5] }],
-            [1.6, 7.4, 0.1, 0.9, 0.9, 1.0, { bone: shin }],
-            [1.6, 5.9, 0, 0.92, 0.8, 1.2, { bone: shin }],
-            [1.6, 3.5, -0.15, 0.66, 0.65, 0.75, { bone: shin }],
-            [1.6, 1.7, -0.25, 0.56, 0.56, 0.62, { bone: [shin, foot, 0.5] }],
-            [1.6, 0.9, -0.25, 0.6, 0.6, 0.7, { bone: foot }],
+            [1.7, 12.3, 0, 1.6, 1.85, 2.05, { bone: 'hips' }],
+            [1.76, 10.6, 0, 1.64, 1.8, 1.95, { bone: ['hips', leg, 0.6] }],
+            [1.8, 9.4, 0.05, 1.6, 1.75, 1.7],
+            [1.8, 7.6, 0.1, 1.42, 1.5, 1.4],
+            [1.8, 6.4, 0.15, 1.28, 1.3, 1.2],
+            [1.8, Y.knee, 0.2, 1.28, 1.34, 1.14, { bone: [leg, shin, 0.5] }],
+            [1.8, 5.2, 0.1, 1.24, 1.16, 1.24, { bone: shin }],
+            [1.8, 4.1, 0, 1.26, 1.08, 1.42, { bone: shin }],
+            [1.8, 2.6, -0.1, 1.06, 0.98, 1.06, { bone: shin }],
+            [1.8, 1.6, -0.2, 0.96, 0.92, 0.96, { bone: [shin, foot, 0.5] }],
+            [1.8, 0.9, -0.2, 1.0, 0.95, 1.0, { bone: foot }],
         ]), { along: DOWN, seg: 8, tag: 'leg' });
+        // A boot, round at the toe and broad across the ball.
         b.on(foot).loft(sided(sx, [
-            [1.6, 0.7, -1.2, 0.5, 0.55, 0.55],
-            [1.6, 0.75, -0.6, 0.72, 0.85, 0.72],
-            [1.62, 0.7, 0.4, 0.8, 0.7, 0.68],
-            [1.66, 0.55, 1.6, 0.88, 0.5, 0.53],
-            [1.68, 0.45, 2.5, 0.8, 0.38, 0.43],
-            [1.68, 0.4, 3.0, 0.5, 0.25, 0.36],
-        ]), { along: FWD, sq: 3, seg: 8, caps: [0.2, 0.2], tag: 'shoe' });
+            [1.8, 0.85, -1.5, 0.7, 0.75, 0.75],
+            [1.8, 0.92, -0.9, 1.0, 1.05, 0.9],
+            [1.82, 0.9, 0.3, 1.08, 0.95, 0.88],
+            [1.86, 0.76, 1.5, 1.14, 0.76, 0.74],
+            [1.88, 0.64, 2.4, 1.06, 0.62, 0.62],
+            [1.88, 0.54, 2.95, 0.7, 0.44, 0.52],
+        ]), { along: FWD, sq: 3, seg: 8, caps: [0.25, 0.25], tag: 'shoe' });
     }
 
     // Skirts hang from the hips, and each side goes with the leg under it —
@@ -762,19 +796,19 @@ function quiddle() {
         return ['hips', `${bone}${u > 0 ? 'L' : 'R'}`, k];
     };
     // The skirt of a tunic, to mid thigh.
-    b.part('tunic', 'hips', [0, 17, 0], { show: { outfit: 0 } }).loft([
-        [0, 17.5, 0.05, 2.68, 1.78, 1.68, { bone: ['torso', 'hips', 0.5] }],
-        [0, 15.8, 0, 3.15, 2.0, 2.15],
-        [0, 13.6, 0, 3.35, 2.25, 2.4, { bone: cloth('leg', 0.4) }],
-        [0, 12.3, 0, 3.45, 2.35, 2.5, { bone: cloth('leg', 0.6) }],
+    b.part('tunic', 'hips', [0, 13.6, 0], { show: { outfit: 0 } }).loft([
+        [0, 14.15, 0.05, 3.2, 2.1, 2.0, { bone: ['torso', 'hips', 0.5] }],
+        [0, 12.45, 0, 3.7, 2.35, 2.5],
+        [0, 10.3, 0, 3.95, 2.6, 2.7, { bone: cloth('leg', 0.4) }],
+        [0, 9.1, 0, 4.05, 2.7, 2.8, { bone: cloth('leg', 0.6) }],
     ], { along: DOWN, sq: 2.6, seg: 12, tag: 'skirt' });
     // A dress, to the shins.
-    b.part('dress', 'hips', [0, 17, 0], { show: { outfit: [2, 4] } }).loft([
-        [0, 17.5, 0.05, 2.68, 1.78, 1.68, { bone: ['torso', 'hips', 0.5] }],
-        [0, 15.8, 0, 3.2, 2.05, 2.2],
-        [0, 12.5, 0, 3.6, 2.5, 2.6, { bone: cloth('leg', 0.5) }],
-        [0, 8.5, 0, 3.95, 2.9, 2.9, { bone: cloth('leg', 0.85) }],
-        [0, 5.4, 0, 4.2, 3.1, 3.1, { bone: cloth('shin', 0.9) }],
+    b.part('dress', 'hips', [0, 13.6, 0], { show: { outfit: [2, 4] } }).loft([
+        [0, 14.15, 0.05, 3.2, 2.1, 2.0, { bone: ['torso', 'hips', 0.5] }],
+        [0, 12.45, 0, 3.75, 2.4, 2.55],
+        [0, 9.4, 0, 4.15, 2.85, 2.95, { bone: cloth('leg', 0.5) }],
+        [0, 6.05, 0, 4.5, 3.2, 3.2, { bone: cloth('leg', 0.85) }],
+        [0, 4.0, 0, 4.7, 3.4, 3.4, { bone: cloth('shin', 0.9) }],
     ], { along: DOWN, sq: 2.6, seg: 12, tag: 'skirt' });
     const m = b.done();
     m.only = QUIDDLE_ONLY;

@@ -23,10 +23,15 @@
  *     box, so a step is invisible
  *   • world.js calls invalidate() with the box of each chunk it installs or
  *     removes; only those inside the shadow box count
- * Mobs move every frame, so while there are any, each frame copies the terrain
- * depth into `target` on the GPU and draws just the mobs on top. Standing
- * still or looking around, the terrain pass — hundreds of draw calls and
- * millions of alpha-tested pixels — costs nothing.
+ * Mobs move every frame, so while any stand inside the box their shadows are
+ * drawn each frame over a copy of the terrain depth (`target`). Only the
+ * patches of that copy a mob was drawn into are put back from the terrain map
+ * before the next frame's are drawn (_restore) — a few thousand texels a mob.
+ * It used to be the whole map, every frame there was a mob anywhere in the
+ * world: 4 million texels at medium and 9 at high, about half a millisecond
+ * of every frame on integrated graphics. Standing still or looking around,
+ * the terrain pass — hundreds of draw calls and millions of alpha-tested
+ * pixels — costs nothing.
  *
  * The light is the sun by day and the moon by night (DayCycle.lightDir, set
  * through setLightDir). sunShadow() returns how lit a fragment is (0 in
@@ -154,6 +159,15 @@ export class ShadowMapper {
         this._m = new THREE.Matrix4();
         this.redraws = 0;   // terrain passes drawn so far (diagnostics)
 
+        // `target` is the terrain map with mobs drawn over it. _rects: the
+        // patches of it (x0, y0, x1, y1 in texels) that hold a mob and must be
+        // put back from the terrain map; _targetStale: all of it must be.
+        this._rects = new Int32Array(4 * 64);
+        this._nextRects = new Int32Array(4 * 64);   // this frame's, before they take _rects' place
+        this._rectCount = 0;
+        this._targetStale = true;
+        this.copies = 0;    // whole-map copies so far (diagnostics)
+
         // Shared with the chunk materials (spread into chunkUniforms).
         this.uniforms = {
             uShadowMap:        { value: null },
@@ -229,6 +243,8 @@ export class ShadowMapper {
         }
         if (config && !this.terrain) this.terrain = depthTarget(config.size);
         this._dirty = true;
+        this._targetStale = true;
+        this._rectCount = 0;
 
         const u = this.uniforms;
         u.uShadowOn.value  = config ? 1 : 0;
@@ -258,9 +274,10 @@ export class ShadowMapper {
 
     /**
      * Update the shadow map for a player at `center` (world position). Call once
-     * per frame. `dynamic`: there are mobs, which are redrawn every frame.
+     * per frame. `casters`: what moves every frame (mobs), as bounding spheres
+     * — `{ count, data: [x, y, z, radius, …] }` in world space — or null.
      */
-    update(scene, center, dynamic = false) {
+    update(scene, center, casters = null) {
         if (!this.config || !this.depthMaterial.uniforms.uTex.value) return;
         const { half, step } = this._box();
 
@@ -313,19 +330,36 @@ export class ShadowMapper {
             r.setRenderTarget(this.terrain);
             r.clear();
             r.render(scene, cam);
+            this._targetStale = true;   // the copy the mobs are drawn over is out of date
         }
 
-        if (dynamic) {
+        // Where this frame's mobs fall in the map: the patches to draw them
+        // into, and to put back before the next frame's.
+        const had = this._rectCount;
+        const next = this._casterRects(casters, x, y, half);
+        // Take last frame's mobs out of the copy again.
+        if (had > 0 && !this._targetStale && !this._restore(had)) this._targetStale = true;
+        this._rectCount = 0;
+        if (next > 0) {
             this.target ??= depthTarget(this.config.size);
-            // Make sure both targets exist on the GPU before copying between them.
-            r.setRenderTarget(this.target);
-            r.copyTextureToTexture(this.terrain.depthTexture, this.target.depthTexture);
+            if (this._targetStale) {
+                // Make sure both targets exist on the GPU before copying between them.
+                r.setRenderTarget(this.target);
+                r.copyTextureToTexture(this.terrain.depthTexture, this.target.depthTexture);
+                this._targetStale = false;
+                this.copies++;
+            }
+            const spare = this._rects;
+            this._rects = this._nextRects;
+            this._nextRects = spare;
+            this._rectCount = next;
             r.setRenderTarget(this.target);
             r.autoClear = false;
             cam.layers.set(SHADOW_DYNAMIC_LAYER);
             r.render(scene, cam);
             this.uniforms.uShadowMap.value = this.target.depthTexture;
         } else {
+            // No mob in the box: the terrain map as it is.
             this.uniforms.uShadowMap.value = this.terrain.depthTexture;
         }
 
@@ -334,6 +368,66 @@ export class ShadowMapper {
         scene.overrideMaterial = prevOverride;
         scene.background = prevBg;
         scene.fog = prevFog;
+    }
+
+    /**
+     * The patch of the map each of `casters` can be drawn into, into
+     * _nextRects (x0, y0, x1, y1 in texels); returns how many. A sphere seen
+     * along the light is a circle of its own radius. `x`, `y`: the centre of
+     * the box the map was drawn for, in light space.
+     */
+    _casterRects(casters, x, y, half) {
+        const count = casters?.count ?? 0;
+        if (count === 0) return 0;
+        if (this._nextRects.length < count * 4) {
+            // More mobs than there was room for: the patches still to be put
+            // back (_rects) are carried over.
+            const grown = new Int32Array(count * 8);
+            grown.set(this._rects);
+            this._rects = grown;
+            this._nextRects = new Int32Array(count * 8);
+        }
+        const size = this.config.size, k = size / (2 * half);
+        const R = this._right, U = this._up, out = this._nextRects, d = casters.data;
+        let n = 0;
+        for (let i = 0; i < count * 4; i += 4) {
+            const cx = (d[i] * R.x + d[i + 1] * R.y + d[i + 2] * R.z - x) * k + size * 0.5;
+            const cy = (d[i] * U.x + d[i + 1] * U.y + d[i + 2] * U.z - y) * k + size * 0.5;
+            const r = d[i + 3] * k + 2;                       // two texels to spare
+            const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(size, Math.ceil(cx + r));
+            const y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(size, Math.ceil(cy + r));
+            if (x1 <= x0 || y1 <= y0) continue;               // outside the box: nothing of it is drawn
+            out[n] = x0; out[n + 1] = y0; out[n + 2] = x1; out[n + 3] = y1;
+            n += 4;
+        }
+        return n >> 2;
+    }
+
+    /**
+     * Put the first `n` patches of `target` (_rects) back as the terrain map
+     * has them: one blit each. False if it could not be done (the caller
+     * copies the whole map instead).
+     *
+     * Three.js's copyTextureToTexture cannot do this for a depth texture: it
+     * hands blitFramebuffer a width and height where corners are wanted, which
+     * is only right for a patch starting at the origin. So the blits are made
+     * here, through the renderer's own binding cache so that it stays true.
+     */
+    _restore(n) {
+        const r = this.renderer, gl = r.getContext(), state = r.state;
+        const src = r.properties.get(this.terrain).__webglFramebuffer;
+        const dst = this.target && r.properties.get(this.target).__webglFramebuffer;
+        if (!src || !dst) return false;
+        state.bindFramebuffer(gl.READ_FRAMEBUFFER, src);
+        state.bindFramebuffer(gl.DRAW_FRAMEBUFFER, dst);
+        const q = this._rects;
+        for (let i = 0; i < n * 4; i += 4) {
+            gl.blitFramebuffer(q[i], q[i + 1], q[i + 2], q[i + 3], q[i], q[i + 1], q[i + 2], q[i + 3],
+                               gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+        }
+        state.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
+        state.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
+        return true;
     }
 
     dispose() {

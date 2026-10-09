@@ -668,9 +668,10 @@ ANIMATORS.chicken = chickenAnim(MODELS.chicken, {
 });
 ANIMATORS.fish = fishAnim(MODELS.fish);
 ANIMATORS.quiddle = quiddleAnim(MODELS.quiddle, {
-    walk: { stride: 22, duty: 0.6, lift: 0.7, bob: 0.8, shift: 1.5, toe: 0.6 },
-    run:  { stride: 38, duty: 0.36, lift: 3.0, bob: 1.3, shift: 2.2, toe: 0.85 },
+    // Short legs: short, quick strides.
+    walk: { stride: 17, duty: 0.6, lift: 0.6, bob: 0.6, shift: 1.2, toe: 0.55 },
+    run:  { stride: 29, duty: 0.36, lift: 2.3, bob: 1.0, shift: 1.7, toe: 0.8 },
     // Where the ball of the foot and the heel are from the ankle, px down and
     // forward; and how far the toe is up as the heel lands, radians.
-    ball: [-1.43, 2.7], heel: [-1.42, -0.6], heelUp: 0.28,
+    ball: [-1.5, 2.3], heel: [-1.5, -0.9], heelUp: 0.26,
 });

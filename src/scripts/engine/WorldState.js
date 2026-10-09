@@ -105,6 +105,8 @@ export class WorldState {
         this.edited.add(key);
 
         this._note(cx, cz);
+        // Whoever else is in this world is told (world.js: Multiplayer).
+        this.onSet?.(wx, wy, wz, id);
         const chunk = this.getChunk(cx, cz);
         if (!chunk) return false;
         chunk.setVoxel(lx, ly, lz, id);

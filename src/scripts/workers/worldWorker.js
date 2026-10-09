@@ -35,8 +35,11 @@
  *       for light, which reaches SKY_MAX blocks into every neighbour
  *     → Responds with { type: 'chunkMeshed', taskId, cx, cz, geo, light }
  *       with `light` from Skylight.js (plus `light.block` from Blocklight.js,
- *       or null) and `geo.rain` the 16×16 column heights rain stops at
- *       (_rainHeights); every buffer is transferred.
+ *       or null), `geo.rain` the 16×16 column heights rain stops at
+ *       (_rainHeights), and `geo.sections` / `geo.conn`: where each
+ *       16-level section's triangles are in the opaque indices, and which
+ *       of its faces open space joins (engine/Visibility.js); every buffer
+ *       is transferred.
  *
  *   farTile { taskId, x0, z0, step, cells, edits? }
  *     → A far-terrain tile (FarTiles.js): the heightfield of the square at
@@ -64,6 +67,7 @@ import { SmoothMesher }      from './SmoothMesher.js';
 import { CHUNK_VOLUME, CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, compressVoxels } from '../engine/ChunkData.js';
 import { computeSkylight }   from './Skylight.js';
 import { computeBlocklight, paletteHasLight } from './Blocklight.js';
+import { connectivityOfRows } from '../engine/Visibility.js';
 
 let generator = null;   // TerrainGenerator, or LegacyWorldGen for worlds made before it
 let mesher    = null;
@@ -138,6 +142,7 @@ function _geoTransferList(geo) {
     const list = [
         geo.positions.buffer, geo.tints.buffer, geo.indices.buffer,
         geo.uvs.buffer, geo.normals.buffer, geo.rain.buffer,
+        geo.sections.buffer, geo.conn.buffer,
     ];
     if (geo.transparentPositions.length > 0) {
         list.push(
@@ -327,6 +332,12 @@ function handleMesh({ taskId, cx, cz, chunk, neighbors, diagonals, corners }) {
     const models = mesher.hasModels(chunk.palette);
     const geo   = mesher.meshGroup(voxelView, neighbourViews, ALL_FACES, yRange, smoothCtx, models);
     geo.rain    = _rainHeights(voxelView, yRange);
+    // Which faces of each section open space joins, for the render thread to
+    // work out what the camera cannot see (engine/Visibility.js). Sight passes
+    // through every cell that is not a full opaque cube — in a smooth world,
+    // through the Mesh voxels that are cut to a shape too. The mesher knows
+    // which cells those are from meshing the chunk.
+    geo.conn    = connectivityOfRows(mesher.closedRows(), yRange.min, yRange.max);
     const light = _light(voxelView, chunk, neighbors, diagonals, neighbourViews);
     self.postMessage(
         { type: 'chunkMeshed', taskId, cx, cz, geo, light },

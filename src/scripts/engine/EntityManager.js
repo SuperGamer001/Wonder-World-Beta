@@ -61,11 +61,41 @@ export class EntityManager {
         // Unit vector toward the sun or moon, set by world.js each frame: the
         // faces of a mob turned to it are the bright ones, as on the terrain.
         this.lightDir = [0.35, 0.87, 0.35];
+        // (x, y, z, radius) => whether anything in that sphere can be seen (a
+        // mob, or the shadow it casts), set by world.js; null = always. A mob
+        // that cannot be seen still thinks, moves and keeps its stride, but its
+        // vertices are not worked out — and that is most of what a mob costs.
+        this.seen = null;
+        // (name, { x, y, z }, options) => play a sound there, set by world.js
+        // (Sound.js). A mob speaks now and then, and cries out when it is hit.
+        this.onSound = null;
+        this.posed = 0;      // mobs posed in the last update (diagnostics)
+        this._casters = { count: 0, data: new Float32Array(4 * MAX_MOBS) };
+        // Other things that cast a moving shadow (the players' own bodies):
+        // each a function (data, offset) that writes its sphere there.
+        this.extraCasters = [];
+
+        // ── With other players (see *Multiplayer* in CLAUDE.md) ──────────────
+        // The host's game runs the mobs. A guest's is a `replica`: it spawns
+        // nothing and decides nothing, and shows what the host's snapshots
+        // say (snapshot / applySnapshot). The callbacks carry what has to
+        // cross: a guest's blow to the host, and from the host a mob's blow
+        // or a dead mob's drops to the player they are for.
+        this.replica = false;
+        this.others = [];              // the other players: [{ id, x, y, z }], set by world.js each frame
+        this.onRemoteHit = null;       // (mobId, damage, from) — a guest struck a mob
+        this.onRemoteAttack = null;    // (playerId, damage) — a mob struck another player
+        this.onRemoteDrops = null;     // (playerId, pos, [[itemId, count], …]) — another player's kill
+        this._netInfo = new Map();     // replica: mob id → the look it was announced with
+        this._seen = new Set();
 
         this._player = { x: 0, y: 0, z: 0 };
+        this._target = null;           // the player a mob's blow would land on: null = this one
         this._ctx = { player: this._player, playerVisible: true, onAttack: (damage) => {
-            window.dispatchEvent(new CustomEvent('ww_mobAttack', { detail: { damage } }));
+            if (this._target) this.onRemoteAttack?.(this._target.id, damage);
+            else window.dispatchEvent(new CustomEvent('ww_mobAttack', { detail: { damage } }));
         } };
+        this._near = { x: 0, y: 0, z: 0 };
         this._dir = [0, 1, 0];
     }
 
@@ -82,8 +112,35 @@ export class EntityManager {
 
     setBiomeData(biomes) { this._biomeData = biomes; }
 
-    /** Live mobs — while there are any, their shadows are redrawn every frame. */
+    /** Live mobs. */
     get mobCount() { return this._mobs.size; }
+
+    /**
+     * A sphere round each mob, whatever its pose, for the shadow mapper — what
+     * it redraws every frame: `{ count, data: [x, y, z, radius, …] }`, reused
+     * from call to call.
+     */
+    shadowCasters() {
+        const out = this._casters;
+        const most = this._mobs.size + this.extraCasters.length;
+        if (out.data.length < most * 4) out.data = new Float32Array(most * 8);
+        const d = out.data;
+        let n = 0;
+        for (const mob of this._mobs.values()) {
+            d[n] = mob.pos.x; d[n + 2] = mob.pos.z;
+            if (mob.inst) {
+                const s = mob.inst.mesh.geometry.boundingSphere;
+                d[n + 1] = mob.pos.y + s.center.y; d[n + 3] = s.radius;
+            } else {
+                const h = mob.def.height ?? 1.4;
+                d[n + 1] = mob.pos.y + h / 2; d[n + 3] = Math.max(h, mob.def.width ?? 0.8);
+            }
+            n += 4;
+        }
+        for (const write of this.extraCasters) { write(d, n); n += 4; }
+        out.count = n >> 2;
+        return out;
+    }
 
     /**
      * Throwaway objects drawn with the same kinds of material as mobs and
@@ -108,6 +165,12 @@ export class EntityManager {
     // ── Main update ───────────────────────────────────────────────────────────
 
     update(dt, playerPos, inventory, gameMode) {
+        if (this.replica) {
+            this._player.x = playerPos.x; this._player.y = playerPos.y; this._player.z = playerPos.z;
+            this._updateReplicas(dt);
+            this._updateDrops(dt, playerPos, inventory, gameMode);
+            return;
+        }
         this._spawnT += dt;
         if (this._spawnT >= SPAWN_INTERVAL) {
             this._spawnT = 0;
@@ -180,15 +243,14 @@ export class EntityManager {
         }
     }
 
-    _spawnMob(typeId, pos) {
+    _spawnMob(typeId, pos, id = uid(), variant = null) {
         const def = this._types.get(typeId);
         if (!def) return;
-        const id = uid();
 
         // Its model, in a look of its own; or the plain boxes if it has none.
         const name = def.model ?? def.id;
         const model = this.models.model(name);
-        const inst = model ? this.models.create(name, randomVariant(model), def.modelScale ?? 1) : null;
+        const inst = model ? this.models.create(name, variant ?? randomVariant(model), def.modelScale ?? 1) : null;
         const mesh = inst ? inst.mesh : this._buildMesh(def);
         mesh.position.set(pos.x, pos.y, pos.z);
         // Render layer 2 = shadow caster that moves every frame (SHADOW_DYNAMIC_LAYER
@@ -225,6 +287,7 @@ export class EntityManager {
         this._player.x = playerPos.x; this._player.y = playerPos.y; this._player.z = playerPos.z;
         ctx.playerVisible = gameMode !== 'SPECTATOR';
         ai.beginFrame();
+        this.posed = 0;
 
         for (const [id, mob] of this._mobs) {
             const dx = mob.pos.x - playerPos.x;
@@ -239,7 +302,28 @@ export class EntityManager {
                 mob.dying += dt;
                 if (mob.dying > DEATH_TIME) { this._removeMob(id); continue; }
             } else {
+                // The player this mob minds — looks at, runs from, strikes — is the nearest one.
+                this._target = null;
+                ctx.player = this._player;
+                if (this.others.length) {
+                    let best = dx * dx + dz * dz;
+                    for (const o of this.others) {
+                        const d = (mob.pos.x - o.x) ** 2 + (mob.pos.z - o.z) ** 2;
+                        if (d < best) { best = d; this._target = o; }
+                    }
+                    if (this._target) {
+                        const n = this._near, o = this._target;
+                        n.x = o.x; n.y = o.y; n.z = o.z;
+                        ctx.player = n;
+                    }
+                }
                 ai.update(mob, dt, ctx);
+                // Its voice, every so often — not all at once, and not from far off.
+                mob.voiceT = (mob.voiceT ?? 4 + Math.random() * 20) - dt;
+                if (mob.voiceT <= 0) {
+                    mob.voiceT = 9 + Math.random() * 22;
+                    if (dx * dx + dz * dz < 28 * 28) this._voice(mob, 'idle', 0.55);
+                }
             }
             mob.hurt = Math.max(0, mob.hurt - dt * 3);
             mob.mesh.position.set(mob.pos.x, mob.pos.y, mob.pos.z);
@@ -276,7 +360,8 @@ export class EntityManager {
         // Where the head turns: toward what it is looking at, as far as a neck goes.
         let yaw = 0, pitch = 0;
         const look = alive ? mob.look : null;
-        if (look) {
+        if (mob.net) { yaw = alive ? mob.net.lookYaw : 0; pitch = alive ? mob.net.lookPitch : 0; }
+        else if (look) {
             const h = def.height ?? 1.4;
             const lx = look.x - mob.pos.x, lz = look.z - mob.pos.z;
             const ly = (look.y + 1.5) - (mob.pos.y + h * 0.85);
@@ -294,6 +379,12 @@ export class EntityManager {
         // Struck: a flush of red.
         const flush = Math.max(mob.hurt, alive ? 0 : 0.5);
         inst.tint[1] = inst.tint[2] = 1 - 0.55 * flush;
+
+        // Out of sight, shadow and all: everything above has been kept up, so
+        // it steps back into view mid-stride, but there is nothing to draw.
+        const bs = inst.mesh.geometry.boundingSphere;
+        if (this.seen && !this.seen(mob.pos.x, mob.pos.y + bs.center.y, mob.pos.z, bs.radius)) return;
+        this.posed++;
 
         const l = this.lightAt ? this.lightAt(mob.pos.x, mob.pos.y + 0.5, mob.pos.z) : 1;
         this.models.pose(inst, l, MobModels.toModelSpace(this.lightDir, mob.yaw, this._dir));
@@ -339,6 +430,102 @@ export class EntityManager {
         return tmin >= 0 ? tmin : tmax;
     }
 
+    /** The mob says something: `<type>_idle` or `<type>_hurt`, from where its head is. */
+    _voice(mob, kind, volume, pitch = 1) {
+        if (!this.onSound) return;
+        const size = mob.inst?.scale ?? 1;
+        this.onSound(`${mob.typeId}_${kind}`, { x: mob.pos.x, y: mob.pos.y + (mob.def.height ?? 1) * 0.8, z: mob.pos.z },
+            { volume, pitch: pitch / size ** 0.6, reach: 30 });
+    }
+
+    // ── With other players ────────────────────────────────────────────────────
+
+    /**
+     * The host's mobs as they are now, for the guests: eleven numbers a mob in
+     * `list` (id, type, x, y, z, yaw, flags, where the head is turned, how
+     * far through a blow, how lately hurt) and, in `info`, the look of each
+     * mob not announced yet — or of all of them, when someone has just joined
+     * (`full`).
+     */
+    snapshot(full = false) {
+        const list = [], info = {}, r = (v) => Math.round(v * 100) / 100;
+        for (const mob of this._mobs.values()) {
+            const flags = (mob.onGround ? 1 : 0) | (mob.inWater ? 2 : 0) | (mob.grazing ? 4 : 0) | (mob.panic ? 8 : 0) | (mob.dying > 0 ? 16 : 0);
+            list.push(mob.id, mob.typeId, r(mob.pos.x), r(mob.pos.y), r(mob.pos.z), r(mob.yaw), flags,
+                r(mob.lookYaw), r(mob.lookPitch), r(mob.swing ?? 0), r(mob.hurt));
+            if (full || !mob.told) { info[mob.id] = mob.inst?.variant ?? null; mob.told = true; }
+        }
+        return { list, info };
+    }
+
+    /** A guest: make the mobs what the host's snapshot says (they are moved there smoothly by update). */
+    applySnapshot(snap, interval = 0.1) {
+        const list = snap.list ?? [], seen = this._seen;
+        seen.clear();
+        for (const id in snap.info ?? {}) this._netInfo.set(Number(id), snap.info[id]);
+        for (let i = 0; i + 10 < list.length; i += 11) {
+            const id = list[i], x = list[i + 2], y = list[i + 3], z = list[i + 4], flags = list[i + 6];
+            let mob = this._mobs.get(id);
+            if (!mob) {
+                if (!this._netInfo.has(id) || !this._types.has(list[i + 1])) continue;       // not announced yet
+                this._spawnMob(list[i + 1], { x, y, z }, id, this._netInfo.get(id));
+                mob = this._mobs.get(id);
+                if (!mob) continue;
+                mob.net = { x, y, z, yaw: list[i + 5], lookYaw: 0, lookPitch: 0 };
+                mob.yaw = list[i + 5];
+            }
+            seen.add(id);
+            const n = mob.net;
+            mob.vel.x = (x - n.x) / interval; mob.vel.z = (z - n.z) / interval;
+            n.x = x; n.y = y; n.z = z; n.yaw = list[i + 5]; n.lookYaw = list[i + 7]; n.lookPitch = list[i + 8];
+            mob.onGround = !!(flags & 1); mob.inWater = !!(flags & 2); mob.grazing = !!(flags & 4); mob.panic = !!(flags & 8);
+            mob.swing = list[i + 9];
+            mob.hurt = Math.max(mob.hurt, list[i + 10]);
+            if ((flags & 16) && mob.dying === 0) mob.dying = 0.0001;
+        }
+        for (const id of [...this._mobs.keys()]) if (!seen.has(id)) { this._removeMob(id); this._netInfo.delete(id); }
+    }
+
+    /** A guest's mobs: eased to where the host last said they were, and animated. */
+    _updateReplicas(dt) {
+        const k = 1 - Math.exp(-dt * 14);
+        this.posed = 0;
+        for (const mob of this._mobs.values()) {
+            const n = mob.net;
+            if (!n) continue;
+            mob.pos.x += (n.x - mob.pos.x) * k; mob.pos.y += (n.y - mob.pos.y) * k; mob.pos.z += (n.z - mob.pos.z) * k;
+            let turn = n.yaw - mob.yaw;
+            turn -= Math.round(turn / (Math.PI * 2)) * Math.PI * 2;
+            mob.yaw += turn * k;
+            if (mob.dying > 0) mob.dying += dt;
+            else {
+                // Its voice is this game's own to play: what is heard depends on where the listener is.
+                mob.voiceT = (mob.voiceT ?? 4 + Math.random() * 20) - dt;
+                if (mob.voiceT <= 0) {
+                    mob.voiceT = 9 + Math.random() * 22;
+                    if ((mob.pos.x - this._player.x) ** 2 + (mob.pos.z - this._player.z) ** 2 < 28 * 28) this._voice(mob, 'idle', 0.55);
+                }
+            }
+            mob.hurt = Math.max(0, mob.hurt - dt * 3);
+            mob.mesh.position.set(mob.pos.x, mob.pos.y, mob.pos.z);
+            mob.mesh.rotation.y = mob.yaw;
+            if (mob.inst) this._animate(mob, dt);
+            else this._applyLight(mob);
+        }
+    }
+
+    /** The host: a guest (`from`: their player id and where they stand) struck the mob `id`. */
+    hitById(id, damage, from) {
+        const mob = this._mobs.get(id);
+        if (!mob || mob.dying > 0 || !(damage > 0)) return;
+        mob.health -= damage;
+        mob.hurt = 1;
+        this._voice(mob, 'hurt', 0.9, mob.health <= 0 ? 0.82 : 1);
+        mob.voiceT = 6 + Math.random() * 10;
+        if (mob.health <= 0) this._killMob(mob, from.id);
+        else this.ai.hurt(mob, from);
+    }
+
     /** Damage the mob nearest to `hitPos` within `radius`. Returns damage dealt. */
     hitNearest(hitPos, damage, radius = 3) {
         let closest = null, bestDist = radius * radius;
@@ -351,9 +538,18 @@ export class EntityManager {
             if (d2 < bestDist) { bestDist = d2; closest = mob; }
         }
         if (!closest) return 0;
+        if (this.replica) {
+            // Not ours to hurt: the host is told, and its next snapshot shows what came of it.
+            closest.hurt = 1;
+            this._voice(closest, 'hurt', 0.9);
+            this.onRemoteHit?.(closest.id, damage, hitPos);
+            return damage;
+        }
 
         closest.health -= damage;
         closest.hurt = 1;
+        this._voice(closest, 'hurt', 0.9, closest.health <= 0 ? 0.82 : 1);
+        closest.voiceT = 6 + Math.random() * 10;
         if (closest.health <= 0) {
             this._killMob(closest);
         } else {
@@ -366,14 +562,19 @@ export class EntityManager {
         return damage;
     }
 
-    _killMob(mob) {
-        // Drop items
+    _killMob(mob, by = null) {
+        // Drop items — in the game of whoever killed it: a drop is picked up by
+        // the game it lies in, and lying in everyone's it would be picked up twice.
+        const theirs = [];
         for (const drop of (mob.def.drops ?? [])) {
             const chance = drop.chance ?? 1;
             if (Math.random() > chance) continue;
             const count = drop.minCount + Math.floor(Math.random() * (drop.maxCount - drop.minCount + 1));
-            if (count > 0) this.dropItem({ ...mob.pos }, drop.itemId, count);
+            if (count <= 0) continue;
+            if (by != null) theirs.push([drop.itemId, count]);
+            else this.dropItem({ ...mob.pos }, drop.itemId, count);
         }
+        if (theirs.length) this.onRemoteDrops?.(by, { ...mob.pos }, theirs);
         // A model keels over and lies a moment before it goes; plain boxes just go.
         if (mob.inst) mob.dying = 0.0001;
         else this._removeMob(mob.id);
@@ -514,6 +715,7 @@ export class EntityManager {
                     // Sprite geometry is a Three.js singleton and the material is cached per
                     // item id, so removing it from the scene is the whole cleanup.
                     this._drops.splice(i, 1);
+                    this.onSound?.('pickup', null, { volume: 0.5 });
                     window.dispatchEvent(new CustomEvent('ww_itemPickup', {
                         detail: { itemId: d.itemId, count: d.count }
                     }));

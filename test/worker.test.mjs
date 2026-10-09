@@ -19,6 +19,7 @@ import { computeSkylight }  from '../src/scripts/workers/Skylight.js';
 import { computeBlocklight, paletteHasLight } from '../src/scripts/workers/Blocklight.js';
 import { SMOOTH_REACH }     from '../src/scripts/engine/SmoothShape.js';
 import { TerrainGenerator } from '../src/scripts/workers/TerrainGenerator.js';
+import { sectionConnectivity } from '../src/scripts/engine/Visibility.js';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -126,15 +127,15 @@ function expected(c, around, smooth) {
     }
     const scan = palettes.map(p => paletteHasLight(p, mesher._light));
     light.block = scan.some(Boolean) ? computeBlocklight(views, minY, maxY, mesher._solid, mesher._light, scan) : null;
-    return {
-        geo:   mesher.meshGroup(views[4], nb, [0, 1, 2, 3, 4, 5], yRange, ctx, mesher.hasModels(c._palette)),
-        light,
-    };
+    const geo = mesher.meshGroup(views[4], nb, [0, 1, 2, 3, 4, 5], yRange, ctx, mesher.hasModels(c._palette));
+    // What open space joins in each section (engine/Visibility.js).
+    geo.conn = sectionConnectivity(views[4], yRange.min, yRange.max, ctx ? ctx.occ : mesher._solid, ctx ? ctx.partial : null);
+    return { geo, light };
 }
 
 const GEO_KEYS = ['positions', 'tints', 'uvs', 'normals', 'indices',
                   'transparentPositions', 'transparentTints', 'transparentUVs',
-                  'transparentNormals', 'transparentIndices'];
+                  'transparentNormals', 'transparentIndices', 'sections', 'conn'];
 const sameArray = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
 const sameGeo = (a, b) => GEO_KEYS.every(k => sameArray(a[k], b[k]));
 const sameVolume = (a, b) => a.y0 === b.y0 && a.h === b.h && sameArray(a.data, b.data);

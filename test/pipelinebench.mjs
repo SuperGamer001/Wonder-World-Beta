@@ -4,8 +4,8 @@
 //
 //   node test/pipelinebench.mjs [radius] [seed]
 //
-// Generates a (2r+3)² area, then meshes (blocky and smooth) and lights the
-// inner (2r+1)², exactly as worldWorker does. Stages are run in bulk rather
+// Generates a (2r+3)² area, then meshes (blocky and smooth), works out what
+// open space joins and lights the inner (2r+1)², exactly as worldWorker does. Stages are run in bulk rather
 // than interleaved so each one's timing reflects a warmed-up JIT.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,6 +19,7 @@ import { GreedyMesher }     from '../src/scripts/workers/GreedyMesher.js';
 import { SmoothMesher }     from '../src/scripts/workers/SmoothMesher.js';
 import { computeSkylight }  from '../src/scripts/workers/Skylight.js';
 import { SMOOTH_REACH }     from '../src/scripts/engine/SmoothShape.js';
+import { connectivityOfRows } from '../src/scripts/engine/Visibility.js';
 
 const R    = Number(process.argv[2] ?? 2);
 const SEED = Number(process.argv[3] ?? 4242);
@@ -123,6 +124,17 @@ time('mesh smooth', jobs.length, () => {
 });
 console.log(`  ${(tris / jobs.length).toFixed(0)} opaque tris/chunk`);
 
+// What open space joins in each section, for leaving out of the draw what the
+// camera cannot see (engine/Visibility.js); it rides with every mesh job.
+const hConn = hash();
+time('section connectivity', jobs.length, () => {
+    for (const j of jobs) {
+        // From the row words the mesher has after a mesh job, as in the worker.
+        mesher._buildRows(j.v, { px: null, nx: null, pz: null, nz: null }, j.yRange.min, j.yRange.max, mesher._solid, null);
+        feed(hConn, connectivityOfRows(mesher.closedRows(), j.yRange.min, j.yRange.max));
+    }
+});
+
 const hLight = hash();
 let lightRows = 0, bandRows = 0;
 time('sky light', inner.length, () => {
@@ -143,6 +155,6 @@ console.log(`  ${(lightRows / inner.length).toFixed(0)} levels a volume (${(band
 
 console.log('\nhashes');
 for (const [n, h] of [['generate', hGen], ['loadVoxels', hLoad], ['blocky mesh', hBlocky],
-                      ['smooth mesh', hSmooth], ['light', hLight]]) {
+                      ['smooth mesh', hSmooth], ['connectivity', hConn], ['light', hLight]]) {
     console.log(`  ${n.padEnd(12)} ${h.digest('hex')}`);
 }

@@ -7,6 +7,7 @@
     <!-- Without this the browser requests /favicon.ico on every load and logs a 404. -->
     <link rel="icon" href="./data/textures/favicon.ico" sizes="any">
     <script src="src/main.js" defer></script>
+    <script src="src/players.js" defer></script>
     <script src="src/gamepad.js" defer></script>
     <!-- Minified build: three.module.js + three.core.js is ~2 MB of source the
          browser parses at every startup, against ~0.7 MB for the minified pair.
@@ -19,8 +20,13 @@
     }
     </script>
     <script type="module" src="src/scripts/world.js" defer></script>
+    <script type="module" src="src/scripts/Character.js" defer></script>
+    <script type="module" src="src/scripts/MenuScene.js" defer></script>
 </head>
 <body>
+
+    <!-- The place behind the menus: a baked model of real terrain (MenuScene.js). -->
+    <canvas id="menuCanvas"></canvas>
 
     <img id="TitleLogo" src="./data/textures/UI/Logo_Beta.png" class="logo" alt="Wonder World Logo">
 
@@ -58,10 +64,19 @@
 
     <!-- ── Title Screen ────────────────────────────────────────────────────── -->
     <div class="hidden" id="TitleScreen">
-        <div class="titleMenu">
+        <!-- Who is playing, in the corner: it is not one of the things to do. -->
+        <div class="titleProfile">
+            <div class="menuButton small" id="titlePlayerBtn">Playing as Player</div>
+        </div>
+        <!-- One thing to do, and under it the rest, small and side by side. -->
+        <div class="titleDock">
             <div class="menuButton primary big" id="startButton">Play</div>
-            <div class="menuButton" id="titleHowToBtn">How to Play</div>
-            <div class="menuButton" id="titleSettingsBtn">Settings</div>
+            <div class="titleRow">
+                <div class="menuButton small" id="titleCharacterBtn">Character</div>
+                <div class="menuButton small" id="titleSettingsBtn">Settings</div>
+                <div class="menuButton small" id="titleHowToBtn">How to Play</div>
+                <div class="menuButton small" id="titleCreditsBtn">Credits</div>
+            </div>
             <div class="menuButton hidden" onclick="closeGame()">Leave Game</div>
         </div>
 
@@ -77,6 +92,7 @@
             <div id="worldListHeader" class="panelHeader">
                 <span id="worldListTitle" class="panelTitle">Your Worlds</span>
                 <div class="worldListHeaderBtns">
+                    <div class="menuButton small" id="joinLanBtn">Join a game</div>
                     <div class="menuButton small primary" id="createWorldBtn">+ New World</div>
                     <div class="menuButton small" id="worldListBackBtn">Back</div>
                 </div>
@@ -272,6 +288,7 @@
                                 <option value="custom">Custom</option>
                             </select>
                         </div>
+                        <div class="formNote hidden" id="splitGraphicsNote">While the screen is shared, everyone's view is kept short and plain so the game stays smooth: these come back when it is yours alone.</div>
                         <div class="settingsSectionTitle">View</div>
                         <div class="settingsRow">
                             <span class="settingsLabel">Field of View</span>
@@ -382,6 +399,7 @@
                             <span>Hotbar slot</span><span><kbd>1</kbd> – <kbd>0</kbd></span><span><kbd class="pad">LB</kbd> <kbd class="pad">RB</kbd></span>
                             <span>Inventory</span><span><kbd>E</kbd></span><span><kbd class="pad">Y</kbd></span>
                             <span>Crafting</span><span><kbd>C</kbd></span><span><kbd class="pad">X</kbd></span>
+                            <span>Change the view</span><span><kbd>V</kbd> or <kbd>F5</kbd></span><span>click <kbd class="pad">Right stick</kbd></span>
                             <span>Pause</span><span><kbd>Esc</kbd></span><span><kbd class="pad">Start</kbd></span>
                             <span>In a menu</span><span>click, <kbd>Esc</kbd> to go back</span><span><kbd class="pad">D-pad</kbd> <kbd class="pad">A</kbd> choose, <kbd class="pad">B</kbd> back</span>
                         </div>
@@ -390,7 +408,27 @@
                     <!-- Audio -->
                     <div class="settingsPanel hidden" data-section="audio">
                         <div class="settingsRow">
-                            <span class="settingsLabel">Weather Volume<small>rain, wind and thunder</small></span>
+                            <span class="settingsLabel">Master Volume<small>everything</small></span>
+                            <input type="range" id="settingMasterVolume" min="0" max="1" step="0.05" value="1" class="settingsSlider">
+                            <span class="settingsValue" id="settingMasterVolumeVal">100%</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Music</span>
+                            <input type="range" id="settingMusicVolume" min="0" max="1" step="0.05" value="0.6" class="settingsSlider">
+                            <span class="settingsValue" id="settingMusicVolumeVal">60%</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Sounds<small>footsteps, blocks, animals</small></span>
+                            <input type="range" id="settingSfxVolume" min="0" max="1" step="0.05" value="0.9" class="settingsSlider">
+                            <span class="settingsValue" id="settingSfxVolumeVal">90%</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Ambience<small>birds, crickets, caves, water</small></span>
+                            <input type="range" id="settingAmbienceVolume" min="0" max="1" step="0.05" value="0.7" class="settingsSlider">
+                            <span class="settingsValue" id="settingAmbienceVolumeVal">70%</span>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Weather<small>rain, wind and thunder</small></span>
                             <input type="range" id="settingWeatherVolume" min="0" max="1" step="0.05" value="0.8" class="settingsSlider">
                             <span class="settingsValue" id="settingWeatherVolumeVal">80%</span>
                         </div>
@@ -539,6 +577,207 @@
         </div>
     </div>
 
+    <!-- ── Credits ────────────────────────────────────────────────────────── -->
+    <div class="scrim hidden" id="CreditsScreen">
+        <div class="panel popup">
+            <div class="popupTitle">Credits</div>
+            <div class="creditsList">
+                <div class="creditRow"><span class="creditRole">Developer</span><span class="creditName">Alex Fischer</span></div>
+                <div class="creditRow"><span class="creditRole">Music</span><span class="creditName">Solomon Henley</span></div>
+            </div>
+            <div class="formNote">Wonder World &nbsp;·&nbsp; Interlinked Creations</div>
+            <div class="menuButton primary" id="creditsBackBtn">Back</div>
+        </div>
+    </div>
+
+    <!-- ── Who is playing ─────────────────────────────────────────────────── -->
+    <!-- The names used on this machine, to pick from, and the making of a new
+         one (src/players.js). A keyboard types into the box; a controller
+         uses the keypad under it, a telephone's: 2 once is a, twice is b. -->
+    <div class="scrim top hidden" id="NameScreen">
+        <div class="panel popup namePanel">
+            <div class="popupTitle" id="nameTitle">Who's playing?</div>
+            <div id="namePick">
+                <div id="nameList" class="nameList"></div>
+                <div class="popupButtons">
+                    <div class="menuButton" id="nameBackBtn">Back</div>
+                    <div class="menuButton primary" id="nameNewBtn">+ New name</div>
+                </div>
+            </div>
+            <div id="nameEntry" class="hidden">
+                <input class="worldFormInput" id="nameInput" type="text" placeholder="Type a name" maxlength="16" autocomplete="off" spellcheck="false">
+                <div class="formNote" id="nameHint"></div>
+                <div class="t9Pad">
+                    <div class="menuButton t9Key" data-k="1"><b>1</b><small>.-_&#39;</small></div>
+                    <div class="menuButton t9Key" data-k="2"><b>2</b><small>abc</small></div>
+                    <div class="menuButton t9Key" data-k="3"><b>3</b><small>def</small></div>
+                    <div class="menuButton t9Key" data-k="4"><b>4</b><small>ghi</small></div>
+                    <div class="menuButton t9Key" data-k="5"><b>5</b><small>jkl</small></div>
+                    <div class="menuButton t9Key" data-k="6"><b>6</b><small>mno</small></div>
+                    <div class="menuButton t9Key" data-k="7"><b>7</b><small>pqrs</small></div>
+                    <div class="menuButton t9Key" data-k="8"><b>8</b><small>tuv</small></div>
+                    <div class="menuButton t9Key" data-k="9"><b>9</b><small>wxyz</small></div>
+                    <div class="menuButton t9Key" data-k="shift" id="t9Shift"><b>&#8679;</b><small>Aa</small></div>
+                    <div class="menuButton t9Key" data-k="0"><b>0</b><small>space</small></div>
+                    <div class="menuButton t9Key" data-k="back"><b>&#9003;</b><small>rub out</small></div>
+                </div>
+                <div class="formNote padOnly"><kbd class="pad">A</kbd> press a key &nbsp;·&nbsp; <kbd class="pad">X</kbd> rub out &nbsp;·&nbsp; <kbd class="pad">Y</kbd> space &nbsp;·&nbsp; <kbd class="pad">Start</kbd> done</div>
+                <div class="popupButtons">
+                    <div class="menuButton" id="nameCancelBtn">Back</div>
+                    <div class="menuButton primary" id="nameDoneBtn">Done</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Players (pause menu) ───────────────────────────────────────────── -->
+    <!-- Who is in this world, and the two ways more can come: a controller
+         joining on this screen, and other machines on the network. -->
+    <div class="scrim hidden" id="PlayersScreen">
+        <div class="panel popup wide">
+            <div class="popupTitle">Players</div>
+            <div id="playersList" class="playersList"></div>
+            <div id="splitSection">
+                <div class="settingsSectionTitle">On this screen</div>
+                <div class="formNote" id="splitNote"></div>
+            </div>
+            <div id="lanSection">
+                <div class="settingsSectionTitle">On your network</div>
+                <div class="settingsRow">
+                    <span class="settingsLabel">Open to the network</span>
+                    <label class="settingsToggle"><input type="checkbox" id="lanOpenToggle"><span class="track"></span></label>
+                </div>
+                <div class="formNote" id="lanNote"></div>
+            </div>
+            <div class="popupButtons">
+                <div class="menuButton primary" id="playersBackBtn">Done</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Join a game on the network (world list) ────────────────────────── -->
+    <div class="scrim hidden" id="LanJoinModal">
+        <div class="panel popup wide">
+            <div class="popupTitle">Join a game</div>
+            <div id="lanGameList" class="nameList"></div>
+            <div class="formGrid">
+                <label class="formLabel" for="lanJoinAddress">Or its address<small>on the host's Players panel</small></label>
+                <input class="worldFormInput" id="lanJoinAddress" type="text" placeholder="192.168.1.20:25599" maxlength="60" autocomplete="off" spellcheck="false">
+            </div>
+            <div class="formNote" id="lanJoinNote"></div>
+            <div class="popupButtons">
+                <div class="menuButton" id="lanJoinCloseBtn">Back</div>
+                <div class="menuButton primary" id="lanJoinGoBtn">Join</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- A guest whose game has ended: the host left, or they did. -->
+    <div class="scrim top hidden" id="GuestOverScreen">
+        <div class="panel popup">
+            <div class="popupTitle">Wonder World</div>
+            <div class="popupMessage" id="guestOverText">The game has ended.</div>
+            <div class="menuButton primary" id="guestOverBtn">OK</div>
+        </div>
+    </div>
+
+    <!-- ── Character ──────────────────────────────────────────────────────── -->
+    <!-- The player's own Quiddle: what they look like in third person and to
+         other players. Every choice shows at once on the figure (Character.js)
+         and is kept with the settings; there is nothing to save. -->
+    <div class="scrim hidden" id="CharacterScreen">
+        <div class="panel charPanel">
+            <div class="panelHeader">
+                <span class="panelTitle">Character <span id="characterTitle" class="panelNote"></span></span>
+                <div class="headerBtns">
+                    <div class="menuButton small" id="characterRandomBtn">Surprise me</div>
+                    <div class="menuButton small primary" id="characterDoneBtn">Done</div>
+                </div>
+            </div>
+            <div class="charBody">
+                <div class="charStage">
+                    <canvas id="characterCanvas"></canvas>
+                    <div class="formNote">Drag to turn. This look is kept with your name.</div>
+                </div>
+                <div class="charLooks">
+                    <div class="formGrid">
+                        <label class="formLabel">Hair</label>
+                        <select class="settingsSelect seg charLook" id="charHair" data-look="hair">
+                            <option value="0">Short</option>
+                            <option value="1">Long</option>
+                            <option value="2">Straw hat</option>
+                            <option value="3">Cropped</option>
+                            <option value="4">Bun</option>
+                            <option value="5">Beard</option>
+                        </select>
+                        <label class="formLabel">Hair colour</label>
+                        <select class="settingsSelect seg charLook" id="charHairColor" data-look="hairColor">
+                            <option value="0" data-swatch="#5b3b24">Brown</option>
+                            <option value="1" data-swatch="#deb25a">Fair</option>
+                            <option value="2" data-swatch="#2d2521">Black</option>
+                            <option value="3" data-swatch="#9a4a22">Auburn</option>
+                            <option value="4" data-swatch="#b5b2ac">Grey</option>
+                        </select>
+                        <label class="formLabel">Eyes</label>
+                        <select class="settingsSelect seg charLook" id="charEyes" data-look="eyes">
+                            <option value="0" data-swatch="#6a4424">Brown</option>
+                            <option value="1" data-swatch="#3d78c2">Blue</option>
+                            <option value="2" data-swatch="#3f8f4f">Green</option>
+                        </select>
+                        <label class="formLabel">Skin</label>
+                        <select class="settingsSelect seg charLook" id="charSkin" data-look="skin">
+                            <option value="0" data-swatch="#f2c9a6">1</option>
+                            <option value="1" data-swatch="#e0b088">2</option>
+                            <option value="2" data-swatch="#c68e62">3</option>
+                            <option value="3" data-swatch="#8a5a3c">4</option>
+                            <option value="4" data-swatch="#5e3c2c">5</option>
+                        </select>
+                        <label class="formLabel">Clothes</label>
+                        <select class="settingsSelect seg charLook" id="charOutfit" data-look="outfit">
+                            <option value="0">Tunic</option>
+                            <option value="1">Overalls</option>
+                            <option value="2">Dress</option>
+                            <option value="3">Waistcoat</option>
+                            <option value="4">Skirt</option>
+                            <option value="5">Jumper</option>
+                        </select>
+                        <label class="formLabel">Frame<small>where the width is</small></label>
+                        <select class="settingsSelect seg charLook" id="charSex" data-look="sex">
+                            <option value="0">Shoulders</option>
+                            <option value="1">Hips</option>
+                        </select>
+                        <label class="formLabel">Build</label>
+                        <select class="settingsSelect seg charLook" id="charBuild" data-look="build">
+                            <option value="0">Slight</option>
+                            <option value="1">Medium</option>
+                            <option value="2">Broad</option>
+                        </select>
+                        <label class="formLabel">Arms</label>
+                        <select class="settingsSelect seg charLook" id="charArms" data-look="arms">
+                            <option value="0">Lean</option>
+                            <option value="1">Medium</option>
+                            <option value="2">Heavy</option>
+                        </select>
+                        <label class="formLabel">Legs</label>
+                        <select class="settingsSelect seg charLook" id="charLegs" data-look="legs">
+                            <option value="0">Lean</option>
+                            <option value="1">Medium</option>
+                            <option value="2">Heavy</option>
+                        </select>
+                        <label class="formLabel">Height</label>
+                        <select class="settingsSelect seg charLook" id="charHeight" data-look="height">
+                            <option value="0">Short</option>
+                            <option value="1">Shorter</option>
+                            <option value="2">Middling</option>
+                            <option value="3">Taller</option>
+                            <option value="4">Tall</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ── How To Play ────────────────────────────────────────────────────── -->
     <div class="scrim hidden" id="HowToPlayScreen">
         <div id="howToBox" class="panel">
@@ -563,6 +802,7 @@
                             <li><kbd>Space</kbd> jump, swim up</li>
                             <li><kbd>Shift</kbd> sprint</li>
                             <li><kbd>Ctrl</kbd> or <kbd>Q</kbd> sneak, go down</li>
+                            <li><kbd>V</kbd> see yourself from behind, from in front, or through your own eyes</li>
                         </ul>
 
                         <div class="howToSectionTitle">Using things</div>
@@ -584,6 +824,12 @@
                             <li><kbd class="pad">A</kbd> jump &nbsp;·&nbsp; <kbd class="pad">B</kbd> sneak &nbsp;·&nbsp; <kbd class="pad">RT</kbd> mine and attack &nbsp;·&nbsp; <kbd class="pad">LT</kbd> place and use</li>
                             <li><kbd class="pad">LB</kbd> <kbd class="pad">RB</kbd> hotbar &nbsp;·&nbsp; <kbd class="pad">Y</kbd> inventory &nbsp;·&nbsp; <kbd class="pad">X</kbd> crafting &nbsp;·&nbsp; <kbd class="pad">Start</kbd> pause</li>
                             <li>In menus: <kbd class="pad">D-pad</kbd> to move, <kbd class="pad">A</kbd> to choose, <kbd class="pad">B</kbd> to go back. The full list is in Settings, under Controls.</li>
+                        </ul>
+
+                        <div class="howToSectionTitle">Playing together</div>
+                        <ul class="howToList">
+                            <li><b>On this screen:</b> pause, open <b>Players</b>, and press <kbd class="pad">A</kbd> on another controller. Up to four, each with their own part of the screen</li>
+                            <li><b>On your network:</b> pause, open <b>Players</b> and turn on <b>Open to the network</b>. The others choose <b>Play</b>, then <b>Join a game</b></li>
                         </ul>
                     </div>
                     <div>
@@ -749,9 +995,13 @@
                 <img id="PauseLogo" src="./data/textures/UI/Logo_Beta.png" class="pauseLogo" alt="Wonder World Logo">
                 <div class="pauseTitle">Paused</div>
                 <div class="menuButton primary" onclick="resumeGame()">Resume</div>
-                <div class="menuButton" id="pauseSettingsBtn">Settings</div>
-                <div class="menuButton" id="pauseHowToBtn">How to Play</div>
-                <div class="menuButton quiet" onclick="leaveWorld()">Save &amp; Quit</div>
+                <div class="pauseGrid">
+                    <div class="menuButton small" id="pausePlayersBtn">Players</div>
+                    <div class="menuButton small" id="pauseCharacterBtn">Character</div>
+                    <div class="menuButton small" id="pauseSettingsBtn">Settings</div>
+                    <div class="menuButton small" id="pauseHowToBtn">How to Play</div>
+                </div>
+                <div class="menuButton quiet" id="pauseQuitBtn" onclick="leaveWorld()">Save &amp; Quit</div>
             </div>
         </div>
 

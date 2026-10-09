@@ -138,6 +138,22 @@ export class Atmosphere {
         };
     }
 
+    /**
+     * A guest in someone else's game: take the host's clock, weather and
+     * clouds as they are now (its toJSON(), with `running`). The host sends it
+     * every couple of seconds, so this game's own weather never gets far.
+     */
+    sync(a) {
+        if (!this.active || !a) return;
+        this.day.fromJSON(a.day);
+        if (a.running != null) this.day.running = !!a.running;
+        if (a.weather?.mode) this.weather.mode = a.weather.mode;
+        this.weather.fromJSON(a.weather);
+        const c = a.clouds;
+        if (c?.a?.length === 2) { this.field.offA[0] = +c.a[0] || 0; this.field.offA[1] = +c.a[1] || 0; }
+        if (c?.b?.length === 2) { this.field.offB[0] = +c.b[0] || 0; this.field.offB[1] = +c.b[1] || 0; }
+    }
+
     // ── Settings ─────────────────────────────────────────────────────────────
 
     setSkyMode(mode) { this.skyMode = mode === 'pretty' ? 'pretty' : 'simple'; this.sky.setMode(this.skyMode); }
@@ -243,6 +259,7 @@ export class Atmosphere {
         const here = this.active ? W.precipAt(field, f.px, f.pz) : 0;
         const roof = this.precip.heightmap.heightAt(f.px, f.pz);
         const tor = this._tor.alpha * Math.max(0, 1 - Math.hypot(this._tor.x - f.px, this._tor.z - f.pz) / 300);
+        this.rainHere = here * (shares[0] + shares[2]);      // for the other sounds (no birds in the rain)
         this.audio.update(dt, {
             rain: here * (shares[0] + shares[2]),
             pellet: shares[2],

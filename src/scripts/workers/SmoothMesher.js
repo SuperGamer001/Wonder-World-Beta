@@ -41,7 +41,8 @@
  */
 
 import { CHUNK_SIZE, CHUNK_SIZE_Y, CHUNK_VOLUME } from '../engine/ChunkData.js';
-import { FACE_NORMAL8 } from './GreedyMesher.js';
+import { FACE_NORMAL8, markSection } from './GreedyMesher.js';
+import { SECTION_SHIFT } from '../engine/Visibility.js';
 import {
     KIND_EMPTY, KIND_MESH, SENTINEL, SMOOTH_REACH, SMOOTH_SPREAD, SMOOTH_SAMPLES,
     EDGE_A, EDGE_B, CORNER_U, CORNER_V,
@@ -167,6 +168,12 @@ export class SmoothMesher {
             read: this._get,
             emit: (sink) => {
                 for (let i = 0; i < list.length; i += 4) {
+                    // Everything a deformed voxel draws is seen through its own
+                    // cell, so it belongs to that cell's section — also the part
+                    // of a leaning top that dips into the voxel below, which
+                    // may be in the section under it (hence the one section
+                    // more that Visibility.js draws above those it reaches).
+                    markSection(sink, list[i + 1] >> SECTION_SHIFT);
                     describeVoxel(this.field, this.flipped, list[i], list[i + 1], list[i + 2], s);
                     this._emitVoxel(sink, list[i], list[i + 1], list[i + 2], list[i + 3], s);
                 }

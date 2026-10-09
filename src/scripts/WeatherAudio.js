@@ -1,20 +1,25 @@
 /**
- * WeatherAudio — rain, wind and thunder, synthesised with WebAudio. No sound
- * files: every sound is filtered noise, generated once (loops) or per strike
- * (thunder), so it never repeats audibly and ships nothing.
+ * WeatherAudio — rain, wind and thunder. Rain and wind are made here as they
+ * are needed — filtered noise, which is what they are — so they never repeat
+ * audibly. Thunder is played from data/sounds/ambiant/thunder_*.ogg (a stroke
+ * worked out a pulse at a time by tools/gen_sounds.mjs; a clap of raw noise,
+ * as it used to be, sounded like a game console), with a made rumble as the
+ * fallback where a pack has no such files.
  *
  *   rain    pink noise, band-limited; louder and lower as it gets heavier, and
  *           muffled under a roof or in a cave
  *   hail    the rain loop, brighter, rattling
  *   wind    brown noise through a band-pass that sweeps with the gusts
- *   thunder a crack for close strikes, then a rolling rumble; it arrives after
- *           distance / 343 seconds (one block = one metre) and the farther the
- *           strike, the quieter and more muffled it is
+ *   thunder a near, a middling or a far-off take by the distance; it arrives
+ *           after distance / 343 seconds (one block = one metre) and the
+ *           farther the strike, the quieter and more muffled it is
  *
- * The AudioContext is created lazily the first time there is something to hear
- * (after the player has clicked into a world, so autoplay rules allow it), and
- * volume is Settings → Audio → Weather Volume.
+ * It plays through the game's one mixer (Sound.js: its context and its weather
+ * bus), which exists once the player has clicked into the game, and its volume
+ * is Settings → Audio → Weather.
  */
+
+import { sound } from './Sound.js';
 
 const SPEED_OF_SOUND = 343;   // blocks (metres) per second
 
@@ -58,20 +63,14 @@ export class WeatherAudio {
 
     _init() {
         if (this.ctx || this.failed) return !!this.ctx;
-        // Browsers refuse to start audio before the user has interacted with the
-        // page (and warn every time it is tried). Wait until they have.
-        if (navigator.userActivation && !navigator.userActivation.hasBeenActive) return false;
-        try {
-            const AC = window.AudioContext || window.webkitAudioContext;
-            this.ctx = new AC();
-        } catch {
-            this.failed = true;
-            return false;
-        }
-        const ctx = this.ctx;
+        // The mixer exists once the player has done something (browsers refuse
+        // to start audio before that, and warn every time it is tried).
+        const mixer = sound.weatherBus();
+        if (!mixer) return false;
+        const ctx = this.ctx = mixer.ctx;
         this.master = ctx.createGain();
         this.master.gain.value = this.volume;
-        this.master.connect(ctx.destination);
+        this.master.connect(mixer.bus);
 
         const pink = noiseBuffer(ctx, 4, 'pink');
         const brown = noiseBuffer(ctx, 5, 'brown');
@@ -127,6 +126,7 @@ export class WeatherAudio {
             this._resumeT = 2;
             ctx.resume().catch(() => {});
         }
+        this.exposure = s.exposure;
 
         const ex = Math.max(0, Math.min(1, s.exposure));
         const r = s.rain;
@@ -141,11 +141,22 @@ export class WeatherAudio {
         this.windBp.frequency.setTargetAtTime(220 + w * 520, t, 0.3);
     }
 
-    /** Thunder for a strike `dist` blocks away. `close` adds the crack. */
+    /** Thunder for a strike `dist` blocks away. */
     thunder(dist) {
         if (this.volume <= 0 || !this._init()) return;
         const ctx = this.ctx;
-        const close = dist < 130;
+        // A recorded stroke: near ones crack, far ones only roll. Underground
+        // it comes through the rock, quieter and with the top off.
+        const take = dist < 260 ? 'thunder_close' : dist < 900 ? 'thunder_mid' : 'thunder_far';
+        if (sound.has(take)) {
+            const ex = Math.max(0, Math.min(1, this.exposure ?? 1));
+            sound.play(take, {
+                volume: this.volume * Math.min(1, 1.25 / (1 + dist / 420)) * (0.35 + 0.65 * ex),
+                delay: dist / SPEED_OF_SOUND, wait: true, vary: 0.04, pitch: ex < 0.3 ? 0.9 : 1, bus: 'weather',
+            });
+            return;
+        }
+        const close = false;
         const dur = 3.5 + Math.min(4, dist / 90);
         const n = Math.floor(ctx.sampleRate * dur);
         const buf = ctx.createBuffer(1, n, ctx.sampleRate);
@@ -191,7 +202,7 @@ export class WeatherAudio {
     }
 
     dispose() {
-        this.ctx?.close().catch(() => {});
+        this.master?.disconnect();      // the context is the mixer's, and stays
         this.ctx = null;
     }
 }

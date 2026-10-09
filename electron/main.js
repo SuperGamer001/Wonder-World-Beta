@@ -32,6 +32,10 @@ process.env.WONDER_DATA_DIR = app.getPath('userData');
 // Ignored on machines with one GPU. Must be set before the app is ready.
 app.commandLine.appendSwitch('force_high_performance_gpu');
 
+// The menu music starts with the game. A browser makes a page wait for a click
+// before it may make a sound; this is the game's own window, so it need not.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
+
 let mainWindow   = null;
 let serverOrigin = null;
 

@@ -13,11 +13,14 @@
 //             submission), median / p95 — the main-thread share of a frame,
 //             which also absorbs waiting on a GPU that has fallen behind
 //   calls/tris, GPU geometry and texture counts, JS heap, and terrain shadow
-//             redraws during the window (cached otherwise — see Shadows.js)
+//             redraws during the window (cached otherwise — see Shadows.js);
+//             with mobs, how many were posed in the last frame and how often
+//             the whole shadow map was copied for them
 //
 // Scenarios: the four graphics presets looking at the horizon, the Pro preset
-// in a thunderstorm, and a fast fly-over that streams new chunks in (the
-// hitch test). "preset+key=value" runs a preset with a setting changed.
+// in a thunderstorm, the Normal preset with twenty mobs round the camera, and
+// a fast fly-over that streams new chunks in (the hitch test).
+// "preset+key=value" runs a preset with a setting changed.
 //
 //   BROWSER=<path>        browser to use (Chrome first: headless Edge can be
 //                         marked hidden, and stop drawing, with the display off)
@@ -158,6 +161,10 @@ if (process.env.BENCH_UNMIN) {
     });
     await send('Fetch.enable', { patterns: [{ urlPattern: '*three.module.min.js*' }] });
 }
+// A new data folder has no player yet, and the game would stop to ask for a
+// name (src/players.js). This run is not about that: say who is playing.
+await fetch(`${base}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Tester' }) });
+await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: 'Tester' }) });
 await send('Page.navigate', { url: `${base}/game.html` });
 for (let i = 0; i < 80; i++) {
     await sleep(500);
@@ -399,6 +406,7 @@ async function measure(ms, perFrameJs = null) {
     await evalJs(`(() => {
         const B = window.__bench; B.frames = []; B.ticks = []; B.last = 0; B.on = true;
         B.sr0 = window.__wwDebug()?.shadowRedraws ?? 0;
+        B.sc0 = window.__wwDebug()?.shadowCopies ?? 0;
         if (window.__benchStep) {
             const step = (t) => { if (!B.on) return; window.__benchStep(t); requestAnimationFrame(step); };
             requestAnimationFrame(step);
@@ -410,7 +418,8 @@ async function measure(ms, perFrameJs = null) {
     const r = await evalJs(`(() => { const B = window.__bench; B.on = false; window.__benchStep = null;
         const lt = B.longTasks; B.longTasks = [];
         const dbg = window.__wwDebug();
-        return { frames: B.frames, ticks: B.ticks, longTasks: lt, dbg, shadowRedraws: (dbg.shadowRedraws ?? 0) - B.sr0 }; })()`);
+        return { frames: B.frames, ticks: B.ticks, longTasks: lt, dbg, shadowRedraws: (dbg.shadowRedraws ?? 0) - B.sr0,
+                 shadowCopies: (dbg.shadowCopies ?? 0) - B.sc0 }; })()`);
     if (PROFILE) {
         lastProfile = (await send('Profiler.stop')).profile;
         if (!TRACE) printProfile(lastProfile);
@@ -448,14 +457,14 @@ async function measure(ms, perFrameJs = null) {
         tick50: +(pct(t, 0.5) || 0).toFixed(2), tick95: +(pct(t, 0.95) || 0).toFixed(2),
         drawCalls: r.dbg.drawCalls, tris: r.dbg.tris, meshes: r.dbg.meshes, programTypes: r.dbg.programTypes,
         geometries: r.dbg.geometries, textures: r.dbg.textures, programs: r.dbg.programs,
-        shadowRedraws: r.shadowRedraws, mobs: r.dbg.mobs, load,
+        shadowRedraws: r.shadowRedraws, shadowCopies: r.shadowCopies, mobs: r.dbg.mobs, mobsPosed: r.dbg.mobsPosed ?? 0, load,
         heapMB:await evalJs(`Math.round((performance.memory?.usedJSHeapSize ?? 0) / 1048576)`),
         evaluated: process.env.BENCH_EVAL ? await evalJs(process.env.BENCH_EVAL).catch(e => String(e)) : undefined,
     };
 }
 
 function report(name, m) {
-    console.log(`${name.padEnd(22)} ${String(m.fps).padStart(6)} fps  p50 ${String(m.p50).padStart(6)}  p95 ${String(m.p95).padStart(6)}  p99 ${String(m.p99).padStart(6)}  max ${String(m.max).padStart(6)}  >33ms ${String(m.hitches).padStart(3)}  tick ${m.tick50}/${m.tick95} ms  calls ${m.drawCalls}  tris ${m.tris}  [geo ${m.geometries} tex ${m.textures} prog ${m.programs} heap ${m.heapMB}MB]  shadow redraws ${m.shadowRedraws} mobs ${m.mobs}${m.far ? `  far tiles ${m.far}` : ''}  CPU ${m.load.cpu}%${m.load.gpu ? `  GPU ${m.load.gpu.util}% ${m.load.gpu.mhz} MHz ${m.load.gpu.watts} W ${m.load.gpu.temp}°C` : ''}`);
+    console.log(`${name.padEnd(22)} ${String(m.fps).padStart(6)} fps  p50 ${String(m.p50).padStart(6)}  p95 ${String(m.p95).padStart(6)}  p99 ${String(m.p99).padStart(6)}  max ${String(m.max).padStart(6)}  >33ms ${String(m.hitches).padStart(3)}  tick ${m.tick50}/${m.tick95} ms  calls ${m.drawCalls}  tris ${m.tris}  [geo ${m.geometries} tex ${m.textures} prog ${m.programs} heap ${m.heapMB}MB]  shadow redraws ${m.shadowRedraws} mobs ${m.mobs}${m.mobs ? ` (${m.mobsPosed} posed, ${m.shadowCopies} shadow copies)` : ''}${m.far ? `  far tiles ${m.far}` : ''}  CPU ${m.load.cpu}%${m.load.gpu ? `  GPU ${m.load.gpu.util}% ${m.load.gpu.mhz} MHz ${m.load.gpu.watts} W ${m.load.gpu.temp}°C` : ''}`);
     if (process.env.BENCH_PROGRAMS) console.log('   programs:', (m.programTypes ?? []).join(', '));
     if (m.evaluated !== undefined) console.log('   eval:', JSON.stringify(m.evaluated));
 }
@@ -507,6 +516,35 @@ if (run('storm')) {
     results.storm = await measure(5000);
     report('pro-thunderstorm', results.storm);
     await dispatch('setAtmosphere', { hours: 12, weather: 'sunny', immediate: true });
+}
+
+// Mobs: twenty of them standing round the camera at the Normal preset — every
+// one posed on the CPU each frame, and their shadows drawn over the terrain's.
+// (The other scenarios have none: a spectator spawns no mobs.) "mobs+key=value"
+// changes a setting for it. They are left behind by the fly-over that follows.
+for (const w of want.length ? want.filter(w => w === 'mobs' || w.startsWith('mobs+')) : ['mobs']) {
+    const p = { ...PRESETS.normal };
+    for (const m of w.split('+').slice(1)) {
+        const [k, v] = m.split('=');
+        p[k] = v === undefined ? true : isNaN(+v) ? v : +v;
+    }
+    await dispatch('applySettings', p);
+    await settle();
+    await evalJs(`(() => {
+        if (window.__wwDebug().mobs > 0) return 0;
+        const p = window.me.position, kinds = ['cow', 'pig', 'sheep', 'chicken', 'quiddle'];
+        for (let i = 0; i < 20; i++) {
+            const a = i / 20 * Math.PI * 2, r = 6 + (i % 4) * 5;
+            const x = p.x + Math.cos(a) * r, z = p.z + Math.sin(a) * r;
+            let y = Math.floor(p.y);
+            while (y > -120 && window.__wwBlockAt(x, y, z) === 0) y--;
+            window.__wwSpawnMob(kinds[i % kinds.length], x, y + 1.1, z);
+        }
+        return 1;
+    })()`);
+    await sleep(1500);
+    results[w] = await measure(MEASURE_MS);
+    report(w.replace(/^mobs/, 'normal-mobs'), results[w]);
 }
 
 // Stream new terrain in: fly along +X at 40 blocks/s at the Normal preset.

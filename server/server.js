@@ -16,6 +16,10 @@
  *   GET  /api/settings            get global player settings
  *   PUT  /api/settings            update global player settings
  *   GET  /api/data/manifest       list all data JSON files by category
+ *   POST /api/lan/open | close    let players on the network into a world (see *On the network*)
+ *   GET  /api/lan/status | games | info
+ *
+ * WebSocket — multiplayer: every `mp:*` text message goes to multiplayer.js.
  *
  * WebSocket — chunk I/O (chunks are 16×CHUNK_SIZE_Y×16 columns, addressed by cx,cz only):
  *   Client→Server text:   { type:'loadChunk', worldId, cx, cz }
@@ -43,6 +47,9 @@ import zlib           from 'zlib';
 import { promisify }  from 'util';
 import { fileURLToPath } from 'url';
 import crypto         from 'crypto';
+import os             from 'os';
+import dgram          from 'dgram';
+import { MultiplayerHub } from './multiplayer.js';
 // Single source of truth for chunk dimensions — keeps the binary save/load
 // format byte-for-byte identical to the client. If CHUNK_SIZE_Y changes on the
 // client, the server picks it up automatically (no stale hardcoded volume).
@@ -105,6 +112,12 @@ fs.mkdirSync(WORLDS_DIR, { recursive: true });
 function worldDir(id)         { return path.join(WORLDS_DIR, id); }
 function worldMetaPath(id)    { return path.join(worldDir(id), 'world.json'); }
 function playerStatePath(id)  { return path.join(worldDir(id), 'player.json'); }
+// Everyone but the world's owner — the other players of a split screen, and
+// those who joined over the network — has a file of their own, by the id their
+// game gave (settings: clientId).
+function guestStatePath(id, player) {
+    return path.join(worldDir(id), 'players', `${String(player).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80)}.json`);
+}
 function screenshotPath(id)   { return path.join(worldDir(id), 'screenshot.jpg'); }
 function regionsDir(id)       { return path.join(worldDir(id), 'regions'); }
 
@@ -357,6 +370,38 @@ async function saveChunkBatch(worldId, chunks) {
 // ── Express app ───────────────────────────────────────────────────────────────
 
 const app = express();
+
+// ── On the network ────────────────────────────────────────────────────────────
+// The server listens on this machine only. When the player opens a world to the
+// network (POST /api/lan/open, from the pause menu) a second listener is
+// started on every interface, and what comes in through it is a guest: it may
+// fetch the game itself and play in the one world that is open — its chunks,
+// its own player file, the multiplayer session — and nothing else. Not the
+// list of worlds, not another world, not the settings, not a way to delete or
+// make anything. Guests run this copy of the game (their browser or their own
+// app loads it from here), so both ends are always the same version.
+const LAN_PORT    = Number(process.env.WW_LAN_PORT ?? 25599);
+const BEACON_PORT = Number(process.env.WW_BEACON_PORT ?? 25598);
+const lan = { worldId: null, server: null, wss: null, port: 0, beacon: null, timer: null };
+const GUEST_FILES = /^\/(index\.(html|css|js)|game\.html)$/;
+const GUEST_DIRS  = /^\/(src|data|gamepacks|node_modules\/three\/build)\//;
+
+app.use((req, res, next) => {
+    if (!lan.server || req.socket.localPort !== lan.port) return next();     // the player's own machine
+    req.lan = true;
+    let p;
+    try { p = decodeURIComponent(req.path); } catch { return res.status(400).end(); }
+    if (!lan.worldId || p.includes('..') || p.includes('\\') || p.includes('\0')) return res.status(403).json({ error: 'Not open' });
+    const world = `/api/worlds/${lan.worldId}`, get = req.method === 'GET', put = req.method === 'PUT';
+    const ok =
+        (get && (p === '/' || GUEST_FILES.test(p) || GUEST_DIRS.test(p))) ||
+        (get && ['/api/data/manifest', '/api/lan/info', '/api/settings', '/api/update-status', world, `${world}/far-edits`].includes(p)) ||
+        ((get || put) && p === `${world}/player-state` && typeof req.query.player === 'string' && req.query.player.length > 0) ||
+        (put && p === `${world}/far-edits`);
+    if (!ok) return res.status(403).json({ error: 'Not for guests' });
+    next();
+});
+
 // Same-origin only. This API can read, modify and delete the player's saved
 // worlds, and a wildcard CORS policy let any web page the user happened to have
 // open issue requests against it. The game itself is served from this origin,
@@ -472,6 +517,13 @@ app.put('/api/worlds/:id/player-state', (req, res) => {
     const meta = readMeta(req.params.id);
     if (!meta) return res.status(404).json({ error: 'Not found' });
     const state = req.body ?? {};
+    if (req.query.player) {
+        // Another player of this world: their own file, and the world is not theirs to stamp.
+        const file = guestStatePath(req.params.id, req.query.player);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify(state));
+        return res.json({ ok: true });
+    }
     if (state.position) meta.playerPos = state.position;
     meta.lastPlayed = Date.now();
     writeMeta(req.params.id, meta);
@@ -498,8 +550,8 @@ app.put('/api/worlds/:id/screenshot', (req, res) => {
 app.get('/api/worlds/:id/player-state', (req, res) => {
     if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
     try {
-        const raw = fs.readFileSync(playerStatePath(req.params.id), 'utf8');
-        res.json(JSON.parse(raw));
+        const file = req.query.player ? guestStatePath(req.params.id, req.query.player) : playerStatePath(req.params.id);
+        res.json(JSON.parse(fs.readFileSync(file, 'utf8')));
     } catch { res.json(null); }
 });
 
@@ -551,14 +603,41 @@ function readSettings() {
     catch { return {}; }
 }
 
-app.get('/api/settings', (_req, res) => res.json(readSettings()));
+// A guest's settings are their own, kept by their browser: they get none of these.
+app.get('/api/settings', (req, res) => res.json(req.lan ? {} : readSettings()));
 
 app.put('/api/settings', (req, res) => {
     const cur = readSettings();
-    const merged = { ...cur, ...(req.body ?? {}) };
+    // The names are changed one at a time (below): a whole list sent with the
+    // settings may be an old one, from before another pane added a name.
+    const { profiles: _stale, ...body } = req.body ?? {};
+    const merged = { ...cur, ...body };
     fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(merged, null, 2));
     res.json({ ok: true });
+});
+
+// The names used on this machine, each with the look that goes with it
+// (settings.json `profiles`: [{ name, skin }]).
+function writeProfiles(change) {
+    const cur = readSettings();
+    cur.profiles = change(Array.isArray(cur.profiles) ? cur.profiles.filter(p => p && typeof p.name === 'string') : []);
+    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(cur, null, 2));
+    return cur.profiles;
+}
+app.post('/api/profiles', (req, res) => {
+    const name = String(req.body?.name ?? '').replace(/[^A-Za-z0-9 ._'-]/g, '').trim().slice(0, 16);
+    if (!name) return res.status(400).json({ error: 'A name is needed' });
+    const skin = req.body?.skin && typeof req.body.skin === 'object' ? req.body.skin : null;
+    res.json(writeProfiles((list) => {
+        const p = list.find(q => q.name === name);
+        if (p) { if (skin) p.skin = skin; } else if (list.length < 32) list.push({ name, skin });
+        return list;
+    }));
+});
+app.delete('/api/profiles/:name', (req, res) => {
+    res.json(writeProfiles((list) => list.filter(p => p.name !== req.params.name)));
 });
 
 // ── Update status bridge ──────────────────────────────────────────────────────
@@ -633,7 +712,156 @@ app.get('/api/data/manifest', (_req, res) => {
             ? fs.readdirSync(dir).filter(f => f.endsWith('.json')).map(f => `data/${cat}/${f}`)
             : [];
     }
+    // Sounds are files, not definitions: every audio file under data/sounds/,
+    // one folder deep (blocks, entities, ambiant, ui, music). Sound.js names a
+    // sound after its file.
+    manifest.sounds = [];
+    const soundDir = path.join(dataDir, 'sounds');
+    if (fs.existsSync(soundDir)) {
+        for (const sub of fs.readdirSync(soundDir, { withFileTypes: true })) {
+            if (!sub.isDirectory()) continue;
+            for (const f of fs.readdirSync(path.join(soundDir, sub.name))) {
+                if (/\.(ogg|wav|mp3|m4a|flac)$/i.test(f)) manifest.sounds.push(`data/sounds/${sub.name}/${f}`);
+            }
+        }
+    }
     res.json(manifest);
+});
+
+// ── Multiplayer and the network ───────────────────────────────────────────────
+
+const hub = new MultiplayerHub((id) => !!readMeta(id));
+// When the last player of the world that is open to the network has gone, it
+// closes — a moment later: the guests have just been told the game is over,
+// and what each sends to be saved as they go has to find the door still open.
+const LAN_LINGER_MS = 1500;
+hub.onChange = (worldId) => {
+    if (worldId !== lan.worldId || hub.count(worldId) > 0) return;
+    setTimeout(() => { if (worldId === lan.worldId && hub.count(worldId) === 0) closeLan(); }, LAN_LINGER_MS).unref?.();
+};
+
+/** This machine's addresses on its networks, and each network's broadcast address. */
+function lanAddresses() {
+    const out = [];
+    for (const list of Object.values(os.networkInterfaces())) {
+        for (const a of list ?? []) {
+            if (a.family !== 'IPv4' || a.internal) continue;
+            const ip = a.address.split('.').map(Number), mask = a.netmask.split('.').map(Number);
+            out.push({ address: a.address, broadcast: ip.map((v, i) => (v | (~mask[i] & 255))).join('.') });
+        }
+    }
+    return out;
+}
+
+function lanStatus() {
+    const open = !!lan.worldId;
+    return {
+        open, worldId: lan.worldId, port: open ? lan.port : 0,
+        addresses: open ? lanAddresses().map(a => `${a.address}:${lan.port}`) : [],
+        players: open ? hub.count(lan.worldId) : 0,
+    };
+}
+
+/** Open `worldId` to the network: the second listener, and a beacon so games on the network can find it. */
+async function openLan(worldId) {
+    if (lan.worldId && lan.worldId !== worldId) closeLan();
+    if (!lan.server) {
+        const srv = http.createServer(app);
+        const listen = (port) => new Promise((resolve, reject) => {
+            srv.once('error', reject);
+            srv.listen(port, '0.0.0.0', () => { srv.removeListener('error', reject); resolve(); });
+        });
+        // The usual port, so an address typed in once works again; any port if that one is taken.
+        try { await listen(LAN_PORT); } catch { await listen(0); }
+        lan.server = srv;
+        lan.port = srv.address().port;
+        lan.wss = new WebSocketServer({
+            server: srv, perMessageDeflate: true,
+            // The page a guest plays in came from this listener: its sockets say so.
+            verifyClient: ({ origin }) => {
+                if (!origin) return true;
+                try { return new URL(origin).port === String(lan.port); } catch { return false; }
+            },
+        });
+        lan.wss.on('connection', (ws) => { ws.lan = true; onSocket(ws); });
+    }
+    lan.worldId = worldId;
+    if (!lan.beacon) {
+        lan.beacon = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+        lan.beacon.on('error', () => { /* no broadcast on this network: the address still works */ });
+        lan.beacon.bind(() => { try { lan.beacon.setBroadcast(true); } catch { /* likewise */ } });
+        lan.timer = setInterval(() => {
+            if (!lan.worldId) return;
+            const msg = Buffer.from(JSON.stringify({
+                ww: 'wonder-world', name: readMeta(lan.worldId)?.name ?? 'World', host: os.hostname(),
+                port: lan.port, players: hub.count(lan.worldId),
+            }));
+            for (const to of new Set(['255.255.255.255', ...lanAddresses().map(a => a.broadcast)])) {
+                lan.beacon.send(msg, BEACON_PORT, to, () => { /* a network that will not carry it */ });
+            }
+        }, 1500);
+        lan.timer.unref?.();
+    }
+}
+
+function closeLan() {
+    const worldId = lan.worldId;
+    lan.worldId = null;
+    clearInterval(lan.timer); lan.timer = null;
+    try { lan.beacon?.close(); } catch { /* already */ }
+    lan.beacon = null;
+    if (worldId) hub.close(worldId, 'closed', (ws) => !!ws.lan);      // the guests go; whoever is here stays
+    for (const ws of lan.wss?.clients ?? []) { try { ws.close(); } catch { /* gone */ } }
+    lan.wss?.close();
+    lan.server?.close();
+    lan.server?.closeAllConnections?.();
+    lan.server = lan.wss = null;
+    lan.port = 0;
+}
+
+// Games other machines on the network have open, heard from their beacons.
+const _games = new Map();   // "address:port" → { name, host, address, port, players, seen }
+let _listener = null;
+function listenForGames() {
+    if (_listener) return;
+    _listener = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    _listener.on('error', () => { try { _listener.close(); } catch { /* */ } _listener = null; });
+    _listener.on('message', (buf, from) => {
+        try {
+            const m = JSON.parse(buf.toString());
+            if (m?.ww !== 'wonder-world' || !Number.isInteger(m.port)) return;
+            _games.set(`${from.address}:${m.port}`, {
+                name: String(m.name ?? 'World').slice(0, 40), host: String(m.host ?? '').slice(0, 40),
+                address: from.address, port: m.port, players: Number(m.players) || 0, seen: Date.now(),
+            });
+        } catch { /* not ours */ }
+    });
+    _listener.bind(BEACON_PORT);
+    _listener.unref?.();
+}
+
+app.post('/api/lan/open', async (req, res) => {
+    const worldId = String(req.body?.worldId ?? '');
+    if (!readMeta(worldId)) return res.status(404).json({ error: 'Not found' });
+    try { await openLan(worldId); res.json(lanStatus()); }
+    catch (e) { res.status(500).json({ error: String(e?.message ?? e) }); }
+});
+app.post('/api/lan/close', (_req, res) => { closeLan(); res.json(lanStatus()); });
+app.get('/api/lan/status', (_req, res) => res.json(lanStatus()));
+app.get('/api/lan/games', (_req, res) => {
+    listenForGames();
+    const mine = new Set(lanAddresses().map(a => a.address).concat('127.0.0.1'));
+    const now = Date.now(), out = [];
+    for (const [key, g] of _games) {
+        if (now - g.seen > 5000) { _games.delete(key); continue; }
+        if (lan.worldId && g.port === lan.port && mine.has(g.address)) continue;      // our own
+        out.push({ name: g.name, host: g.host, address: `${g.address}:${g.port}`, players: g.players });
+    }
+    res.json(out);
+});
+// What a page is: the player's own game, or a guest's view of the world that is open.
+app.get('/api/lan/info', (req, res) => {
+    res.json(req.lan ? { guest: true, world: readMeta(lan.worldId) } : { guest: false });
 });
 
 // ── HTTP + WebSocket server ───────────────────────────────────────────────────
@@ -659,7 +887,10 @@ const wss    = new WebSocketServer({
 
 // ── WebSocket message handling ────────────────────────────────────────────────
 
-wss.on('connection', (ws) => {
+wss.on('connection', onSocket);
+
+function onSocket(ws) {
+    ws.on('close', () => hub.leave(ws));
     ws.on('message', async (data, isBinary) => {
         try {
             if (isBinary) {
@@ -674,10 +905,14 @@ wss.on('connection', (ws) => {
         }
     });
     ws.on('error', (err) => console.error('[server] websocket error:', err?.message ?? err));
-});
+}
 
 async function handleTextMessage(ws, msg) {
-    if (msg.type === 'loadChunk') {
+    // A guest has the one world that is open, and no other.
+    if (ws.lan && msg.worldId !== undefined && msg.worldId !== lan.worldId) return;
+    if (typeof msg.type === 'string' && msg.type.startsWith('mp:')) {
+        hub.handle(ws, msg);
+    } else if (msg.type === 'loadChunk') {
         const { worldId, cx, cz } = msg;
         const entry = await getChunkFromRegion(worldId, cx, cz);
         ws.send(buildChunkResponse(cx, cz, entry));
@@ -764,6 +999,7 @@ async function handleBinaryMessage(ws, data) {
     const wl      = buf.readUInt16LE(1);
     const worldId = buf.toString('utf8', 3, 3 + wl);
     const count   = buf.readUInt32LE(3 + wl);
+    if (ws.lan && worldId !== lan.worldId) return;
 
     let offset = 3 + wl + 4;
     const chunks = [];

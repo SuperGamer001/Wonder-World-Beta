@@ -28,6 +28,7 @@ export class WorkerPool {
         this._queue     = [];          // { taskId, job, transferList } waiting for a free worker
         this._callbacks = new Map();   // taskId → callback
         this._workers   = [];          // { worker, busy, id }
+        this._url       = workerUrl;
 
         for (let i = 0; i < n; i++) {
             const w = new Worker(workerUrl, { type: 'module' });
@@ -48,26 +49,40 @@ export class WorkerPool {
      */
     init(initData) {
         return new Promise((resolve) => {
-            let ready = 0;
+            let waiting = this._workers.length;
+            const settled = () => { if (--waiting === 0) resolve(); };
 
-            const onReady = () => {
-                ready++;
-                if (ready === this._workers.length) resolve();
-            };
-
-            for (const entry of this._workers) {
-                // Temporarily intercept messages to catch 'ready'
-                const originalHandler = entry.worker.onmessage;
-                entry.worker.onmessage = (e) => {
-                    if (e.data?.type === 'ready') {
-                        entry.worker.onmessage = originalHandler;
-                        onReady();
+            // A worker that fails before it has said it is ready never will be
+            // — its script did not load — and one such used to leave this
+            // promise, and so the whole world, waiting for ever. It is started
+            // again, twice at most; after that the pool goes on without it.
+            const start = (entry, triesLeft) => {
+                const w = entry.worker;
+                const onMessage = (e) => this._onMessage(entry.id, e);
+                w.onmessage = (e) => {
+                    if (e.data?.type !== 'ready') return onMessage(e);
+                    entry.ready = true;
+                    w.onmessage = onMessage;
+                    w.onerror = (ev) => this._onWorkerError(entry.id, ev);
+                    settled();
+                };
+                w.onerror = (ev) => {
+                    ev.preventDefault?.();
+                    w.terminate();
+                    if (!this._workers.includes(entry)) return;      // the pool was shut down meanwhile
+                    if (triesLeft > 0) {
+                        console.warn(`[WorkerPool] worker ${entry.id} did not start; trying again`);
+                        entry.worker = new Worker(this._url, { type: 'module' });
+                        start(entry, triesLeft - 1);
                     } else {
-                        originalHandler.call(entry.worker, e);
+                        console.error(`[WorkerPool] worker ${entry.id} would not start: going on without it`);
+                        entry.busy = true;                             // never given a job
+                        settled();
                     }
                 };
-                entry.worker.postMessage({ type: 'init', ...initData });
-            }
+                w.postMessage({ type: 'init', ...initData });
+            };
+            for (const entry of this._workers) start(entry, 2);
         });
     }
 

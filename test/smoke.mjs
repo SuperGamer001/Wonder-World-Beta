@@ -97,6 +97,10 @@ ws.on('message', (raw) => {
         const d = m.params.exceptionDetails;
         pageErrors.push(d.exception?.description ?? d.text);
     } else if (m.method === 'Network.loadingFailed') {
+        // The menu music is streamed, and when it stops (a world has come up)
+        // the browser drops the rest of the download and reports that as a
+        // load it cancelled. That one is not a failure; every other is.
+        if (m.params.canceled && m.params.type === 'Media') return;
         failedReqs.push(m.params.errorText + ' ' + (reqUrls.get(m.params.requestId) ?? '?'));
     } else if (m.method === 'Network.requestWillBeSent') {
         reqUrls.set(m.params.requestId, m.params.request.url);
@@ -145,6 +149,30 @@ await send('Network.enable');
 console.log('navigating to', `${base}/game.html`);
 await send('Page.navigate', { url: `${base}/game.html` });
 
+// ── The first time the game is opened ────────────────────────────────────────
+// A new data folder has no player: the game asks for a name before it shows
+// the title screen. It is given one the way a controller types it — the
+// telephone keypad, 7777 for S, 2 for a, 6 for m — and must then go on to the
+// title with that name chosen and kept.
+let asked = false;
+for (let i = 0; i < 80 && !asked; i++) {
+    await sleep(500);
+    asked = await evalJs(`(() => {
+        const n = document.getElementById('NameScreen'), t = document.getElementById('TitleScreen');
+        return !!n && !n.classList.contains('hidden') && t.classList.contains('hidden') && typeof window.__wwName?.pad === 'function';
+    })()`).catch(() => false);
+}
+await evalJs(`for (const k of ['7', '7', '7', '7', '2', '6']) window.__wwName.pad(k); window.__wwName.pad('done'); 1`).catch(() => 0);
+await sleep(600);
+const named = await evalJs(`(() => ({
+    hidden: document.getElementById('NameScreen').classList.contains('hidden'),
+    button: document.getElementById('titlePlayerBtn').textContent,
+}))()`).catch(() => null);
+const profiles = (await (await fetch(`${base}/api/settings`)).json().catch(() => ({})));
+const nameOk = asked && named?.hidden && named.button === 'Playing as Sam' &&
+               profiles.playerName === 'Sam' && profiles.profiles?.some(p => p.name === 'Sam');
+console.log(`first run asks for a name: ${nameOk ? 'OK' : 'WRONG'}`, JSON.stringify({ asked, named, saved: profiles.playerName }));
+
 // Wait for gamepack loading to finish (the title screen is the signal) rather
 // than guessing at a delay — starting a world early meant the workers got an
 // empty biome list.
@@ -158,6 +186,38 @@ for (let i = 0; i < 80; i++) {
     if (ready) break;
 }
 console.log('gamepacks loaded / title screen up:', ready);
+
+// ── The place behind the menus ───────────────────────────────────────────────
+// A model baked from the game's own terrain (data/menu/scene.glb, drawn by
+// MenuScene.js), with the player's figure in it. It must load and show, with
+// no world generated for it. Play must put the menu away, send the camera to
+// the other view, and only then bring up the list of worlds; Back must do the
+// same the other way. And it must be gone once a world is started (asked
+// below, when one is up).
+const menuState = () => evalJs(`(() => ({
+    scene: window.__wwMenuScene?.state() ?? null,
+    title: !document.getElementById('TitleScreen').classList.contains('hidden'),
+    list: !document.getElementById('WorldListScreen').classList.contains('hidden'),
+    showing: document.body.classList.contains('menuReady'),
+    chunks: window.__wwDebug?.()?.meshes ?? 0,
+}))()`).catch(() => null);
+const until = async (test, tries = 120, every = 250) => {
+    for (let i = 0; i < tries; i++) { const s = await menuState(); if (s && test(s)) return s; await sleep(every); }
+    return await menuState();
+};
+const atTitle = await until(s => s.showing && s.scene?.ready);
+await sleep(800);
+await evalJs(`document.getElementById('startButton').click(); 1`);
+await sleep(250);
+const onTheWay = await menuState();
+const atWorlds = await until(s => s.list, 60);
+await evalJs(`document.getElementById('worldListBackBtn').click(); 1`);
+const backAgain = await until(s => s.title, 60);
+const menuOk = !!atTitle?.showing && atTitle.scene.triangles > 0 && atTitle.scene.view === 'title' && !atTitle.chunks &&
+               !!onTheWay && !onTheWay.title && !onTheWay.list && onTheWay.scene.travelling &&
+               !!atWorlds?.list && atWorlds.scene.view === 'worlds' && !atWorlds.scene.travelling &&
+               !!backAgain?.title && !backAgain.list && backAgain.scene.view === 'title';
+console.log(`place behind the menus: ${menuOk ? 'OK' : 'WRONG'}`, JSON.stringify({ atTitle, onTheWay, atWorlds: atWorlds?.scene, backAgain: backAgain?.scene }));
 
 // ── Environment sanity ───────────────────────────────────────────────────────
 const env = await evalJs(`(() => {
@@ -201,6 +261,10 @@ const final = await evalJs(`(() => {
     return { debug: r, loadingHidden: document.getElementById('loadingContainer')?.classList.contains('hidden') };
 })()`);
 console.log('final state:', JSON.stringify(final));
+// The place behind the menus has made way for the world.
+const menuGone = await menuState();
+const menuLeft = !!menuGone && !menuGone.showing && !menuGone.scene.ready;
+console.log(`menu scene let go in a world: ${menuLeft ? 'OK' : 'WRONG'}`, JSON.stringify(menuGone?.scene));
 await screenshot('world1-smooth');
 
 // ── Day cycle and weather ────────────────────────────────────────────────────
@@ -441,6 +505,7 @@ if (await evalJs(`document.visibilityState`).catch(() => '') === 'hidden') {
 console.log(`terrain styles: ${final.debug?.terrainStyle} -> ${afterReenter?.terrainStyle}  ${styleOk ? 'OK' : 'WRONG'}`);
 console.log(`atmosphere scenes: ${atmosOk ? 'OK' : 'WRONG'}`);
 console.log(`far terrain: ${farOk ? 'OK' : 'WRONG'}`);
+console.log(`first run and the place behind the menus: ${nameOk && menuOk && menuLeft ? 'OK' : 'WRONG'}`);
 
 // ── Report ───────────────────────────────────────────────────────────────────
 const errs  = consoleMsgs.filter(m => m.level === 'error');
@@ -465,4 +530,4 @@ for (const w of warns) {
 try { ws.close(); } catch {}
 edge.kill();
 await sleep(500);
-process.exit(errs.length === 0 && pageErrors.length === 0 && styleOk && meshOk && atmosOk && farOk ? 0 : 1);
+process.exit(errs.length === 0 && pageErrors.length === 0 && styleOk && meshOk && atmosOk && farOk && nameOk && menuOk && menuLeft ? 0 : 1);

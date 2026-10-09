@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Minecraft-inspired voxel sandbox game built with JavaScript ES modules, Three.js (v0.184), and Web Workers. Runs in a browser iframe (`index.html` → `game.html`). No build step — served via HTTP.
+Minecraft-inspired voxel sandbox game built with JavaScript ES modules, Three.js (v0.184), and Web Workers. Runs in a browser iframe (`index.html` → `game.html`; `index.js` adds a frame beside it for each further player of a split screen). No build step — served via HTTP.
 
 ---
 
@@ -11,6 +11,7 @@ Minecraft-inspired voxel sandbox game built with JavaScript ES modules, Three.js
 ```
 src/
   main.js                        Game state, UI, event bus, game loop
+  players.js                     Names (and the keypad a controller types them on), the Players panel, joining (see *Playing together*)
   gamepad.js                     Controller support: play and every menu (see *Controller*)
   css/game.css                   The look of every menu and the HUD (see *User Interface*)
   scripts/
@@ -22,20 +23,29 @@ src/
     Precipitation.js             Rain, snow, sleet, hail, splashes, dust, ash
     Lightning.js                 Bolts and flashes
     Tornado.js                   Funnel + debris
-    WeatherAudio.js              Procedural rain, wind and thunder (WebAudio)
+    WeatherAudio.js              Rain and wind, made as they fall; thunder from files
+    Sound.js                     The one mixer: sound files by name, loops, the music (see *Sound*)
+    GameSounds.js                When the world makes which sound: footsteps, mining, ambience
+    PlayerModel.js               A player's body: the Quiddle in their look, moved by what they do
+    Players.js                   The other players, as this game draws them
+    Character.js                 The figure on the Character screen (its own small renderer)
+    MenuScene.js                 The place behind the menus: draws the baked model (its own small renderer)
     Shadows.js / Particles.js    Sun shadow map / block-break debris
     MobModels.js                 Draws the mob models: one mesh per mob, skinned on the CPU
     PostFX.js                    Eye Adaptation: auto-exposure + bloom (post-processing)
     FarTerrain.js                Far Terrain: low-detail land, trees and buildings beyond the render distance
     engine/                      Main-thread engine modules (no Three.js dependency)
       BlockRegistry.js           Block type definitions loaded from GamePack
+      BlockTextures.js           Which texture file is which layer of the block texture array (shared)
       ItemRegistry.js            Item definitions loaded from GamePack
       ChunkData.js               16×448×16 column storage (palette-compressed, filled rows only)
       MeshFormat.js              How chunk-mesh vertices are packed (meshers + shaders, shared)
+      Visibility.js              Which parts of the loaded chunks the camera could see at all (shared)
       WorldState.js              Authoritative chunk map and block get/set
       WorkerPool.js              Auto-sized worker pool with job queue
       ChunkManager.js            Chunk load/unload lifecycle and priority scheduling
       WorldClient.js             WebSocket chunk persistence client
+      Multiplayer.js             This game's line to the others in the same world (see *Playing together*)
       PlayerPhysics.js           AABB collision, gravity, jump, fall damage
       Inventory.js               Slots, hotbar, equipment, quiver
       CraftingSystem.js          Recipe matching
@@ -74,12 +84,17 @@ data/
   blocks/ items/ biomes/         Live definitions, one JSON per entry, discovered
   entities/ recipes/ terrain/    via GET /api/data/manifest (terrain/: geology.json)
   textures/                      Block, item, UI and mob (entities/) textures
+  sounds/                        blocks/ entities/ ambiant/ ui/ (made by tools/gen_sounds.mjs) and music/
+  menu/scene.glb                 The place behind the menus, baked (tools/gen_menu_scene.mjs)
 tools/
   gen_block_textures.py          Paints every block texture, 32 × 32, tiling (Pillow + numpy)
   gen_mob_textures.mjs           Paints the mob textures from the model definitions
+  gen_sounds.mjs                 Makes the sounds in data/sounds/ (see *Sound*)
+  gen_menu_scene.mjs             Bakes the place behind the menus into one glTF model (see *The place behind the menus*)
 gamepacks/                       Optional add-on packs (HD, Minecraft, Pre-Release)
 server/
-  server.js                      Express static host + REST API + WebSocket chunk I/O
+  server.js                      Express static host + REST API + WebSocket chunk I/O; the listener for guests
+  multiplayer.js                 Sessions: who is in which world, and what they are told
 electron/
   main.js                        Desktop launcher (boots the server, opens the window)
 test/
@@ -87,11 +102,14 @@ test/
   mesher.test.mjs                Greedy-mesher correctness vs a brute-force reference
   smooth.test.mjs                Smooth-terrain bounds, watertightness, collision, walking
   light.test.mjs                 Sky-light rules and seam agreement between chunks
+  visibility.test.mjs            What is left out of the draw: no line of sight through real terrain ends on it
+  physics.test.mjs               Long frames: a fall or a flight ends where it should at 10 to 144 frames a second
   weather.test.mjs               Day cycle, cloud coverage/rain placement, weather chain, climate
   worker.test.mjs                worldWorker replies vs. the mesher/solver on fresh arrays
   terrain.test.mjs               World generation: legacy hash, determinism, seams, water, balance
   chunkmanager.test.mjs          Chunk scheduling through WorkerPool with fake workers
   mobai.test.mjs                 Mob paths and behaviour in hand-made worlds; model geometry and gaits
+  multiplayer.test.mjs           Sessions, each player's own state, and what a guest from the network may reach
   mobshots.mjs                   Screenshots of the mob models on a stage (mob_viewer.html)
   pipelinebench.mjs              Stage timings + output hashes for the worker pipeline
   renderbench.mjs                Frame times of the real game on the real GPU, per preset
@@ -126,6 +144,11 @@ callWorldJS("startWorldLoad", { gamepackData })   // begin generation
 callWorldJS("tick", { dt })                        // every animation frame
 callWorldJS("quitWorld")                           // cleanup
 ```
+
+A load can be overtaken — a world quit, or another started, while one is still
+waiting on the server or the workers — so `startWorldLoad` takes a token
+(`_loadToken`) and looks, after every wait, whether it is still the load that
+is wanted.
 
 ---
 
@@ -203,7 +226,9 @@ Textures (optional; `BlockRegistry.resolveTextures`):
 At world load `_extendBlockTextures` (`world.js`) adds a texture-array layer for
 every such file the built-in `BLOCK_TEX_LAYERS` / `BLOCK_FACE_MAP` do not already
 cover (blocks 0–24 and 36–43 use the built-in map), with leaves' layers in one
-run so the vertex shader can test a range. The inventory icon of a textured
+run so the vertex shader can test a range. The tables and the rule are in
+`engine/BlockTextures.js` (`blockTextureLayers`), which has no Three.js in it:
+the tool that bakes the menu's scene numbers the layers the same way. The inventory icon of a textured
 block is its texture.
 
 **The textures** are 32 × 32 (`BLOCK_TEX_SIZE`; one of another size — the torch
@@ -701,7 +726,7 @@ Workers are created as **module workers** (`{ type: 'module' }`), which allows t
 
 **Lifecycle:**
 1. Construct: `new WorkerPool(workerUrl)` — workers are created but idle.
-2. Init: `await pool.init({ seed, blockRegistry, biomes })` — broadcasts init to all workers, resolves when all respond `{ type: 'ready' }`.
+2. Init: `await pool.init({ seed, blockRegistry, biomes })` — broadcasts init to all workers, resolves when all respond `{ type: 'ready' }`. A worker that fails before it answers is started again, twice at most, and after that the pool goes on without it: a load used to wait for ever on one (seen once, on six of seven workers together, and never again).
 3. Dispatch: `pool.dispatch(job, callback, xfer, priority)` — queues job; when a worker is free it picks up the next job.
 4. Clear: `pool.clearQueue()` — cancels pending (not yet started) jobs.
 
@@ -875,6 +900,10 @@ band and clearing just the rows a previous job left outside it.
     rain,              // Float32Array(256): where rain stops in each column, x fastest —
                        // world Y of the top block's top, or of a deformed Mesh voxel's
                        // surface at the column centre; NaN for an empty column
+    sections,          // Uint32Array(29): the opaque indices are in order of 16-level
+                       // section, and section s is indices sections[s] … sections[s + 1]
+    conn,              // Uint8Array(28 × 6): for each section and each of its faces, a bit
+                       // for every face open space joins it to (see *What the camera cannot see*)
 }
 // all geometry ArrayBuffers are transferred
 ```
@@ -1391,24 +1420,40 @@ realistic terrain: **39–46%** of total mesh time.
 
 ### Hot-path constraints
 
-This is the hottest code in the engine — roughly 2.3M voxel reads per full chunk
-mesh. When editing it, preserve these:
+This is the hottest code in the engine. When editing it, preserve these:
 
-- **No allocation in the mask-fill loop or per quad.** Array destructuring
+- **No allocation in the sweep or per quad.** Array destructuring
   (`const [x,y,z] = coord`) allocates an iterator and was previously costing
   ~1.1M allocations per mesh.
+- **Only the cells that can have a face are read** (`_buildRows`). Once a job,
+  every row of sixteen cells along x gets two words with a bit a cell:
+  `_rowSrc` (something is there, and it is not a Mesh voxel the smooth pass
+  draws) and `_rowOcc` (it hides a face drawn against it). Rows are numbered
+  y · 16 + z, so the row beside one is ± 1 and the one above or below ± 16; the
+  cells of the four neighbouring chunks that touch this one are noted the same
+  way. A sweep then finds its candidates sixteen at a time — `src & ~occ` of
+  the row it faces — and reads the block and the block it faces only for
+  those. It used to read every voxel and its neighbour for each of the six
+  directions, 2.3M reads a chunk, and that was half of meshing a blocky chunk:
+  nearly all of a chunk is air or buried rock, which has no face.
 - **Voxels are addressed by flat index with per-axis strides** (`STRIDE`), not
   through coordinate arrays. Within one slice every voxel's neighbour in the
   face direction is in the same array at the same index offset — this chunk,
   or one neighbour chunk for the boundary slice — so that is resolved once per
-  slice and the inner loop is a plain read. A slice whose neighbour is outside
-  the world or an unloaded chunk (`SOLID_SENTINEL`) can emit nothing and is
-  skipped.
-- **The fill walks memory in order** (the smaller-stride axis innermost) and
-  writes every in-range mask cell, so masks never need clearing.
-- **Merged cells are zeroed in the mask itself**, so there is no separate
-  `done` table, and a slice with an empty mask (most transparent ones) is not
-  merged at all.
+  slice. A slice whose neighbour is outside the world or an unloaded chunk
+  (`SOLID_SENTINEL`) can emit nothing and is skipped.
+- **The masks are never cleared and never filled.** A merge zeroes every cell
+  it takes, and takes every cell that was set, so a mask is all zero again when
+  the next slice begins (`meshGroup` clears both once a job, for a job that
+  stopped half way). So there is no separate `done` table either, a slice
+  with nothing set (most transparent ones) is not merged at all, and a merge
+  is given the box of the cells that were set, not the whole slice.
+- **No quad spans two sections, and the opaque indices are in order of
+  section** (`markSection`, `_sortSections`), for *What the camera cannot
+  see*: a side face stops growing at the top of its 16-level section (about 1%
+  more triangles), and a face belongs to the section of the cell in front of
+  it — the one it is seen from. Everything that writes to the opaque sink says
+  which section first.
 - **Solidity comes from `this._solid`**, a `Uint8Array(65536)` lookup, not a
   registry call. It is sized across the full id space so the lookup stays
   branch-free even for the `SOLID_SENTINEL` value.
@@ -1423,7 +1468,9 @@ mesh. When editing it, preserve these:
 
 Measured against the previous version in one process on the same 81 chunks of
 real terrain (identical output): blocky 4.13 → 2.07 ms per chunk, smooth
-12.0 → 9.7 ms (the rest of smooth is the smooth-shape pass).
+12.0 → 9.7 ms (the rest of smooth is the smooth-shape pass). The row words then
+took blocky from 2.7–3.1 to 1.7–1.8 ms and smooth from 9.2–10.0 to 7.4–8.1
+(runs alternated on a warm laptop; again the same output, hash for hash).
 
 `test/mesher.test.mjs` checks the output against a brute-force per-face
 reference (emitted area must match exactly, indices must be in range) across
@@ -1526,6 +1573,7 @@ This ensures CCW front-face winding consistent with Three.js defaults.
 | 1–0 | Select hotbar slot |
 | E | Inventory |
 | C | Craft menu / creative inventory |
+| V or F5 | The view: your own eyes, over your shoulder, from in front (see *The player's body and the view*) |
 | F11 | Toggle fullscreen (desktop app) |
 
 Movement runs through `PlayerPhysics` (AABB collision, gravity, jump, fall
@@ -1544,6 +1592,7 @@ The browser's Gamepad API, standard layout (Xbox, PlayStation, Switch Pro).
 | RT / LT | Mine and attack / place, use, eat, draw a bow | |
 | LB / RB | Previous / next hotbar slot | Previous / next settings section |
 | Y / X | Inventory / crafting | Y closes the inventory; X on a slot takes half |
+| Right stick, pressed | Change the view | |
 | Start | Pause | Resume, or close the menu |
 
 - **In play** it publishes what the sticks and buttons ask for in
@@ -1559,7 +1608,10 @@ The browser's Gamepad API, standard layout (Xbox, PlayStation, Switch Pro).
   screen (`SCOPES`, topmost first). No screen is written for it: it finds the
   controls of whatever is on top (`FOCUSABLE`), so a new button or setting
   works with a controller as soon as it exists. A new *screen* needs a row in
-  `SCOPES`. The inventory rebuilds its slots on every change, so the ring is
+  `SCOPES`. A screen that has only just come up, or a controller only just
+  picked up, first shows where the ring is (on the screen's main button:
+  `firstFocus`); the press that brought it does not also move the ring or
+  press what it landed on. The inventory rebuilds its slots on every change, so the ring is
   put back on the same slot by its `data-slot-*`; a carried item rides on the
   slot the ring is on.
 - **No pointer lock.** The game normally plays only while the pointer is
@@ -1570,6 +1622,13 @@ The browser's Gamepad API, standard layout (Xbox, PlayStation, Switch Pro).
   controls, pausing and resuming set `paused` themselves, and
   `requestGameLock` does nothing. Touch the mouse or a key and the controller
   steps back until its next input; with no lock held, Esc pauses by itself.
+- **A split screen's further panes** are each one controller's (`?pad=<index>`,
+  `MY_PAD`): that pane reads only that controller, is "the device in use"
+  from the start, and never hands over to a mouse or keys. The first pane
+  takes any controller that has not been given a pane (`__wwSplit.padTaken`).
+  `__wwPad.index` says which controller a pane is using.
+- **Typing a name** is on a telephone keypad (see *Names*): on that screen X
+  rubs out, Y is a space and Start is Done.
 - Nothing runs unless a controller is connected (the frame loop starts on
   `gamepadconnected`). The controller is read once a frame, so a press shorter
   than a frame can be missed — the smoke test holds its made-up buttons for
@@ -1620,6 +1679,17 @@ derived ones exist so retuning one value cannot silently change something else.
   about a second. The previous `max(vel + g·dt, terminal)` snapped a -40 m/s
   fall to -3 in a single frame. `WATER_SWIM_ACCEL` / `WATER_SWIM_SPEED` are
   layered on top while jump is held.
+- **A long frame is taken in steps** (`MAX_MOVE`, `_substeps`). Collision
+  tests the box where a move ends, not the way there, and a move that would
+  end inside something is refused whole. At ten frames a second a long fall
+  covers five blocks a frame: the player stopped dead up to that far above the
+  ground, took the fall's damage there, and then fell the rest — or ended
+  beyond a floor one block thick without touching it. A frame that would move
+  the player further than 0.45 blocks is therefore split into equal steps (at
+  most 8). At a steady sixty frames a second only a fall of ten blocks or more
+  is that fast, so nothing else changes; a slow machine now plays by the same
+  rules as a fast one (`test/physics.test.mjs`: the same landing and the same
+  damage at 10, 20, 30, 60 and 144 frames a second).
 - **Gravity is applied unconditionally**; the collision test is what
   re-establishes `onGround`. Skipping gravity while grounded left `vel.y` at
   exactly 0, making the vertical move a no-op that "succeeded" and cleared
@@ -1675,7 +1745,12 @@ required** — `_checkWebGL2()` raises `ww_fatalError` if it is missing, and
 to SwiftShader.
 
 A custom `ShaderMaterial` gets no fog from Three.js automatically, so the
-fragment shader applies it from `vWorldPos` (`applyFog`). It also applies brightness
+fragment shader applies it from `vWorldPos` (`applyFog`). Shading the terrain
+is the largest part of a frame on integrated graphics (see *Where a frame
+goes*), so what a pixel does not need it does not work out: no weather fog in
+clear weather, no fog colour inside the distance the fog begins at, nothing
+of `weatherSurface` on dry ground. Each of those gives exactly what the full
+sum would. It also applies brightness
 and the colourblind transforms via `uBrightness` / `uColorMode`. Those used to be
 a CSS `filter` on `<body>`, which pushed the whole page — canvas included —
 through an extra compositing pass every frame, so enabling an accessibility
@@ -1739,6 +1814,13 @@ a low-power laptop CPU — so the chunk path keeps draws few and each one light:
   are shown or hidden against their real box (`_chunkBox`, 1 block of margin for
   swaying leaves) — for the shadow camera (`ShadowMapper.onCull`), then the view.
   At render distance 10 that took the view from 331 draws to 209.
+- **Only what the camera could see.** Half the triangles of a frame and more
+  were cave walls nobody could see; they are left out, a range of indices a
+  chunk. See *What the camera cannot see* below.
+- **The sky last, not first** (`Sky.js`). It is at the far plane and drawn
+  after the terrain, so it is only shaded where no land is. Drawn first,
+  without depth, it was worked out for every pixel of the screen and then
+  painted over.
 - **Water far to near**, by chunk (see *Two Output Meshes*).
 - **Front to back.** `renderer.setOpaqueSort` orders opaque objects by depth
   only. Three.js sorts by material first, and every chunk has its own material,
@@ -1770,6 +1852,112 @@ a low-power laptop CPU — so the chunk path keeps draws few and each one light:
   loading screen is up. `renderer.compile()` alone does not do it.
 
 `npm run bench:render` measures all of this on the real GPU.
+
+### Where a frame goes
+
+Measured on an Intel integrated GPU at 1920 × 1080 with the frame cap off, by
+switching one thing off at a time (uniform branches in the chunk shader, put
+in for the measurement and taken out again). Of a Classic frame of about 8 ms:
+
+| Part | ms |
+|---|---|
+| Lighting and shading the terrain's pixels — the sky-light lookup 0.9, the ground's blend and large-scale variation 0.7, cloud shadows 0.3, the rest of the sum 1.5 | 3.4 |
+| The sky — all of the screen, most of it under terrain that then covered it | 0.8 |
+| Cave walls nobody could see, as triangles (1.8 of Pro's 10) | 0.3 |
+| Everything else: the visible triangles, filling the screen, and the browser putting the canvas on it | about 3.5 |
+
+So the pixels are what a frame costs: at half the resolution a Classic frame
+took 3.7 ms instead of 9, and Pro 6.1 instead of 10.1. Texture filtering (4×
+anisotropic or none) made no difference that could be measured, nor did the
+fog, the Simple or Pretty sky, Far Terrain, or fast against fancy clouds on a
+sunny day; shadows cost Pro about 0.9 ms. Simple, at a short render distance,
+is nearly all pixels: leaving the caves out of it changes nothing there.
+
+That makes the screen's pixel count the thing to watch. The drawing buffer is
+`min(devicePixelRatio, 2) × resolutionScale`, so a laptop panel at 150% or
+200% scaling draws two to four times the pixels of the 1080p these numbers
+were taken at, at every preset.
+
+With 60 Hz pacing (`BENCH_VSYNC=1`) every preset holds 60 here with no frame
+over 18 ms, the fly-over included, and the main thread is busy 0.8 ms a frame
+at Simple, 1.1 at Classic, 1.9 at Normal and 2.2 at Pro. (With the cap off the
+main thread outruns the GPU and stalls for hundreds of milliseconds waiting
+for it — inside whatever GL call it happens to be making. That is the
+benchmark, not something a player sees: the frame rate it prints is how fast
+the GPU gets through frames.)
+
+### What the camera cannot see (`engine/Visibility.js`)
+
+Caves are 58–66% of a chunk's triangles (see *Caves*), and a chunk is one mesh
+from its cave floors to its peaks: every one of them was drawn whenever its
+column was in view, though from the surface none can be seen. Now a chunk
+draws only the part of itself the camera could see at all. It is worked out
+from where the camera is, not from where it looks, so turning costs nothing.
+
+- **Sections.** A column is cut into 28 sections of 16 levels. The mesher puts
+  the opaque triangles in order of section (`geo.sections`), so a run of
+  sections is one range of indices and a chunk is still one draw.
+- **What is open inside each** (`geo.conn`, with every mesh job). A cell is
+  open when sight can pass through any of it: everything but a full opaque
+  cube, so in a smooth world a Mesh voxel cut to a shape is open however
+  little is cut away. For each section the worker finds the regions of open
+  cells and the faces of the section each touches: every face a region
+  touches is joined to the others it touches. Six bytes a section. It reads
+  no voxel for it — the mesher's row words (`closedRows`) say which cells
+  are closed — and gathers the open cells into runs along x, joining runs
+  that touch in the row beside or below (union–find over a few hundred runs,
+  where a flood cell by cell was four thousand cells a section):
+  about 0.2 ms a chunk.
+- **The search** (`SectionVisibility`, on the render thread). A straight line
+  never turns back along any axis, and inside each section it passes it runs
+  through open cells from the face it came in by to the face it leaves by. So
+  every section a line of sight reaches is reached by a walk from section to
+  section that only crosses faces joined by open space and never steps back
+  toward the camera on any axis. All such walks are followed, breadth first:
+  0.1 ms at render distance 8, 0.3 at 14. What they do not reach cannot be
+  seen.
+- **When.** When the camera moves into another section, and when a chunk's
+  mesh comes or goes — at most every 0.15 s for that, since while terrain
+  streams in one does every frame, but at once for an edit beside the player
+  (it may have opened a cave). A chunk meshed since the last search is drawn
+  whole until the next.
+- **It errs on the side of drawing.** A face belongs to the section of the
+  open cell in front of it, which for a face on a chunk's edge is in the next
+  chunk: a section is drawn when it, or the one beside it in any of the four
+  chunks round it, is reached. One section more is drawn above the highest
+  reached: on a diagonal slope a smooth surface belongs to the voxel over the
+  one it dips into. A chunk draws everything from its lowest section needed to
+  its highest, as one range. Chunks not there yet are open.
+- **Only in the open.** Sight is followed through open cells, so a spectator
+  flying through rock — who looks out through it — gets everything drawn
+  (`_cameraInRock`).
+- **Only the view.** The shadow pass draws every chunk whole, as it always
+  has: what casts a shadow into view need not be in view itself. Water and
+  ice are drawn wherever their chunk is in view. The view frustum is tested
+  against the box round the sections drawn (`viewBox`), so a chunk whose only
+  part in view is caves nobody can see is not drawn at all.
+
+From the surface 23–75% of the triangles are left (38–48% round the
+benchmark's spawn); deep in a sealed cave, 1–5%, with most chunks not drawn
+at all. On integrated graphics that is +21% frames at Pro (95 → 116
+with it switched off and on in one session), which is limited by its
+triangles, and +4% at Classic and Normal, which are limited by their pixels.
+
+**What must hold**: nothing that shows is left out. `test/visibility.test.mjs`
+follows 30,000 lines of sight cell by cell from each of a dozen cameras —
+over the land, high above it and down in its caves — through real generated
+terrain, blocky and smooth, and whatever each ends on must be in the range
+its chunk draws; and it checks the section order of every triangle, and the
+joined faces against a cell-by-cell flood. `npm run shots -- --cull-check`
+is the same question asked of the real game: it draws each view with and
+without leaving things out and compares the frames (378 of them, over twenty
+landscapes and the caves under them: nothing missing from any). Lone pixels
+do differ, a few a frame, and must: the mesh has pinholes — gaps a pixel wide
+where triangles meet — and through one you see whatever comes next behind the
+land, which with everything drawn can be a cave wall nobody could otherwise
+see. The check counts the pinholes that open onto the sky, and leaving things
+out opens no more of them. `window.__wwCaveCull(false)` draws everything, and
+`__wwDebug().visibility` says what is being left out.
 
 ### Far Terrain (`src/scripts/FarTerrain.js`, Graphics → Far Terrain)
 
@@ -2071,10 +2259,21 @@ sends the values in `applySettings`; all apply live.
   redraw at most every 0.25 s (`TERRAIN_REDRAW_MIN`) — streaming changes some
   chunk in the box almost every frame — except `urgent` ones next to the player,
   which redraw on the next frame. Chunks are on `SHADOW_LAYER` (1); mobs are on
-  `SHADOW_DYNAMIC_LAYER` (2), because they move every frame: while any exist,
-  each frame copies the terrain depth into a second target on the GPU and draws
-  just the mobs over it. Standing still or looking around, the terrain pass
-  costs nothing; `__wwDebug().shadowRedraws` counts them.
+  `SHADOW_DYNAMIC_LAYER` (2), because they move every frame: while any stand
+  inside the box they are drawn each frame over a copy of the terrain depth,
+  and only the patches of that copy a mob was drawn into are put back from the
+  terrain map before the next frame's are drawn (`_restore`: one small blit a
+  mob, from the sphere round it that `EntityManager.shadowCasters` gives). It
+  used to copy the whole map every frame there was a mob anywhere in the
+  world — 4 million texels at medium, 9 at high — which took 8–27% off the
+  frame rate whenever shadows were on and a mob was about; now mobs cost the
+  shadows nothing that can be measured.
+  (Three.js's `copyTextureToTexture` cannot copy part of a depth texture: it
+  hands `blitFramebuffer` a width and height where corners are wanted. The
+  blits are made directly, through the renderer's own binding cache.)
+  Standing still or looking around, the terrain pass costs nothing;
+  `__wwDebug().shadowRedraws` counts them, and `shadowCopies` the whole-map
+  copies (one after each terrain redraw while there are mobs).
 - **Clouds** (`src/scripts/Clouds.js`) — `fast` | `fancy`: how many steps the
   march takes and how the cloud is lit. No off (the weather decides the cloud;
   Fully Clear is the cloudless sky). See *Clouds* under *Day Cycle and
@@ -2150,7 +2349,7 @@ space conversion, so sky, fog and terrain must agree in that space
 
 | Module | Draw calls | Notes |
 |---|---|---|
-| `Sky` | 1 | Camera sphere, no depth. Simple: flat colour, square sun/moon/stars. Pretty: gradient, glow toward the sun, halo, sphere-lit moon with the real phase terminator, twinkling stars rotating with the sky. Horizon is always `fogColorFor(dir)`, so terrain never seams against the sky. |
+| `Sky` | 1 | Camera sphere at the far plane, drawn after the terrain and depth-tested, so only the pixels no land covers are shaded (it used to be drawn first, over the whole screen); everything blended — clouds, water, rain — still comes after it. Simple: flat colour, square sun/moon/stars. Pretty: gradient, glow toward the sun, halo, sphere-lit moon with the real phase terminator, twinkling stars rotating with the sky. Horizon is always `fogColorFor(dir)`, so terrain never seams against the sky. |
 | `Clouds` | 0–2 | A slab of air from `CLOUD_BASE` to `CLOUD_TOP` with cloud in it, drawn once a frame off screen by following every line of sight through it (fast: 6 steps, shaded by thickness; fancy: 14, lit through the cloud above each point), at half resolution into a premultiplied target. See *Clouds* below. Nothing when the sky is clear. |
 | `Precipitation` | 0–6 | Instanced quads positioned entirely in the vertex shader from fixed seeds + wrapped fall/drift offsets. A particle shows when its rank is below the rain intensity at its column. `RainHeightmap` (highest block per column around the player, 9×9 chunks, from each mesh job's `geo.rain`) hides particles under roofs, trees and in caves and seats splashes. |
 | `Lightning` | 0–1 | Midpoint-displaced channel + branches, 1–4 return strokes. Pool of 3 bolts. Flashes light sky, clouds and open ground. |
@@ -2204,9 +2403,11 @@ gales lean on an exposed player and tornadoes pull (`PlayerPhysics.external`),
 lightning hurts within 4 blocks. Leaves sway with the wind in `CHUNK_VERT`
 (position-only displacement, so merged quads never crack).
 
-**Audio** (`WeatherAudio`) is synthesised filtered noise — no files. It waits
-for user activation, updates at 10 Hz, muffles under a roof, and thunder
-arrives `distance / 343` seconds after the flash.
+**Audio** (`WeatherAudio`): rain and wind are filtered noise, made as they
+fall; thunder is a file (`thunder_close` / `_mid` / `_far` by distance — see
+*Sound*; a made rumble where a pack has none). It plays through the game's
+mixer, updates at 10 Hz, muffles under a roof, and thunder arrives
+`distance / 343` seconds after the flash.
 
 ### Persistence and settings
 
@@ -2241,14 +2442,30 @@ hitbox `width` / `height`, drops, spawn rules) and:
 
 ### Models (`engine/MobShapes.js`, `MobModelDefs.js`, `MobAnim.js`, `MobModels.js`)
 
-The models are anatomy, to scale: a block is a metre, a Quiddle is a person
-1.8 m tall, a cow stands 1.35 m at the shoulder. The one liberty is the
-Quiddle's head: it is modelled life-size and then enlarged by `QUIDDLE_HEAD`
-(1.15×, about the top of the neck), and its eyes are a row taller than life —
-a little of a drawn character, so the face reads from further off. The
-painters work on the life-size head (`lifeSize` in the texture tool). Everything is
-in **pixels, 16 to a block**; +Y is up, +Z the way the mob faces, +X its left;
-feet on y = 0.
+The animals are anatomy, to scale: a block is a metre, a cow stands 1.35 m at
+the shoulder. **The Quiddle is a drawn character**, as tall as a person
+(1.8 m) but about four heads high where a person is seven and a half: a big
+round head with big eyes on a short neck, a person's trunk and shoulders, and
+short sturdy arms and legs ending in big hands (the four fingers one shape,
+with a thumb) and boots. It is still made as a body is — one skin from the
+shoulder to the knuckles and from the hip to the ankle, bending at real
+joints. (It was first a person to scale, and then that same thin body under a
+head nearly twice life size, which read as lanky and wrong.) Its numbers are
+named: `QUIDDLE_Y` (the heights of its joints and edges), `QUIDDLE_HEAD`
+(the head is modelled in a head's own measure, 4.2 px chin to crown, then
+enlarged `scale` 1.7× and set on the neck) and `QUIDDLE_FACE` (the eye's size
+and place on the skull's grid of texels, which the eyelids are cut to).
+Everything is in **pixels, 16 to a block**; +Y is up, +Z the way the mob
+faces, +X its left; feet on y = 0.
+
+The Quiddle's painters did not have to be redrawn for the new figure, and
+will not for the next: a texel on the head is taken back to the head's own
+measure (`lifeSize`), and one on the body to where it would be on a person's
+proportions (`body()` in the texture tool: each limb by its joints, the trunk
+as it is but narrower), which are the lines the clothes and hair were cut to.
+Only the face is drawn for this head: on the skull's own grid, eyes six texels
+square set low and wide, each with a dot of light on the same side, brows, a
+small mouth that turns up, colour in the cheeks.
 
 A model is a tree of **parts — its bones** — each turning about a pivot (a
 shin about the knee), with shapes on them. Two kinds of shape (`MobShapes.js`):
@@ -2282,12 +2499,8 @@ outline at that place, and a tight bend cannot fold the skin over on itself.
 
 - **Texels.** A model has `density` texels to the pixel — 2 for the animals
   (32 to a block, twice the ground's), 3 for the Quiddle — and a shape may ask
-  for more: heads have about twice their body's (a Quiddle's face is some 83
-  to a block). That number is chosen so an eye is exactly four texels wide, a fifth
-  of the width of the face, with one eye's width between the two: the face is
-  laid out on the proportions of a real one (eyes half way down the head, the
-  base of the nose half way from brow to chin, the mouth a third of the way
-  on, ears from brow to nose).
+  for more: heads have about twice their body's (a Quiddle's face is some 66
+  to a block, `QUIDDLE_FACE.density` 7 to a pixel of the head's own measure).
 - **Texture layout** comes from the definition: each shape is unwrapped into
   **patches** (`shape.patches`) — a loft's side as one sheet wrapped round it,
   with texels spaced evenly round its widest section, plus one for each closed
@@ -2348,6 +2561,16 @@ outline at that place, and a tight bend cannot fold the skin over on itself.
   Instance geometries are pooled per model. A part's `rot` is only how its
   shapes were laid out: it is baked into the geometry, so at rest every bone's
   matrix is the identity — which is what lets a vertex follow two.
+- **Posed only where it can be seen** (`EntityManager.seen`, `_mobSeen` in
+  `world.js`). A mob out of view still thinks, moves and keeps its stride, so
+  it steps back into view mid-stride, but its vertices are not worked out —
+  which is most of what a mob costs. "In view" is the sphere round it against
+  the last frame's view frustum, two blocks wider (mobs are updated before the
+  camera is), and wider again by the length of its shadow while shadows are
+  on: a mob behind the player whose shadow falls in front is still posed.
+  In the benchmark's scene — twenty mobs round a camera looking at the
+  horizon — two are posed with shadows off, and from two to fourteen with
+  them on, as the mobs wander.
 - **Light is baked into the vertex colours** in the same pass: each vertex is
   shaded by the sun or moon from its own normal (`EntityManager.lightDir`, set
   from the atmosphere each frame) and scaled by the light where the mob stands
@@ -2385,7 +2608,8 @@ outline at that place, and a tight bend cannot fold the skin over on itself.
     the ground. They blink (eyelid parts scaled away except in a blink), look
     at the player, draw an arm back and throw a blow; a dying mob keels over
     (`inst.death`) and lies a moment before it is removed.
-- **The player model will be the Quiddle model** — same bones, same layers.
+- **The player is a Quiddle** — the same model, in the look the player chose
+  (see *The player's body and the view*).
 
 Adding a mob: a builder function in `MobModelDefs.js` (bones, then the lofts
 over them — the others show the conventions: stations as `[x, y, z, half
@@ -2442,6 +2666,215 @@ Test hooks: `__wwSpawnMob(type, x, y, z)`, `__wwMobs()` (what each is doing),
 
 ---
 
+## The player's body and the view (`src/scripts/PlayerModel.js`, `world.js`)
+
+A player is a Quiddle, in the look they chose (their "skin": a choice for each
+of `QUIDDLE_LOOKS`, kept with their name — see *Names* and *The Character
+screen*). `PlayerModel` is that body for every player there is: yourself, the
+other players (*Playing together*), and the figures on the Character screen
+and behind the menus. It is told a handful of things each frame — where the
+player is, which way they look, how fast they move, whether they are on the
+ground, in water, striking, hurt, dead — and the Quiddle's own animator does
+the rest (the stride follows the ground covered, so feet that are down stay
+down). The head follows the look at once; the body comes round after it when
+the player moves, or has looked further to the side than a neck goes (`NECK`).
+
+**The view** (`_camMode`; V or F5, or a controller's right stick pressed in):
+
+| Mode | The camera |
+|---|---|
+| 0 | The player's own eyes. The body is not drawn, but casts its shadow (it is on the shadow layer only) |
+| 1 | Over the right shoulder, from `CAM_BACK` (4.2) blocks behind |
+| 2 | From in front, looking back at the player |
+
+- **What the player does is the same in all three.** Blocks are aimed at,
+  mined and placed from the eyes, along the look, as they always were. In the
+  shoulder view the camera is half a block to one side of that line, so it is
+  turned to look at the very point the eyes are aimed at (`_aimDist` along the
+  look: the block or mob targeted, eased) — and the crosshair lies on the
+  block that will be hit.
+- **The camera does not go through the ground** (`_clearAlong`): the line from
+  the head out to where it would sit is walked, with room either side and
+  above and below (`CAM_ROOM` — a wall it only just missed filled half the
+  screen), and it stops short of the first thing in the way. It comes in at
+  once and goes back out slowly. Nearer the head than `CAM_HEAD` the body is
+  not drawn. Leaves and glass do not stop it.
+- The arm swings (`_swingArm`) when the player mines, places or strikes.
+- What is held is not shown yet (see *Known Limitations*).
+
+---
+
+## Sound (`src/scripts/Sound.js`, `GameSounds.js`, `tools/gen_sounds.mjs`)
+
+**The files** are in `data/sounds/` — `blocks/`, `entities/`, `ambiant/`,
+`ui/`, `music/` — and are found through the data manifest (`sounds`: every
+audio file one folder deep). A sound is asked for by name: its file's name
+without the folder, the number and the extension (`grass_step`). Files that
+differ only in that number are takes of one sound; one is picked each time
+(never the same twice running), a little higher or lower. **A name with no
+file is silence**, so a pack may leave any out, and any file can be replaced
+by a recording of the same name.
+
+| Sounds | Names |
+|---|---|
+| A block's, by its family | `<family>_step`, `_hit` (a knock while mining), `_break`, `_place` — families `grass dirt stone sand gravel wood snow leaves glass`, from the block's `"sound"` or guessed from its name (`blockSoundFamily`) |
+| Water | `water_splash` (falling in), `water_swim` |
+| Mobs | `<type>_idle`, `<type>_hurt` (cow, pig, sheep, chicken, quiddle) |
+| The player | `player_hurt`, `fall`, `eat`, `pickup`, `swing`, `punch`, `bow_draw`, `bow_shoot`, `arrow_hit` |
+| Ambience (loops) | `birds` (day, in the open, dry), `crickets` (night), `cave` (no sky light), `water` (open water near), `underwater` |
+| Thunder | `thunder_close`, `thunder_mid`, `thunder_far` — picked by distance (see *Day Cycle and Weather*) |
+| Menus | `click` |
+
+**They are made, not recorded** (`npm run sounds`): each is built the way the
+thing itself makes it, at 44.1 kHz, which is what stops them sounding like a
+game console (the clap of raw noise that lightning used to make did). A
+footstep is a heel and then the ball of the foot, each the dull knock of a
+weight plus what that ground does — blades brushing, grit turning, a board
+ringing in its few modes, snow squeaking. A voice is a larynx (a pulse train
+with a real one's jitter and roughness) through resonances that move as a
+mouth does. Thunder is a lightning channel some kilometres long, every few
+metres of which goes off at once; what arrives is each of those bangs, later
+and duller the further up the channel it was — a crack from the nearest part,
+then the roll from the rest — heard from two ears apart. Deterministic (a
+seed per name); Ogg Vorbis when `ffmpeg` is on the PATH, else WAV. The
+spectrogram of a take is the quick way to see what a change did.
+
+**The mixer** (`Sound.js`, one `AudioContext` for the game):
+
+```
+sfx ─┐
+ambience ─┼─ muffle (a low-pass, shut down with the head under water) ─ master ─ out
+weather ─┘        (WeatherAudio.js plays into the weather bus)
+```
+
+- Volumes are Settings → Audio: Master, Music, Sounds, Ambience, Weather.
+- **A browser lets a page make sound only after a click or a key.** Until
+  then nothing plays, and the music starts on that first click (the desktop
+  app starts it at once). The short sounds are decoded then; ambience and
+  thunder, tens of megabytes decoded, when first wanted (`wait` plays a sound
+  when it has arrived, for thunder, which is late anyway).
+- **Positional sounds** are placed by ear, cheaply: quieter with distance,
+  panned by where they are from the way the listener faces, nothing beyond
+  `reach`.
+- **Music** is an `<audio>` element (the track is minutes long): "Adventure
+  Awaits" (`MENU_MUSIC`) plays in the menus from the moment the game starts,
+  fades out as a world comes up and is there again on the way out.
+- In a split screen the first pane plays what everyone hears — music,
+  ambience, weather (`sound.shared`); every pane plays its own player's
+  sounds.
+
+`GameSounds` decides when: a footstep for every stride on the ground walked on
+(longer strides running, a harder one for landing), a knock every quarter
+second while mining, a splash going into water, a bite while eating, and the
+ambience eased toward how much of each there should be. It is handed what it
+needs each tick (`_tickSounds`) and reads nothing of the world itself. Mobs
+speak through `EntityManager.onSound`: now and then, when near, and when hit.
+
+---
+
+## Playing together (`server/multiplayer.js`, `engine/Multiplayer.js`, `src/players.js`, `index.js`)
+
+Two ways, and under both the same thing. **Every world played through the
+server is a session there** — one player alone is a session of one — and
+another player joins it: a second pane of a split screen, or a guest from
+another machine. So the game has no multiplayer mode: it always tells the
+session what it does and listens, and alone, nothing is sent but the blocks.
+
+### What is shared, and who runs it
+
+All the games hold the whole world and each runs its own player, with its own
+camera, inventory, health and menus. **The first to join is the host**; its
+game also runs what there must be only one of.
+
+| | Run by | The others |
+|---|---|---|
+| Players | each their own | are told where each is, 15 times a second (`packState`: place, look, speed, a few flags, blows begun), and draw them (`Players.js`: a `PlayerModel` and a name over it, eased toward the latest) |
+| Blocks | whoever changes one (`WorldState.onSet`) | put it down (`_applyRemoteBlock`). A chunk not loaded there keeps it in `pendingChanges`, which is put down when the chunk arrives — the mechanism that already carried a player's own edits across an unload |
+| Mobs | the host | are replicas (`EntityManager.replica`): they spawn nothing and decide nothing, and show the host's snapshots (ten a second, eleven numbers a mob, each mob's look sent once). A guest's blow goes to the host (`hit`); a mob's blow on a guest, and the drops of a mob a guest killed, go to that guest |
+| Clock and weather | the host | take the host's every two seconds (`Atmosphere.sync`). One player's pause menu does not stop the clock while others are there |
+| Dropped items, lightning strikes | each game its own | — |
+
+- **The journal.** The server keeps the latest block for every place changed
+  in the session and hands it to whoever joins: the chunk it was in may not
+  have been saved yet, and without it the newcomer would generate that land
+  afresh, without the change — and could later save its copy over the
+  original.
+- **Saving.** Every game saves the chunks it has changed or been told were
+  changed, as it always did. A copy saved a moment too early is put right by
+  that game's next save, since it holds the later change too.
+- **Guests.** Every player after the first is a guest of the world: their
+  place, health and inventory in it are kept in a file of their own
+  (`players/<key>.json`, by name — `?player=` on the player-state requests),
+  the clock is the world's, and the world's settings are not theirs to change.
+  Someone new starts beside the host.
+- **When the host leaves, the session ends** for everybody (`mp:closed`): its
+  game was the one running the world.
+- The server passes everything on without looking inside (`mp:all`,
+  `mp:host`, `mp:to`) except the join, the journal and the host's
+  clock, which it keeps for newcomers. The protocol is at the top of
+  `server/multiplayer.js`; `test/multiplayer.test.mjs` checks it.
+
+### Split screen (`index.js`, controllers only)
+
+From the pause menu's **Players** panel: while it is open, a controller
+nobody is using that presses A joins on this screen. `index.js` — the page
+round the game — opens a second copy of the game beside the first
+(`game.html?pane=1&pad=<controller>&world=<id>`), which asks who is playing
+(*Names*) while the first plays on, and then joins the world as a guest.
+
+- **Each pane is a whole game**: its own renderer, chunks, workers (a share of
+  the cores: `workers`) and menus, drawn in its own frame. That is what made
+  it possible without rewriting a game built round one player and one
+  camera — and it is what it costs: two panes hold the world twice. The
+  pixels drawn are the same in total, which on integrated graphics is what
+  limits a frame.
+- **Two players stand side by side, three or four take a quarter each.** The
+  game lays itself out in fractions of its own frame's width (`vw`), so it
+  fits any of them without knowing; side by side keeps a pane tall enough for
+  the menus, and a quarter is 16:9 again.
+- A pane is its controller's alone (see *Controller*); the mouse and the keys
+  are the first player's. The frame-rate cap for a window in the background
+  goes by the whole window (`appFocused`), since only one frame has the
+  keyboard.
+- **A shared screen is kept light** (`limitForSplit` in `main.js`). Whatever a
+  player's graphics settings say, with two players the render distance is at
+  most 6 and with three or four at most 4, and Far Terrain, shadows, fancy
+  clouds and Eye Adaptation are off, particles at most medium (low for three
+  or four) and the frame rate capped at 60. `index.js` tells every pane how
+  many share the screen (`__wwSplitCount`; a new pane reads it from its
+  address, `of=`), and what a player chose is back the moment the screen is
+  theirs alone. Settings → Video says so while it holds
+  (`#splitGraphicsNote`). Measured on the Normal preset: 441 chunks alone, 169
+  each for two players, 81 each for three.
+- A pane closes when its player leaves, and all of them when the first player
+  leaves the world.
+
+### On the network (`server.js`: *On the network*)
+
+The Players panel's **Open to the network** starts a second listener, on every
+interface (`WW_LAN_PORT`, 25599, or any port if that one is taken), and shows
+the address. **What comes in through it is a guest**, and may fetch the game
+itself and play in the one world that is open — its chunks, its own player
+file, its session — and nothing else: not the list of worlds, not another
+world, not the owner's state or settings, not a way to make, delete or open
+anything (the middleware at the top of the app; the test goes through each).
+The player's own listener is as it was, this machine only.
+
+- **A guest runs the host's copy of the game**, served by that listener, so
+  both ends are always the same version. In the app, and from the game's own
+  page, **Play → Join a game** lists the games on the network (each open
+  world announces itself by UDP broadcast, port 25598) or takes an address;
+  `index.js` swaps its frame for the host's page and hands it the guest's own
+  settings. Anyone else can simply open the address in a browser. A guest's
+  page knows what it is (`GET /api/lan/info`) and goes straight into the
+  world.
+- The world closes to the network when its last player has gone, or when the
+  toggle is turned off (the guests are sent away; the host plays on).
+- Windows asks, the first time, whether to let the game through the firewall:
+  that is this listener.
+
+---
+
 ## User Interface (`game.html`, `src/css/game.css`, `src/main.js`)
 
 **The look** is graphite: dark grey panels (`.panel`), soft at the corners
@@ -2465,9 +2898,18 @@ no `px`, and `vh` only as a cap on a panel's height.
 How it is put together:
 
 - **Screens** are top-level elements toggled with `.hidden`; anything that
-  covers the screen behind a panel is a `.scrim`. Behind the menus is the
-  pack's title gradient and nothing else, set on `<body>`
-  (`loadTitleBackground`); the game canvas covers it during play.
+  covers the screen behind a panel is a `.scrim`. Behind the menus is a place
+  (see *The place behind the menus*); until it has loaded — and for a page
+  that has none — the pack's title gradient, set on `<body>`
+  (`loadTitleBackground`).
+- **The title screen leaves the picture alone.** The logo is top left, who is
+  playing top right (`.titleProfile`), and at the bottom there is one thing to
+  do — **Play** — over a row of the lesser ones: Character, Settings, How to
+  Play, Credits (`.titleDock`, `.titleRow`). It was a column of equal buttons
+  down the middle of the screen. **The pause menu** follows it: Resume, a grid
+  of the rest (`.pauseGrid`), and Save & Quit by itself underneath.
+- **Credits** (`#CreditsScreen`, from the title) says who made the game and
+  its music.
 - **Short choices are buttons side by side.** A `<select class="seg">` is
   shown as a row of buttons, all in view and one click each
   (`buildSegments()`): the select stays in the page, hidden, and keeps the
@@ -2498,6 +2940,80 @@ How it is put together:
   heavier lines, `a11y-large-text` scales the text, `a11y-reduce` stops
   animation — all classes on `<body>`.
 
+### The place behind the menus (`src/scripts/MenuScene.js`, `tools/gen_menu_scene.mjs`)
+
+The menus' background is a place, not a picture: a meadow with a couple of
+houses on it under a mountain, the sea round to one side, the player's own
+Quiddle standing in it and a few animals grazing. (It was the pack's gradient,
+flat; and then, for a while, a world loaded for the purpose — the workers and
+a few hundred chunks generated, meshed and lit, to look at two views of it.)
+
+- **It is a model, baked once** (`npm run menuscene` → `data/menu/scene.glb`,
+  19 MB). The tool generates the real terrain round a spot on a seed with the
+  game's own generator, smooth mesher and sky-light solver — real chunks only,
+  out to 17 of them, and no far terrain — and writes what the menu's cameras
+  can see as one binary glTF with the block textures inside it. The menu loads
+  that file and draws it: no workers, no chunks, nothing generated. It is on
+  screen a fraction of a second after the title.
+- **Only what the cameras can see is in it.** A chunk no view faces and a face
+  turned away from every place the camera will be are dropped; then the scene
+  is drawn in software from each of those places (the two views at
+  2560 × 1440, and 23 places on the way between them at 1280 × 720): a depth
+  picture, then every triangle asked whether any of it is at the front
+  (`visible`). What is hidden from all of them — the far side of every ridge,
+  the land behind a house, nearly all of every cave — is left out: about 490
+  thousand triangles are kept of nearly 4 million. So **the views are part of
+  the bake**: move a camera (`SCENE`, at the top of the tool) and bake again.
+  `--all` keeps every face the sky lights instead — the whole place, to look
+  round in a viewer, at many times the size.
+- **The file** is glTF 2.0 with two common extensions
+  (`KHR_mesh_quantization`, `KHR_texture_transform`), so three.js, Blender and
+  Babylon open it, textured and unlit. There is a material for each block
+  texture (a 32 × 32 image, repeating) and a primitive for every 65,535
+  vertices of it, so indices are shorts; a vertex is 24 bytes, packed as the
+  game's own are (*Worker Protocol*). As floats with 32-bit indices the same
+  scene was 34 MB. What only the game's shader reads rides along where a
+  viewer ignores it: `_BLEND` on each vertex (the texture of the ground that
+  spreads over this one's edges, the sides it comes from, the baked sky light,
+  and its glow with one bit for natural ground), and `extras` on each material
+  (leaves, water) and on the scene (`wonderWorld`: the views, where the figure
+  and each animal stands, the hour, the fog).
+- **It is drawn to look like the game**, by a small renderer of its own on a
+  canvas of its own (`#menuCanvas`): the textures as one array, the game's
+  light sum from the baked sky light and the sun of the scene's hour
+  (`DayCycle`), ground of one kind spreading over the next along the same
+  ragged line (`ground()`, carried over from the chunk shader), leaves moving,
+  haze toward the edge of what was baked, and a sky with the sun and slow
+  cloud. They are not the game's shaders: its weather, shadows and clouds are
+  not here.
+- **The camera does not move unless it is sent.** It rests at one of the
+  file's views — `title` behind the title screen, `worlds` behind the list of
+  worlds. **Play** puts the menu away, sends the camera to the other view
+  (`goToWorlds` → `__wwMenuScene.goto('worlds')`: 2.4 seconds, eased, along
+  the straight line the bake looked along) and then brings up the list;
+  **Back** does the same the other way (`backToTitle`). Leaving a world
+  arrives at `worlds`.
+- **The bake is for a 16:9 picture.** On a wider one the view is cut at top
+  and bottom instead of reaching further to the sides, where nothing was kept
+  (`place()`).
+- **Who stands in it**: the player's figure (a `PlayerModel` in their look,
+  watching the camera; a change on the Character screen shows at once) and
+  the animals the file lists, which breathe, look about and graze. They do not
+  walk: there is no world under them. The tool puts each on the highest
+  ground under its feet, and says when one is on a slope or its feet cannot be
+  seen from its view — on ground that falls away beyond a rise only an
+  animal's back shows, and it looks sunk in the ground.
+- **It shows** by `body.menuWorld`, and fades in over the gradient at
+  `menuReady`. It is drawn 30 times a second, 12 with the window in the
+  background, 60 while the camera travels. With no such file the menus keep
+  the gradient.
+- **It ends** when a world is started (`stopMenuWorld` → `hide()`, which gives
+  its geometry and textures back to the graphics card: a world is about to
+  want the room) and is there again on the way out.
+- A split screen's further panes and a guest's page have none (they go
+  straight into a world). `window.__wwMenuWorld(false)` turns it off for a
+  test.
+
 ### Where the player's settings are kept
 
 In `user/settings.json` under the data directory, through `GET` / `PUT
@@ -2509,6 +3025,47 @@ launch (see *Desktop App*), so every launch was a new origin with empty
 storage and every setting went back to its default. `localStorage` is still
 written, as the fallback for a page with no server behind it, and read once to
 carry over what a player had before.
+
+The settings there are the first player's. A split screen's further panes
+start from them but keep their own changes only for as long as they play, and
+a guest from the network keeps theirs in their own browser (and brings them
+along: `index.js` hands them to the host's page in its address, `#me=…`).
+The names (below) are the exception: they are changed one at a time
+(`POST /api/profiles`, `DELETE /api/profiles/:name`), never with the rest —
+a whole list sent with the settings may be an old one, from before another
+pane added a name — so `PUT /api/settings` leaves `profiles` alone.
+
+### Names (`src/players.js`)
+
+A player has a name, and the names used on this machine are kept in a list
+with the look that goes with each (`profiles`: `[{ name, skin }]`).
+
+- **The first time the game is opened it asks for one**, before the title
+  screen (`enterGame`); after that it starts with the name chosen last
+  (`playerName`). The title screen says who is playing, and that button opens
+  the list to pick another, add one or remove one.
+- **Each further player of a split screen is asked too**, in their own pane,
+  while the others play on: the list, without the names already playing on
+  this screen. A new name begins with a look of its own (a random one).
+- **A keyboard just types it. A controller uses a telephone keypad** (`t9Press`,
+  `.t9Pad`, shown while a controller is the device in use): twelve big keys to
+  move between, not forty small ones. A key is a few letters and its digit,
+  and pressing it again within a second goes on to the next (`T9_AGAIN`); ⇧
+  changes the case of the letter being chosen, or of the next; a name begins
+  with a capital anyway. X rubs out, Y is a space, Start is Done.
+- A name is up to 16 of letters, digits, spaces and `. _ ' -`.
+
+### The Character screen (`src/scripts/Character.js`)
+
+The look that goes with the name: a choice for each of the Quiddle's
+`QUIDDLE_LOOKS` (hair and its colour, eyes, skin, clothes, frame, build, arms,
+legs, height), each a row of buttons, colours as patches of the colour
+(`data-swatch` on the option; `buildSegments`). The figure beside them turns
+slowly (drag, or the shoulder buttons, to turn it) on a small renderer of its
+own, so the screen works from the title as from a game. A change is kept
+(`settings.skin`, and with the name) and sent to the game at once. For a
+player nothing is tied to anything else — any hair with any clothes on any
+frame; the Quiddles of the world keep `QUIDDLE_ONLY`.
 
 ---
 
@@ -2532,7 +3089,11 @@ The engine owns all generation algorithms. GamePacks provide configuration data 
 The packaged app boots the bundled Express + WebSocket server in-process, then
 opens a window pointed at it.
 
-- **The server binds an OS-assigned port** (`PORT=0`) on **loopback only**. A
+- **Sound may start without a click** (`autoplay-policy`), so the menu music
+  starts with the game; a browser makes a page wait for the first click.
+- **The server binds an OS-assigned port** (`PORT=0`) on **loopback only**
+  (a second listener, for guests, only while a world is open to the network:
+  see *Playing together*). A
   fixed 3000 meant the app failed to launch with no window and no message
   whenever anything else held that port, and binding all interfaces exposed the
   world-save API to the whole network. The launcher reads the real port back
@@ -2676,15 +3237,17 @@ New worlds record `format`, `worldHeight` and `worldMinY` in their metadata.
 
 | Command | What it does |
 |---|---|
-| `npm test` | Chunk storage (filled rows only, edits anywhere, snapshots, the save format), mob navigation and behaviour (paths round pits, walls and water, jumps, no walking off cliffs, fleeing, chasing, fish), mob models (texel layout, geometry facing out and agreeing with the painter) and gaits (feet that are down do not slide), mesher correctness (incl. normals facing out, packed vertices, torch/lantern models inside their voxel, cutout and translucent blocks against each other, translucent faces in back-to-front order from any viewpoint, and the ground-blend codes), smooth-terrain invariants, sky- and block-light rules and seams, day cycle and weather (coverage, rain only under cloud, climate localisation, lightning placement), worker replies vs. the mesher and solver (for both generators), far-terrain tiles (well formed, deterministic, seamless between neighbours, equal to the chunks' surface at step 1 and close at step 4, their trees standing where the generated chunks have them, a changed chunk's surface replacing the generated one), world generation (legacy worlds unchanged, flat worlds of both kinds, determinism, one column equal to the chunk's, no water beside or above air in lake/river/coast/swamp/fjord country across seams, every named block and texture exists, land/sea and biome balance on four seeds, time per chunk), current-world climate, chunk scheduling (every chunk meshed, once, however the player moves; the loaded area is the square), chunk-persistence round-trip (the server's, and the game's own `WorldClient` + `ChunkData` against it), semver precedence, and the update status bridge. Fast, no browser. |
+| `npm test` | Chunk storage (filled rows only, edits anywhere, snapshots, the save format), mob navigation and behaviour (paths round pits, walls and water, jumps, no walking off cliffs, fleeing, chasing, fish), mob models (texel layout, geometry facing out and agreeing with the painter) and gaits (feet that are down do not slide), mesher correctness (incl. normals facing out, packed vertices, torch/lantern models inside their voxel, cutout and translucent blocks against each other, translucent faces in back-to-front order from any viewpoint, and the ground-blend codes), smooth-terrain invariants, sky- and block-light rules and seams, what is left out of the draw (lines of sight through real terrain never end on it; the mesher's section order; joined faces against a cell-by-cell flood), long frames in the player's physics (the same landing and damage at 10 to 144 frames a second), day cycle and weather (coverage, rain only under cloud, climate localisation, lightning placement), worker replies vs. the mesher and solver (for both generators), far-terrain tiles (well formed, deterministic, seamless between neighbours, equal to the chunks' surface at step 1 and close at step 4, their trees standing where the generated chunks have them, a changed chunk's surface replacing the generated one), world generation (legacy worlds unchanged, flat worlds of both kinds, determinism, one column equal to the chunk's, no water beside or above air in lake/river/coast/swamp/fjord country across seams, every named block and texture exists, land/sea and biome balance on four seeds, time per chunk), current-world climate, chunk scheduling (every chunk meshed, once, however the player moves; the loaded area is the square), multiplayer on the server's side (sessions: host, journal, who is told what; each player's own state file; everything a guest from the network may and may not reach), chunk-persistence round-trip (the server's, and the game's own `WorldClient` + `ChunkData` against it), semver precedence, and the update status bridge. Fast, no browser. |
 | `npm run bench:load` | Saves 225 chunks of real terrain, then times a cold re-open against generating them fresh. |
-| `npm run bench:pipeline [radius] [seed]` | Times each worker stage (generate, compress, mesh blocky/smooth, light) on real terrain and prints a hash of each stage's output — compare hashes before and after an optimisation to prove it changed nothing else. |
-| `npm run bench:render [scenario …]` | Runs the real game on the real GPU (headless, vsync and frame cap off) and prints fps, frame-time percentiles, main-thread tick time, draw calls, heap and shadow redraws for each graphics preset, a thunderstorm and a fly-over that streams terrain in. `preset+key=value` changes one setting (`normal+shadows=off`) to price it, and `fly+key=value` does the same for the fly-over. `BENCH_PROFILE=1` adds a main-thread CPU profile with the longest busy stretches, `BENCH_UNMIN=1` serves unminified Three.js so the profile names its functions, `BENCH_TRACE=1` breaks down every main-thread task over `BENCH_TRACE_MS` (50), and `BENCH_EVAL="window.__wwMemory()"` prints, after each scenario, where the world's memory is (voxels, light volumes, chunk geometry on the GPU) and how many chunk meshes are visible. Laptop results swing with heat and background load: compare runs made in one session, and prefer `BROWSER=<chrome.exe>` — headless Edge can be marked hidden (no frames) when the display is off. |
+| `npm run bench:pipeline [radius] [seed]` | Times each worker stage (generate, compress, mesh blocky/smooth, section connectivity, light) on real terrain and prints a hash of each stage's output — compare hashes before and after an optimisation to prove it changed nothing else. |
+| `npm run bench:render [scenario …]` | Runs the real game on the real GPU (headless, vsync and frame cap off) and prints fps, frame-time percentiles, main-thread tick time, draw calls, heap and shadow redraws for each graphics preset, a thunderstorm, the Normal preset with twenty mobs round the camera (`mobs`: how many were posed, and how often the whole shadow map was copied for them) and a fly-over that streams terrain in. `preset+key=value` changes one setting (`normal+shadows=off`) to price it, and `fly+key=value` does the same for the fly-over. `BENCH_PROFILE=1` adds a main-thread CPU profile with the longest busy stretches, `BENCH_UNMIN=1` serves unminified Three.js so the profile names its functions, `BENCH_TRACE=1` breaks down every main-thread task over `BENCH_TRACE_MS` (50), and `BENCH_VSYNC=1` keeps 60 Hz pacing — the test for hitches as a player sees them, since with the cap off the main thread stalls waiting for the GPU — and `BENCH_EVAL="window.__wwMemory()"` prints, after each scenario, where the world's memory is (voxels, light volumes, chunk geometry on the GPU) and how many chunk meshes are visible. Laptop results swing with heat and background load: compare runs made in one session, and prefer `BROWSER=<chrome.exe>` — headless Edge can be marked hidden (no frames) when the display is off. |
 | `npm run map -- [--seed N] [--x X --z Z] [--size S] [--px P] [--mode height/biome/slice]` | Draws a seed's world from above (heights with hill shading, or biome colours) and prints the land/sea/lake/river and biome shares; `slice` cuts a vertical section through real generated chunks (caves, strata, ores, water). No browser. |
 | `npm run mobshots -- [--only cow,quiddle] [--out dir] [--clay]` | Stands the mob models on a stage (`test/mob_viewer.html`, real GPU) and screenshots each from all round (painted, and in plain clay to judge the shapes), square on from the side, the front and above, in its variants, through a stride at a walk and at a run, and in its poses (grazing, looking round, striking, falling, swimming, dead). `--clay` draws every shot unpainted. Open `/test/mob_viewer.html?model=cow` through the dev server to turn one by hand. |
 | `npm run mobtex` | Repaints `data/textures/entities/*.png` from the model definitions (see *Mobs*). |
+| `npm run menuscene [-- --all] [--out file.glb]` | Bakes the place behind the menus (`data/menu/scene.glb`) from the game's own terrain: prints how much of it was kept, and where the figure and each animal was put — with a warning for one on a slope, or whose feet cannot be seen from its view. About half a minute. See *The place behind the menus*. |
+| `npm run sounds [-- name …] [--wav]` | Makes the sounds in `data/sounds/` (see *Sound*); `WW_SOUND_OUT=<dir>` writes somewhere else to listen first. |
 | `npm run blocktex [-- name …]` | Repaints the block textures (`tools/gen_block_textures.py`; Python with Pillow and numpy). See *Block System*. |
-| `npm run shots -- [--seed N] [--only a,b] [--preset normal/far/classic] [--far chunks] [--terrain blocky] [--mobs] [--pitch r]` | Finds a mountain range, river valley, lake, coast, fjord and a dozen biomes on the seed's geography, flies the real game (GPU) to each, and screenshots it (into the system temp folder unless `--out` says otherwise); reports each view's load time and draw calls. `panorama`, `far-range` and `edge` look into the distance, for Far Terrain (`--far` overrides the preset's: normal 16, far 64, classic off). `--mobs` stands one of every mob in front of each view. |
+| `npm run shots -- [--seed N] [--only a,b] [--preset normal/far/classic] [--far chunks] [--terrain blocky] [--mobs] [--pitch r] [--cull-check]` | Finds a mountain range, river valley, lake, coast, fjord and a dozen biomes on the seed's geography, flies the real game (GPU) to each, and screenshots it (into the system temp folder unless `--out` says otherwise); reports each view's load time and draw calls. `panorama`, `far-range` and `edge` look into the distance, for Far Terrain (`--far` overrides the preset's: normal 16, far 64, classic off). `--mobs` stands one of every mob in front of each view. `--cull-check` draws each view — and looking down from it, and from inside the caves under it — with and without leaving out what the camera cannot see, and fails if a patch of pixels differs or more pinholes open onto the sky (see *What the camera cannot see*; best with `--preset classic`). |
 | `npm run test:smoke` | Boots the server, drives the real game in headless Edge/Chrome into a smooth world (the default) and then one switched to blocky, and fails on any console error, page exception, failed request, or a world loading in the wrong terrain style. Also drives the update banner through its states. Set `BROWSER=<path>` to pick the browser, and `SMOKE_SHOTS=<dir>` to save a screenshot of each world. |
 
 `test/smooth.test.mjs` checks the smooth-terrain rules directly: every smooth
@@ -2707,6 +3270,15 @@ or two thick, which is where a wall the mesher failed to draw, or a thin
 sheet whose two surfaces crossed, would show; and a scripted walk up and down
 a hill.
 
+The smoke test starts from an empty data folder, so it begins where a new
+player does: it must be asked for a name, types one on the controller's
+keypad, and reach the title with it chosen and kept. Then the place behind the
+menus must load and show, with no chunk generated for it; Play must put the
+menu away, send the camera to the other view and only then bring up the list
+of worlds; Back must return; and the scene must have been let go once a world
+is up. The tools that are not about that (the benchmarks, the screenshots) say
+who is playing before they open the page (`POST /api/profiles`).
+
 The smoke test also cycles ten time-of-day/weather scenes (both skies, both
 cloud levels, rain, snow, hail, fog, dust, a tornado) with Eye Adaptation on, and
 fails if one does not take effect or its clouds are missing on the GPU. Then it
@@ -2720,7 +3292,13 @@ the player, pauses with the ring on Resume, resumes, and steps back when the
 mouse is used. Test hooks on `window`:
 `__wwSetBlock(x, y, z, name)`, `__wwBlockAt`, `__wwLightAt` (sky and block
 levels), `__wwLook(yaw, pitch)`, `__wwPadLook()` (where the camera points),
-`__wwExposure()` and `__wwMemory()`.
+`__wwExposure()`, `__wwMemory()`, `__wwCaveCull(on)` (draw everything, or only
+what the camera could see), `__wwGrabFrame()` (the next frame drawn, as
+ImageData, for comparing frames in the page), `__wwPlayers()` (who is in the
+world), `__wwSound.debug()` (the mixer: what is loaded, looping and playing),
+`__wwName.pad(key)` (a press of the name keypad), `__wwMenuWorld(on)` and
+`__wwMenuScene.state()` (the place behind the menus: ready, which view,
+travelling, how many triangles).
 
 The smoke test is the one that catches renderer regressions — shader compile
 failures, bad geometry attributes, worker crashes — none of which show up in a
@@ -2740,17 +3318,21 @@ requests. Treat any of those being non-zero as a failure, not as noise.
 | Weather | Visual + audio + light gameplay (ice, wind, lightning, tornado pull) | Snow accumulating on the ground, lightning fires, tornado block damage |
 | Water | Incremental BFS spread (`WaterSimulator`) | Proper fluid levels / pressure |
 | Structures | Hardcoded builders (trees, plants, boulders, a house), frequencies per biome | GamePack-defined structure blueprints; villages |
-| Mobs | Six kinds modelled as anatomy with jointed, skinned limbs, variants, and gaits that plant their feet; A* paths, jumps, no walking into pits; passive or defensive | Hands that hold things; ears and tails that hang by their weight; a gallop; feet that find the height of the ground on a slope (they are placed on the level the mob stands at); spawning by biome (`spawnRules.biomes` is not enforced yet); herds that keep together; Quiddle villages, trades and talk; mobs that are hostile unprovoked; sounds; the player model (the Quiddle's) and a third-person view |
+| Mobs | Six kinds with jointed, skinned limbs, variants, and gaits that plant their feet; A* paths, jumps, no walking into pits; passive or defensive; voices | Hands that hold things (a player's too: what they hold is not shown); ears and tails that hang by their weight; a gallop; feet that find the height of the ground on a slope (they are placed on the level the mob stands at); spawning by biome (`spawnRules.biomes` is not enforced yet); herds that keep together; Quiddle villages, trades and talk; mobs that are hostile unprovoked |
+| Playing together | Split screen (2–4, a controller each) and other machines on the network, in one session a world; blocks, players, the host's mobs, clock and weather are shared | Mobs live round the host: a guest far from the host meets none. Dropped items are each game's own (a mob's drops go to whoever killed it; what a player throws down the others do not see). Players cannot hurt each other. Each pane of a split screen is a whole game — its own chunks, meshes and workers — so two cost twice the memory. When the host leaves, the session ends. No chat. The network is the local one: no way through a router |
+| Menu scene | A model baked from real terrain (19 MB, 490 thousand triangles): two views of it and the way between them | Only what those cameras see is in it, so a new view means a new bake, and a screen wider than 16:9 is cropped, not widened. One afternoon's light: no weather, no shadows, still water. The animals graze but do not walk. It does not follow the game: after a change to the generator, the mesher or a block texture it goes on looking as the game did until it is baked again |
+| Sound | Footsteps, blocks, animals, ambience and thunder from files made by a script; rain and wind made as they fall; menu music | The voices are built, not recorded (a cow is a larynx and a mouth in arithmetic): recordings dropped in under the same names replace them. No music in the world itself. Nothing is muffled by walls; other players' footsteps are not heard |
 | World generation | Continents, mountain belts, rivers and creeks at sea level, elevated lakes, fjords, cliffs, mesas, 28 biomes chosen after the terrain, six kinds of cave | Waterfalls (rivers all run at sea level, so none are needed yet — a spring feature would add them); grass tufts and flowers (needs a cross-shaped model that sits on the smooth surface); per-biome grass tint; mobs spawning by biome (entity `spawnRules.biomes` is not enforced yet) |
 | Far terrain | The geography as a heightfield, with trees and buildings as boxes in the two nearest levels (thinned in woods) and the surfaces of chunks the player has changed; no caves or overhangs; a river narrower than a cell shows only where a sample falls in it; a new level of detail pops in when tiles swap, and trees become a tinted canopy at the third level | Blend (geomorph) between levels; a changed chunk shows only its highest blocks (a bridge is a wall down to the ground) |
-| Underground geometry | Every cave wall is meshed and drawn; caves are most of a chunk's triangles | Occlusion culling of cave sections, or dropping cave faces no sky or block light reaches |
+| Underground geometry | Every cave wall is meshed, and the sections of a chunk the camera could not see are left out of the draw (*What the camera cannot see*): about half the triangles from the surface | A chunk draws one range, from the lowest section it needs to the highest: one visible cave deep down brings everything above it with it. Ranges of sections a chunk (multi-draw) would leave more out. The pinholes in the mesh, which are there with or without this |
 | Multiplayer | Architecture ready | Server/peer connection layer |
 | See-through blocks | Leaves and glass are cutouts in the opaque pass; water and ice are blended, ordered exactly along each axis and chunk by chunk | Between axes the order is fixed (horizontal faces first), so the side of an ice block standing in water can blend in the wrong order; glass is clear with a frame, not tinted; nothing but terrain is veiled by cloud (mobs, items, rain) |
 | Smooth terrain | Diagonal slopes of one block or half a block a block are planes; a lone block is a low mound; ground of different kinds blends along a ragged line, and a lone block keeps its face; shading is smooth | A gentle slope is still terraces joined by one-block ramps (leaning every terrace was tried and taken out: it changed the look of all terrain); diagonal steps three or more wide still zigzag; a step of two blocks right beside low ground is a wall, so ground steeper than the diagonal breaks into teeth; a slope between an axis and a diagonal is close to a plane, not one |
-| Controller | Play and every menu, analog movement, no pointer lock needed | No rumble; no remapping; text boxes (a world's name, the creative search) still need a keyboard; sensitivity is shared with the mouse |
+| Controller | Play and every menu, analog movement, no pointer lock needed; names typed on a keypad | No rumble; no remapping; the other text boxes (a world's name, the creative search, a network address) still need a keyboard; sensitivity is shared with the mouse |
 | Textures | 32 × 32, painted by a script, mipmapped | Item icons are still the 16 × 16 originals; block textures repeat every block (hidden by the shader's large-scale variation, not removed) |
-| Draw calls | ~145 at render distance 8 and ~420 on Pro, looking at the horizon — one opaque + one transparent mesh per chunk, each a draw. What a draw costs is now mostly its own GL calls (bind the vertex array and the light texture, one `uChunk` upload, draw), and on integrated graphics Pro is limited by geometry — 2.4 M triangles — not by shading: halving the resolution gains about 20%, turning off shadows, fancy clouds and Eye Adaptation almost nothing | Merge chunks into 2×2 regions (one light volume per region) — about a quarter of the draws |
+| Draw calls | ~105 at render distance 8 and ~280 on Pro, looking at the horizon — one opaque + one transparent mesh per chunk, each a draw. What a draw costs is now mostly its own GL calls (bind the vertex array and the light texture, one `uChunk` upload, draw). On integrated graphics Pro is still the preset limited by its triangles (1.1 M now, 2.1 M before the caves were left out) | Merge chunks into 2×2 regions (one light volume per region) — about a quarter of the draws |
+| Pixels | What a frame costs on integrated graphics is mostly its pixels (*Where a frame goes*): half the resolution more than doubles Classic's frame rate. The drawing buffer follows the screen's pixel ratio up to 2, so a laptop at 150–200% scaling draws two to four times the pixels of a 1080p panel at every preset, Simple included | Resolution that follows the frame time, or a cap on the pixel count rather than on the ratio — both change how sharp the picture is, so they are choices to make, not optimisations. Cheaper sky-light lookup (it is the dearest single thing in the chunk shader) |
 | Memory | Chunk geometry is the largest holder: ~330 KB a chunk on the GPU, 107 MB at render distance 8 and 275 MB on Pro (`__wwMemory()`), then voxels (55 MB on Pro) and light volumes | Quantise positions (they are floats, half of each vertex); fewer cave triangles (below) |
-| Smooth meshing | 9–10 ms a chunk, two thirds of it the smooth-shape pass; each voxel is described once (`prepare` only looks at its corners) | `topCrossNear` reads five levels for every slope; inline `SmoothField.get` for in-chunk reads |
+| Smooth meshing | 7–8 ms a chunk, nearly all of it the smooth-shape pass now that the greedy sweep reads only the cells with faces; each voxel is described once (`prepare` only looks at its corners) | `topCrossNear` reads five levels for every slope; inline `SmoothField.get` for in-chunk reads |
 | Chunk transfer | Palette snapshot, copied per job | `SharedArrayBuffer` voxel store (needs COOP/COEP headers on the server) |
 | Code signing | Unsigned — SmartScreen warns | OV/EV certificate or Azure Trusted Signing |

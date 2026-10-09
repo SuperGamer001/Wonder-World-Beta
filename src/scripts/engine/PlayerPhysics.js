@@ -72,6 +72,21 @@ const STEP_HEIGHT = 0.6;
 const SNAP_DOWN   = 0.6;
 const STEP_ITERS  = 10;    // binary-search steps — resolves to ~0.0006 blocks
 
+// ── Slow frames ───────────────────────────────────────────────────────────────
+// Collision tests the box where a move ends, not the way there, and a move
+// that ends inside something is refused whole. At ten frames a second a long
+// fall covers five blocks a frame: the player stopped dead up to that far
+// above the ground, was hurt there, and then fell the rest — or, when the move
+// was longer than the box is thick, ended on the far side of a one-block floor
+// (or, flying, a wall) without ever touching it. So a frame in which the
+// player would move further than MAX_MOVE is taken in several equal steps. At a steady sixty frames a
+// second only a fall of ten blocks or more is that fast (it lands within half
+// a point of the damage it always did), so nothing else about how the game
+// plays changes; what changes is that a slow machine plays by the same rules
+// as a fast one.
+const MAX_MOVE     = 0.45;   // blocks a step; the player is 0.6 wide
+const MAX_SUBSTEPS = 8;
+
 /**
  * Frame-rate independent exponential approach factor.
  * Returns the fraction of the remaining gap to close this frame for a given
@@ -129,10 +144,34 @@ export class PlayerPhysics {
 
         if (isSpectator || (isCreative && this.flying)) {
             const speed = isSpectator ? FLY_SPEED_SPECTATOR : FLY_SPEED_CREATIVE;
-            return this._flyUpdate(pos, input, dt, speed, isSpectator);
+            // A spectator collides with nothing, so there is nothing to miss.
+            const n = isSpectator ? 1 : this._substeps(speed, dt);
+            let result = null;
+            for (let i = 0; i < n; i++) result = this._flyUpdate(pos, input, dt / n, speed, isSpectator);
+            return result;
         }
 
-        return this._groundUpdate(pos, input, dt, isCreative, isSurvival, stats);
+        // The fastest the player can be going by the end of the frame.
+        const v = this.vel;
+        const fastest = Math.max(Math.abs(v.x), Math.abs(v.z), SPRINT_SPEED, Math.abs(v.y) - GRAVITY * dt);
+        const n = this._substeps(fastest, dt);
+        if (n === 1) return this._groundUpdate(pos, input, dt, isCreative, isSurvival, stats);
+
+        let fallDamage = 0, fellIntoVoid = false, result = null;
+        for (let i = 0; i < n; i++) {
+            result = this._groundUpdate(pos, input, dt / n, isCreative, isSurvival, stats);
+            if (result.fallDamage > fallDamage) fallDamage = result.fallDamage;   // it lands in one of them
+            fellIntoVoid ||= result.fellIntoVoid;
+        }
+        result.fallDamage = fallDamage;
+        result.fellIntoVoid = fellIntoVoid;
+        return result;
+    }
+
+    /** How many equal steps a frame of `dt` seconds at `speed` blocks a second is taken in (see MAX_MOVE). */
+    _substeps(speed, dt) {
+        const n = Math.ceil(speed * dt / MAX_MOVE);
+        return n < 1 ? 1 : n > MAX_SUBSTEPS ? MAX_SUBSTEPS : n;
     }
 
     // ── Fly / spectator movement ───────────────────────────────────────────────

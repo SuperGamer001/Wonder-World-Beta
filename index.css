@@ -8,11 +8,27 @@ body {
     align-items: center;
     height: 100vh; /* Ensure the body takes up the full height of the viewport */
 }
-#mainFrame {
+/* The stage keeps 16:9 and never exceeds the viewport's height. */
+#stage {
     width: 100%;
-    max-width: calc(100vh * (16 / 9)); /* Ensure the canvas maintains aspect ratio and doesn't exceed viewport height */
+    max-width: calc(100vh * (16 / 9));
     aspect-ratio: 16 / 9;
     position: relative;
     overflow: hidden;
+    display: grid;
+    gap: 0.15vw;
+    background: #000;
+}
+/* One player has all of it; two stand side by side; three or four take a
+   quarter each (index.js sets the class). */
+#stage.panes-1 { grid-template: 1fr / 1fr; }
+#stage.panes-2 { grid-template: 1fr / 1fr 1fr; }
+#stage.panes-3, #stage.panes-4 { grid-template: 1fr 1fr / 1fr 1fr; }
+.pane {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+    min-height: 0;
+    display: block;
     border: none;
 }

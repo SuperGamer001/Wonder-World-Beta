@@ -30,7 +30,7 @@
     'use strict';
 
     // Button numbers of the standard layout.
-    const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, START = 9, L3 = 10;
+    const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, START = 9, L3 = 10, R3 = 11;
     const UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15;
 
     const DEAD         = 0.2;    // a stick this near its centre is at rest
@@ -48,6 +48,10 @@
         jump: false, sneak: false, sprint: false,
         breakHeld: false, useHeld: false,
     };
+
+    // A further pane of a split screen is one controller's, and nothing else's.
+    const MY_PAD = typeof PARAMS !== 'undefined' && PARAMS.has('pad') ? parseInt(PARAMS.get('pad')) : null;
+    const OWN_PANE = MY_PAD !== null;
 
     let running = false;
     let prev = [];                   // which buttons were down last frame
@@ -72,18 +76,22 @@
         sprintOn = false;
     }
     window.addEventListener('mousemove', (e) => {
-        if (pad.active && Math.abs(e.movementX) + Math.abs(e.movementY) > 3) setActive(false);
+        if (!OWN_PANE && pad.active && Math.abs(e.movementX) + Math.abs(e.movementY) > 3) setActive(false);
     });
-    window.addEventListener('mousedown', () => setActive(false));
-    window.addEventListener('keydown',   () => setActive(false));
+    window.addEventListener('mousedown', () => { if (!OWN_PANE) setActive(false); });
+    window.addEventListener('keydown',   () => { if (!OWN_PANE) setActive(false); });
 
     // ── Connecting ───────────────────────────────────────────────────────────
 
     function current() {
         const list = navigator.getGamepads ? navigator.getGamepads() : [];
+        if (OWN_PANE) return list[MY_PAD]?.connected ? list[MY_PAD] : null;
+        // The first player's: any controller that has not been given a screen of its own.
+        let taken = null;
+        try { taken = window.parent !== window ? window.parent.__wwSplit : null; } catch { /* another origin */ }
         let any = null;
         for (const gp of list) {
-            if (!gp || !gp.connected) continue;
+            if (!gp || !gp.connected || taken?.padTaken(gp.index)) continue;
             if (gp.mapping === 'standard') return gp;
             any ??= gp;
         }
@@ -101,7 +109,7 @@
     }
 
     window.addEventListener('gamepadconnected', () => {
-        notice('Controller connected');
+        if (!OWN_PANE) notice('Controller connected');
         if (!running) { running = true; prev = []; requestAnimationFrame(frame); }
     });
     window.addEventListener('gamepaddisconnected', () => {
@@ -120,8 +128,11 @@
 
     function frame(now) {
         const gp = current();
-        if (!gp) { running = false; release(); return; }
+        // A pane waits for its controller (it shows up on its next press); the
+        // first screen stops looking when there is none.
+        if (!gp) { release(); pad.index = null; if (OWN_PANE) requestAnimationFrame(frame); else running = false; return; }
         requestAnimationFrame(frame);
+        pad.index = gp.index;
 
         const down = (i) => { const b = gp.buttons[i]; return !!b && (b.pressed || b.value > 0.5); };
         const held = (i) => { const b = gp.buttons[i]; return !!b && (b.pressed || b.value > TRIGGER); };
@@ -171,6 +182,7 @@
         if (hit(LB) || hit(LEFT))  window.dispatchEvent(new CustomEvent('ww_padHotbar', { detail: { step: -1 } }));
         if (hit(Y)) { release(); window.dispatchEvent(new CustomEvent('ww_toggleInventory')); }
         if (hit(X)) { release(); window.dispatchEvent(new CustomEvent('ww_toggleCraftMenu', { detail: {} })); }
+        if (hit(R3)) window.dispatchEvent(new CustomEvent('ww_toggleCamera'));
         if (hit(START)) pauseGame();
     }
 
@@ -189,7 +201,13 @@
     const click = (sel) => () => document.querySelector(sel)?.click();
     const SCOPES = [
         ['#confirmPopup',           click('#confirmNo')],
+        ['#GuestOverScreen',        null],
+        ['#NameScreen',             () => window.__wwName?.cancel()],
+        ['#PlayersScreen',          click('#playersBackBtn')],
+        ['#LanJoinModal',           click('#lanJoinCloseBtn')],
         ['#HowToPlayScreen',        click('#howToBackBtn')],
+        ['#CreditsScreen',          click('#creditsBackBtn')],
+        ['#CharacterScreen',        click('#characterDoneBtn')],
         ['#SettingsScreen',         click('#settingsBackBtn')],
         ['#WorldSettingsModal',     click('#worldSettingsDoneBtn')],
         ['#CreateWorldModal',       click('#createWorldCancelBtn')],
@@ -220,7 +238,8 @@
     function firstFocus(el) {
         const list = focusables(el);
         const pick = (sel) => list.find(e => e.matches(sel));
-        return (el.id === 'SettingsScreen'  && pick('.settingsTab.active')) ||
+        return (el.id === 'NameScreen'      && (pick('.t9Key[data-k="5"]') || pick('.nameItem:not(.cannot)'))) ||
+               (el.id === 'SettingsScreen'  && pick('.settingsTab.active')) ||
                (el.id === 'WorldListScreen' && pick('.worldCard [data-act="play"]')) ||
                (el.id === 'InventoryScreen' && pick('.invGridSlot[data-slot-type="hotbar"]')) ||
                (el.id === 'InventoryScreen' && pick('.invGridSlot')) ||
@@ -301,7 +320,8 @@
     function menu(gp, down, hit, now) {
         const scope = topScope();
         if (!scope) { setFocus(null); scopeEl = null; return; }
-        if (scope.el !== scopeEl) { scopeEl = scope.el; settled = false; setFocus(firstFocus(scope.el)); }
+        const fresh = scope.el !== scopeEl;
+        if (fresh) { scopeEl = scope.el; settled = false; setFocus(firstFocus(scope.el)); }
         // Until the player moves it the ring keeps to the best place to start,
         // which can change after the screen comes up (the world list fills in
         // when the server answers).
@@ -316,6 +336,11 @@
         const sx = gp.axes[0] ?? 0, sy = gp.axes[1] ?? 0;
         const dir = down(UP) || sy < -NAV_PUSH ? 1 : down(DOWN) || sy > NAV_PUSH ? 2
                   : down(LEFT) || sx < -NAV_PUSH ? 3 : down(RIGHT) || sx > NAV_PUSH ? 4 : 0;
+        // A screen that has only just come up — or a controller only just picked
+        // up — first shows where the ring is. The press that brought it does
+        // nothing more: it used to move the ring off the button it had just
+        // been put on, or press a button nobody had been shown.
+        if (fresh) { navDir = dir; navAt = now + REPEAT_FIRST; return; }
         let go = 0;
         if (dir !== navDir) { navDir = dir; navAt = now + REPEAT_FIRST; go = dir; }
         else if (dir !== 0 && now >= navAt) { navAt = now + REPEAT_NEXT; go = dir; }
@@ -328,7 +353,11 @@
             }
         }
 
-        if (hit(A) && focus) { settled = true; press(focus); carry(); }
+        if (scope.el.id === 'NameScreen' && window.__wwName?.entering() && (hit(X) || hit(Y) || hit(START))) {
+            // On the keypad: X rubs out, Y is a space, Start is Done.
+            window.__wwName.pad(hit(X) ? 'back' : hit(Y) ? '0' : 'done');
+        }
+        else if (hit(A) && focus) { settled = true; press(focus); carry(); }
         else if (hit(B) && scope.back) scope.back();
         else if (hit(X) && focus?.classList.contains('invGridSlot')) {
             // The right mouse button on a slot: take half, or put one down.
@@ -339,6 +368,9 @@
             if (_menuOpen) closeAnyMenu();
             else if (scope.el.id === 'PauseScreen') resume();
             else if (scope.back) scope.back();
+        }
+        else if ((hit(LB) || hit(RB)) && scope.el.id === 'CharacterScreen') {
+            window.__wwCharacter?.turn(hit(RB) ? 0.7 : -0.7);       // the shoulder buttons turn the figure
         }
         else if ((hit(LB) || hit(RB)) && scope.el.id === 'SettingsScreen') {
             // The shoulder buttons step through the sections.
@@ -351,5 +383,7 @@
 
     // A controller that was already in use when the page loaded shows up on
     // its next button press (the browser announces it then), so nothing more
-    // is needed here.
+    // is needed here — except in a pane of its own, which is its controller's
+    // from the start and looks for it at once.
+    if (OWN_PANE) { setActive(true); running = true; requestAnimationFrame(frame); }
 })();

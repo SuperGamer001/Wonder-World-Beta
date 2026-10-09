@@ -165,17 +165,18 @@ body.usingPad { cursor: none; }
 
 /* ── Title ────────────────────────────────────────────────────────────────── */
 
+/* On the title screen the name is in the corner: the middle is the view's. */
 img.logo {
     display: block;
-    width: 38vw;
+    width: 23vw;
     height: auto;
-    margin: 3.2vw auto 0;
+    margin: 1.5vw 0 0 2vw;
     position: relative;
     z-index: 1;
     filter: drop-shadow(0 0.5vw 1vw rgba(0, 0, 0, 0.4));
 }
 /* While a world loads the logo waits in the middle of the screen. */
-img.logo.Loading { width: 34vw; margin-top: 11vw; }
+img.logo.Loading { width: 34vw; margin: 11vw auto 0; }
 
 #TitleScreen {
     display: flex;
@@ -1196,3 +1197,127 @@ body.a11y-contrast {
 body.a11y-contrast .chip, body.a11y-contrast #playerInfo, body.a11y-contrast .hotbarTray { background: #000; border-color: #fff; }
 body.a11y-contrast .hotbarSlot { background: #000; border-color: #fff; }
 body.a11y-contrast .hotbarSlot.selected { border-color: var(--gold); }
+
+/* ── Character ────────────────────────────────────────────────────────────── */
+/* The player's own Quiddle: the figure on the left (Character.js draws it on
+   the canvas), what can be chosen about it on the right. */
+.charPanel { width: 70vw; max-height: 94vh; display: flex; flex-direction: column; }
+.charBody { display: flex; gap: 1.6vw; padding: 1.2vw 1.6vw 1.4vw; overflow-y: auto; }
+.charStage { width: 19vw; flex-shrink: 0; display: flex; flex-direction: column; gap: 0.6vw; }
+#characterCanvas {
+    width: 19vw; height: 26vw;
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.6vw;
+    /* A lit floor to stand on, in the panel's own greys. */
+    background: radial-gradient(ellipse at 50% 88%, var(--bg-4) 0%, var(--bg-2) 62%);
+    cursor: grab;
+}
+#characterCanvas:active { cursor: grabbing; }
+.charLooks { flex: 1; min-width: 0; }
+.charLooks .formGrid { grid-template-columns: 8.5vw 1fr; gap: 0.7vw 1vw; margin: 0; }
+/* A colour is chosen by its colour, not its name. */
+.segGroup .segBtn.swatch { flex: 1; min-width: 2.6vw; height: 1.75vw; padding: 0; background: var(--swatch); opacity: 0.8; }
+.segGroup .segBtn.swatch:hover { background: var(--swatch); opacity: 1; }
+.segGroup .segBtn.swatch.on { background: var(--swatch); opacity: 1; box-shadow: 0 0 0 0.16vw var(--gold); }
+
+/* ── Who is playing, and playing together ─────────────────────────────────── */
+.panelNote { font-weight: normal; color: var(--text-soft); margin-left: 0.6vw; }
+.namePanel { min-width: 34vw; }
+.nameList {
+    display: flex; flex-direction: column; gap: 0.4vw;
+    width: 100%; max-height: 22vw; overflow-y: auto;
+    margin: 0.6vw 0;
+}
+.nameRow { display: flex; align-items: center; gap: 0.5vw; }
+.nameList .nameItem { flex: 1; min-width: 0; justify-content: flex-start; padding: 0.55vw 1.2vw; font-size: 1.25vw; }
+.nameRow .menuButton.small { min-width: 0; }
+.menuButton.cannot { opacity: 0.4; pointer-events: none; }
+#nameInput { font-size: 1.6vw; text-align: center; letter-spacing: 0.04em; }
+#namePick, #nameEntry { width: 100%; display: flex; flex-direction: column; align-items: center; }
+#namePick.hidden, #nameEntry.hidden { display: none; }
+#namePick .popupButtons, #nameEntry .popupButtons { align-self: flex-end; }
+/* The keypad: twelve keys, each its digit and the letters it gives. It is for a
+   controller, and is shown only while one is the device in use. */
+.t9Pad { display: none; grid-template-columns: repeat(3, 7.2vw); gap: 0.45vw; margin: 0.5vw 0 0.2vw; }
+body.usingPad .t9Pad { display: grid; }
+.padOnly { display: none; }
+body.usingPad .padOnly { display: block; }
+.t9Pad .t9Key {
+    min-width: 0; padding: 0.45vw 0; margin: 0;
+    flex-direction: column; gap: 0;
+    font-size: 1.5vw; line-height: 1.1;
+}
+.t9Key small { font-family: var(--font); font-weight: normal; font-size: 0.85vw; color: var(--text-soft); letter-spacing: 0.08em; }
+.t9Key.on { background: var(--gold); color: #2b2206; }
+.t9Key.on small { color: #2b2206; }
+
+.playersList { width: 100%; display: flex; flex-direction: column; gap: 0.3vw; margin: 0.4vw 0 0.6vw; }
+.playerRow {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.5vw 1vw; font-size: 1.15vw;
+    background: var(--bg-2); border: var(--line) solid var(--edge-soft); border-radius: 0.5vw;
+}
+.playerName { font-weight: 600; }
+.playerNote { color: var(--text-soft); font-size: 0.95vw; }
+#PlayersScreen .settingsSectionTitle, #PlayersScreen .settingsRow { align-self: stretch; }
+.lanAddress {
+    display: inline-block; margin-top: 0.3vw; padding: 0.15vw 0.6vw;
+    font-family: Consolas, monospace; color: var(--text);
+    background: var(--bg-2); border: var(--line) solid var(--edge-soft); border-radius: 0.35vw;
+    user-select: all;
+}
+/* A guest in someone else's world: the world's own settings are not theirs. */
+body.isGuest #tabWorld { display: none !important; }
+
+/* ── The place behind the menus ───────────────────────────────────────────── */
+/* A canvas of its own under everything (MenuScene.js draws a baked model of
+   real terrain on it). It fades in when it is ready; until then, and with no
+   scene to show, the pack's gradient is there as it always was. */
+#menuCanvas {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    z-index: -20;
+    display: none;
+    opacity: 0;
+    transition: opacity 1.2s ease-out;
+    pointer-events: none;
+}
+body.menuWorld #menuCanvas { display: block; }
+body.menuWorld.menuReady #menuCanvas { opacity: 1; }
+body.a11y-reduce #menuCanvas { transition: none; }
+
+/* ── The title screen ─────────────────────────────────────────────────────── */
+/* The place is the picture, so the menu keeps out of it: the name in one top
+   corner and who is playing in the other; one thing to do, low in the middle,
+   and under it the rest, small and side by side. */
+#TitleScreen { position: absolute; inset: 0; display: block; }
+#TitleScreen.hidden { display: none; }
+.titleProfile { position: absolute; top: 1.7vw; right: 1.9vw; }
+.titleProfile .menuButton { margin: 0; }
+.titleDock {
+    position: absolute; left: 50%; bottom: 4.6vw;
+    transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 0.8vw;
+}
+.titleDock .menuButton { margin: 0; }
+.titleDock .menuButton.big { min-width: 22vw; }
+.titleRow {
+    display: flex; gap: 0.45vw;
+    padding: 0.45vw;
+    background: var(--scrim);
+    border: var(--line) solid var(--edge-soft);
+    border-radius: 0.9vw;
+}
+.titleRow .menuButton { min-width: 9.4vw; }
+/* The pause menu: the same shape — one thing, then the rest in a block, then the way out. */
+.pauseGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45vw; width: 100%; margin: 0.5vw 0; }
+.pauseGrid .menuButton { min-width: 9.5vw; margin: 0; }
+
+.creditsList { width: 100%; display: flex; flex-direction: column; gap: 0.35vw; margin: 0.5vw 0 0.3vw; }
+.creditRow {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 3vw;
+    padding: 0.6vw 1.1vw;
+    background: var(--bg-2); border: var(--line) solid var(--edge-soft); border-radius: 0.5vw;
+}
+.creditRole { color: var(--text-soft); font-size: 1vw; letter-spacing: 0.08em; text-transform: uppercase; }
+.creditName { font-family: var(--font-head); font-weight: 600; font-size: 1.35vw; }

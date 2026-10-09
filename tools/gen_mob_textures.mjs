@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { MODELS, QUIDDLE_HEAD } from '../src/scripts/engine/MobModelDefs.js';
+import { MODELS, QUIDDLE_HEAD, QUIDDLE_FACE, QUIDDLE_Y } from '../src/scripts/engine/MobModelDefs.js';
 import { surfacePoint, layoutKey } from '../src/scripts/engine/MobShapes.js';
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'data', 'textures', 'entities');
@@ -551,82 +551,130 @@ function pixelEye(model, tag, mark, rows) {
 // ── Quiddle ──────────────────────────────────────────────────────────────────
 {
     const M = MODELS.quiddle;
-    // The head is modelled life-size and then enlarged (QUIDDLE_HEAD). The
-    // painters below work on the life-size head: a texel on anything that is
-    // on the head is taken back to where it was before it grew.
-    const lifeSize = (p) => p.map((v, i) => QUIDDLE_HEAD.at[i] + (v - QUIDDLE_HEAD.at[i]) / QUIDDLE_HEAD.scale);
+    // The head is modelled in a head's own measure and then enlarged and set
+    // on the neck (QUIDDLE_HEAD). The painters below work in that measure: a
+    // texel on anything that is on the head is taken back to where it was
+    // before it grew.
+    const lifeSize = (p) => p.map((v, i) => QUIDDLE_HEAD.from[i] + (v - QUIDDLE_HEAD.at[i]) / QUIDDLE_HEAD.scale);
     const ON_HEAD = new Set(['skull', 'nose', 'ear', 'lid', 'hairShort', 'hairLong', 'hairUnderHat', 'hatCrown', 'hatBrim']);
     const head = (fn) => (t) => { if (ON_HEAD.has(t.tag)) t.p = lifeSize(t.p); return fn(t); };
     const mark = (name) => lifeSize(M.marks[name]), EYE = mark('eye');
-    const SKINS = [hex(0xf0c6a2), hex(0xdcae84), hex(0xc68e62), hex(0x7a5136), hex(0x58382a)];
+    // The clothes below were cut for a taller figure — a person's own
+    // proportions, the knee at 8.3 and the shoulder at 22.6 — and are drawn to
+    // those lines still. A texel on the body is taken to where it would be on
+    // that figure: each limb by its joints, the trunk as it is but narrower.
+    const Y = QUIDDLE_Y;
+    const through = (pts) => (y) => {
+        let i = 0;
+        while (i < pts.length - 2 && y > pts[i + 1][0]) i++;
+        const [a, b] = [pts[i], pts[i + 1]];
+        return a[1] + (y - a[0]) * (b[1] - a[1]) / (b[0] - a[0]);
+    };
+    const LEG = through([[0, 0], [Y.ankle, 1.5], [Y.knee, 8.3], [Y.crotch, 13.5], [12.3, 16.4]]);
+    const ARM = through([[Y.tip, 11.7], [Y.knuckle, 13.0], [Y.wrist, 14.6], [Y.elbow, 18.5], [Y.shoulder, 22.6], [19.75, 23.05]]);
+    const TRUNK = 3.35, WIDER = 1.14;
+    const body = (fn) => (t) => {
+        const p = t.p;
+        switch (t.tag) {
+            case 'leg': case 'shoe':   p[1] = LEG(p[1]); break;
+            case 'arm': case 'finger': p[1] = ARM(p[1]); break;
+            case 'torso': case 'neck': p[1] += TRUNK; p[0] /= WIDER; break;
+            case 'skirt': p[1] = p[1] >= Y.crotch ? p[1] + TRUNK - 0.05 : LEG(p[1]); p[0] /= WIDER; break;
+        }
+        return fn(t);
+    };
+    const SKINS = [hex(0xf2c9a6), hex(0xe0b088), hex(0xc68e62), hex(0x8a5a3c), hex(0x5e3c2c)];
     const skull = M.shapes.find(s => s.tag === 'skull'), side = skull.patches[0];
+    // The four fingers are one shape (the thumb another): lines are drawn on it between them.
+    const MITTENS = new Set(M.shapes.filter(s => s.tag === 'finger').filter((_, i) => i % 2 === 0));
     // The face is drawn on the skull's own grid of texels, so that it is sharp
     // and the same both sides: `col` counts texels out from the middle of the
-    // face, and the rows are found from the heights of the features.
+    // face, and the rows are found from the heights of the features. It is a
+    // drawn face: big eyes set low and wide, a dot of light in each, brows, a
+    // small mouth that smiles, colour in the cheeks.
     const rowY = Array.from({ length: side.h }, (_, j) => lifeSize(surfacePoint(M, skull, side, 0.5, (j + 0.5) / side.h, []).slice(0, 3))[1]);
     const rowAt = (y) => rowY.reduce((best, v, j) => Math.abs(v - y) < Math.abs(rowY[best] - y) ? j : best, 0);
-    const R = { eye: rowAt(EYE[1] + 0.08), mouth: rowAt(mark('mouth')[1]), nose: rowAt(mark('noseBase')[1] - 0.12) };
-    R.brow = Math.min(rowAt(mark('brow')[1] + 0.05), R.eye - 3);          // always a row of skin between the lid and the brow
+    const E = QUIDDLE_FACE.eye, E0 = E.gap, E1 = E.gap + E.w - 1;
+    const R = { eye: rowAt(EYE[1]) - (E.h >> 1), mouth: rowAt(mark('mouth')[1]), nose: rowAt(mark('noseBase')[1]) };
+    R.brow = R.eye - 3;
     const col = (t) => { const k = t.i - t.w / 2; return k >= 0 ? k : -k - 1; };
     const onFace = (t) => t.tag === 'skull' && t.kind === 'side' && col(t) < t.w / 4;
-    // An eye is four texels across, the fifth of the face it should be, and
-    // three down — rounder and more open than life, as a drawn face has them.
-    // The iris is its middle two.
-    const inEye = (t) => onFace(t) && t.j >= R.eye && t.j <= R.eye + 2 && col(t) >= 2 && col(t) <= 5;
+    // The eye: a rounded box — its four corners are skin.
+    const inEye = (t) => {
+        if (!onFace(t)) return false;
+        const m = col(t), j = t.j - R.eye;
+        if (j < 0 || j >= E.h || m < E0 || m > E1) return false;
+        return !((j === 0 || j === E.h - 1) && (m === E0 || m === E1));
+    };
 
-    SKINS.forEach((skin, n) => made.push(paint(M, `quiddle_skin_${n + 1}`, head((t) => {
-        const p = t.p, shade = mul(skin, 0.84), lip = mix(skin, hex(0xa8433f), n >= 3 ? 0.45 : 0.55), browC = mul(skin, n >= 3 ? 0.32 : 0.42);
+    SKINS.forEach((skin, n) => made.push(paint(M, `quiddle_skin_${n + 1}`, head(body((t) => {
+        const p = t.p, dark = n >= 3, shade = mul(skin, 0.84), lip = mix(skin, hex(0xa8433f), dark ? 0.4 : 0.5), browC = mul(skin, dark ? 0.3 : 0.38);
         switch (t.tag) {
             case 'skull': {
                 let c = skin;
                 if (t.kind === 'cap') return finish(t.end ? shade : skin, t, 0.03);                // under the chin; the crown
                 if (onFace(t)) {
-                    const m = col(t), j = t.j;
-                    if (inEye(t)) {
-                        // The white: rounded off at its lower corners, so the eye has a shape.
-                        if (j === R.eye + 2 && (m === 2 || m === 5)) return finish(mul(skin, 0.8), t, 0.02);
-                        return finish(j === R.eye ? hex(0xe2ddd6) : hex(0xf6f3ee), t, 0);
-                    }
-                    if (j === R.eye - 1 && m >= 2 && m <= 5) return finish(mul(skin, m === 2 ? 0.7 : m === 5 ? 0.55 : 0.42), t, 0.02);   // the upper lid and its lashes
-                    if (j === R.eye - 1 && m === 6) c = mul(skin, 0.8);
-                    if (j === R.eye + 3 && m >= 3 && m <= 4) c = mul(skin, 0.92);                                         // the lower lid
-                    if (j === R.brow && m >= 1 && m <= 6) return finish(m === 1 || m === 6 ? mix(skin, browC, 0.5) : browC, t, 0.03);
-                    if (j === R.brow - 1 && m >= 3 && m <= 4) return finish(mix(skin, browC, 0.45), t, 0.03);            // the arch of the brow
-                    if (m === 0 && j > R.eye + 2 && j < R.nose) c = mul(skin, 1.04);                                      // the bridge of the nose, where it runs into the face
-                    if (m <= 1 && j === R.nose + 1) c = mul(skin, 0.86);                                                  // under the nose
-                    if (j === R.mouth && m <= 2) return finish(mul(lip, m === 2 ? 0.8 : 0.62), t, 0.02);                  // the line between the lips
-                    if (j === R.mouth - 1 && m <= 1) c = mix(skin, lip, 0.5);                                             // upper lip
-                    if (j === R.mouth + 1 && m <= 1) c = mix(skin, lip, 0.7);                                             // lower lip, fuller
-                    if (j === R.mouth + 2 && m <= 1) c = mul(skin, 0.9);                                                  // the hollow under it
-                    if (m >= 5 && m <= 8 && j > R.nose - 2 && j < R.mouth) c = mix(c, hex(0xd9776c), 0.14);               // colour in the cheeks
+                    const m = col(t), j = t.j - R.eye;
+                    if (inEye(t)) return finish(j === 0 ? hex(0xd9d5cf) : hex(0xf8f5f0), t, 0);       // the white, in the shade of the lid at the top
+                    // The upper lid: a dark line over the eye, ending in a flick at the outer corner.
+                    if (j === -1 && m >= E0 && m <= E1) return finish(mul(skin, 0.3), t, 0.02);
+                    if (j === 0 && m === E1) return finish(mul(skin, 0.36), t, 0.02);
+                    if (j === 0 && m === E0) c = mul(skin, 0.8);
+                    if (j === E.h - 1 && (m === E0 || m === E1)) c = mul(skin, 0.88);                 // the lower corners, rounded off
+                    if (j === E.h && m > E0 && m < E1) c = mul(skin, 0.93);                           // the lower lid
+                    // The brow: a stroke over the eye, lifting toward the middle of it.
+                    if (t.j === R.brow && m >= E0 - 1 && m <= E1) return finish(m === E0 - 1 || m === E1 ? mix(skin, browC, 0.55) : browC, t, 0.03);
+                    if (t.j === R.brow - 1 && m >= E0 + 1 && m <= E1 - 2) return finish(mix(skin, browC, 0.6), t, 0.03);
+                    if (m <= 1 && t.j === R.nose + 1) c = mul(skin, 0.87);                           // under the nose
+                    // The mouth: a short line, turned up at its ends, and a little lip under it.
+                    if (t.j === R.mouth && m <= 2) return finish(mul(lip, m === 2 ? 0.75 : 0.6), t, 0.02);
+                    if (t.j === R.mouth - 1 && m === 3) return finish(mul(lip, 0.8), t, 0.02);
+                    if (t.j === R.mouth + 1 && m <= 1) c = mix(skin, lip, 0.5);
+                    if (t.j === R.mouth + 2 && m <= 1) c = mul(skin, 0.93);
+                    // Colour in the cheeks.
+                    const cheek = Math.hypot((m - (E1 + 1)) / 3.2, (t.j - (R.eye + E.h + 1.5)) / 2.2);
+                    if (cheek < 1) c = mix(c, hex(0xe0786c), 0.22 * (1 - cheek * cheek));
                 }
-                if (p[1] < 24.95) c = mix(c, shade, 0.5);                                           // the jaw turns under
+                if (p[1] < 24.9) c = mix(c, shade, 0.5);                                            // the jaw turns under
                 return finish(c, t, 0.03);
             }
             case 'nose':
-                if (t.kind === 'cap') return finish(Math.abs(Math.abs(p[0]) - 0.15) < 0.09 ? mul(skin, 0.45) : shade, t, 0.02);   // nostrils
-                return finish(mul(skin, 1.03 - 0.12 * step(0.5, 0.95, Math.abs(t.n[0]))), t, 0.02);
-            case 'ear':  return finish(mul(skin, Math.abs(t.n[0]) > 0.5 ? 0.84 + 0.14 * step(0.12, 0.4, Math.hypot(p[1] - 26.3, p[2] + 0.12)) : 0.95), t, 0.02);   // darker in its hollow
+                if (t.kind === 'cap') return finish(shade, t, 0.02);
+                return finish(mul(skin, 1.04 - 0.14 * step(0.5, 0.95, Math.abs(t.n[0]))), t, 0.02);
+            case 'ear':  return finish(mul(skin, Math.abs(t.n[0]) > 0.5 ? 0.84 + 0.14 * step(0.12, 0.4, Math.hypot(p[1] - 26.22, p[2] + 0.2)) : 0.95), t, 0.02);   // darker in its hollow
             case 'neck': return finish(mix(skin, shade, step(24.2, 24.7, p[1]) * 0.8), t, 0.03);
-            case 'lid':  return finish(t.j === t.h - 1 ? mul(skin, 0.45) : mul(skin, 0.93), t, 0.02);   // lashes along the edge of the lid
+            case 'lid':  return finish(t.j === t.h - 1 ? mul(skin, 0.3) : mul(skin, 0.95), t, 0.02);   // lashes along the edge of the lid
             case 'arm': {
                 let c = skin;
                 if (Math.abs(p[1] - 18.5) < 0.3 && t.n[2] < -0.5) c = mul(skin, 0.92);                    // the point of the elbow
                 if (p[1] < 13.15 && p[1] > 12.9) c = mul(skin, 0.94);                                     // the knuckles
                 return finish(c, t, 0.035);
             }
-            case 'finger': return finish(t.kind === 'cap' ? mix(skin, hex(0xf2d9cf), 0.45) : mul(skin, 0.97), t, 0.03);   // paler at the tip: the nail
+            case 'finger': {
+                if (t.kind === 'cap') return finish(mix(skin, hex(0xf2d9cf), 0.4), t, 0.03);             // paler at the tips: the nails
+                // The lines between the four fingers, on the back of the hand and the palm.
+                const u = (p[2] - 0.44) / 0.62;
+                const line = MITTENS.has(t.shape) && Math.abs(t.n[0]) > 0.5 && p[1] < 12.9 && Math.min(Math.abs(u), Math.abs(Math.abs(u) - 0.52)) < 0.09;
+                return finish(mul(skin, line ? 0.8 : 0.97), t, 0.03);
+            }
             case 'leg': return finish(Math.abs(p[1] - 8.4) < 0.4 && t.n[2] > 0.5 ? mul(skin, 0.93) : skin, t, 0.035);
             case 'shoe': case 'torso': return finish(skin, t, 0.035);
         }
         return null;   // skirts are the outfits', hair and hats the hair layers'
-    }))));
+    })))));
 
-    // Eyes: the iris, darker under the lid, lighter below.
+    // Eyes: a big iris, darker under the lid and lighter below, a pupil, and a
+    // dot of light on the same side of both.
     [hex(0x6a4424), hex(0x3d78c2), hex(0x3f8f4f)].forEach((iris, n) => made.push(paint(M, `quiddle_eyes_${n + 1}`, (t) => {
-        if (!inEye(t) || col(t) < 3 || col(t) > 4) return null;
-        // Dark under the lid, a pupil toward the nose, the colour clearest below it.
-        return [...mul(iris, t.j === R.eye ? 0.45 : t.j === R.eye + 1 && col(t) === 3 ? 0.3 : 1.05), 255];
+        if (!inEye(t)) return null;
+        const m = col(t), j = t.j - R.eye;
+        if (m <= E0 || m >= E1) return null;                                                      // the white either side
+        if (j === E.h - 1 && (m === E0 + 1 || m === E1 - 1)) return null;                          // round underneath
+        const right = t.i >= t.w / 2;
+        if (j === 1 && m === (right ? E0 + 3 : E0 + 2)) return [...hex(0xffffff), 255];           // the light in it
+        const pupil = m >= E0 + 2 && m <= E1 - 2 && j >= 1 && j <= E.h - 3;
+        const k = pupil ? 0.16 : j === 0 ? 0.5 : j >= E.h - 2 ? 1.22 : 0.95;
+        return [...mul(iris, k), 255];
     })));
 
     // Outfits. Heights, in px: shoulder 22.6, elbow 18.5, waist 17.6, wrist 14.6,
@@ -800,7 +848,7 @@ function pixelEye(model, tag, mark, rows) {
             return null;
         },
     ];
-    OUTFITS.forEach((fn, n) => made.push(paint(M, `quiddle_outfit_${n + 1}`, fn)));
+    OUTFITS.forEach((fn, n) => made.push(paint(M, `quiddle_outfit_${n + 1}`, body(fn))));
 
     // Hair and hats. The hair is a shape of its own over the skull; the texture
     // cuts its edge. `round` is how far round the head a texel is from the

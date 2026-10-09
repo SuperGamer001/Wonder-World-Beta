@@ -26,10 +26,11 @@
  *      of the same blockID (greedy merge in v first, then u).
  *   3. Emit one quad per rectangle.
  *
- * Performance notes — this is the hottest code in the engine, roughly
- * 2.3M voxel reads per full chunk mesh:
- *   • Voxel reads are inlined per-sweep rather than routed through a method
- *     with bounds checks and a template-literal neighbour key.
+ * Performance notes — this is the hottest code in the engine:
+ *   • The cells that can have a face are found sixteen at a time from two
+ *     words a row (_buildRows); only those are read, with the block they
+ *     face. (Reading every voxel and its neighbour for each of the six
+ *     directions was roughly 2.3M reads per full chunk mesh.)
  *   • Solidity is a prebuilt Uint8Array lookup instead of a registry call.
  *   • Output goes straight into growable typed arrays; no JS array boxing and
  *     no final Array→Float32Array copy.
@@ -43,6 +44,12 @@
  * Blocks with a model (torches, lanterns — BlockRegistry `model`) are not
  * greedy-meshed: they are skipped here and drawn by BlockModels.js, and they
  * never hide a neighbour's face.
+ *
+ * The opaque mesh's triangles are put in order of section — sixteen levels of
+ * the column each — so that the sections the camera cannot see (most of a
+ * chunk's triangles are cave walls) are left out of the draw as one range of
+ * indices: engine/Visibility.js. A face belongs to the section of the cell in
+ * front of it, the one it is seen from, and no quad spans two sections.
  *
  * A textured face has no colour of its own, so its three colour bytes carry
  * something else (engine/MeshFormat.js): which neighbouring ground spreads
@@ -64,6 +71,7 @@
 import { CHUNK_SIZE, CHUNK_SIZE_Y } from '../engine/ChunkData.js';
 import { emitModel, isModel } from './BlockModels.js';
 import { packTints, packUVs, packIndices } from '../engine/MeshFormat.js';
+import { SECTIONS, SECTION_SHIFT, SECTION_SIZE } from '../engine/Visibility.js';
 
 const N_XZ = CHUNK_SIZE;
 const N_Y  = CHUNK_SIZE_Y;
@@ -160,17 +168,39 @@ class U32Buf {
         const a = this.a;
         a[this.n++] = a0; a[this.n++] = b0; a[this.n++] = c0;
     }
+    push2(a0, b0) {
+        this._fit(2);
+        const a = this.a;
+        a[this.n++] = a0; a[this.n++] = b0;
+    }
     trim() { return this.a.slice(0, this.n); }
 }
 
-/** One mesh's worth of output buffers. */
+/**
+ * One mesh's worth of output buffers. `sec` notes which section the indices
+ * belong to, as runs — (first index, section) each time it changes
+ * (markSection) — for _sortSections.
+ */
 function _newSink() {
-    return { pos: new F32Buf(), col: new F32Buf(), uv: new F32Buf(), lay: new F32Buf(), nrm: new I8Buf(), idx: new U32Buf() };
+    return { pos: new F32Buf(), col: new F32Buf(), uv: new F32Buf(), lay: new F32Buf(), nrm: new I8Buf(), idx: new U32Buf(),
+             sec: new U32Buf(256), secCur: -1 };
 }
 
 function _resetSink(s) {
     s.pos.n = 0; s.col.n = 0; s.uv.n = 0; s.lay.n = 0; s.nrm.n = 0; s.idx.n = 0;
+    s.sec.n = 0; s.secCur = -1;
     return s;
+}
+
+/**
+ * The triangles `sink` is given from here on belong to `section` (a local Y
+ * >> SECTION_SHIFT): the section of the open cell they are seen from. Called
+ * by everything that writes to the opaque sink, before it writes.
+ */
+export function markSection(sink, section) {
+    if (sink.secCur === section) return;
+    sink.secCur = section;
+    sink.sec.push2(sink.idx.n, section);
 }
 
 // The arrays that leave the worker, packed as engine/MeshFormat.js describes.
@@ -231,6 +261,24 @@ export class GreedyMesher {
         // vertex, and which way it faces (_orderTranslucent).
         this._tq     = new U32Buf(256);
         this._nb     = new Uint16Array(8);
+        // Which cells of each row of sixteen along x can have a face, and
+        // which hide one drawn against them (_buildRows), and the same for the
+        // cells of the four neighbouring chunks that touch this one.
+        this._rowSrc = new Uint16Array(N_Y * N_XZ);
+        this._rowOcc = new Uint16Array(N_Y * N_XZ);
+        this._rowClosed = new Uint16Array(N_Y * N_XZ);     // closedRows()
+        this._edgePX = new Uint8Array(N_Y * N_XZ);
+        this._edgeNX = new Uint8Array(N_Y * N_XZ);
+        this._edgePZ = new Uint16Array(N_Y);
+        this._edgeNZ = new Uint16Array(N_Y);
+        // The cells of one slice that are looked at (_sweepFace): voxel index, u, v.
+        this._cSrc = new Int32Array(maxSlice);
+        this._cU   = new Uint16Array(maxSlice);
+        this._cV   = new Uint16Array(maxSlice);
+        // _sortSections: the indices in their new order (swapped with the
+        // opaque sink's each job), and where each section's go.
+        this._idxSorted = new U32Buf();
+        this._secFill   = new Uint32Array(SECTIONS);
     }
 
     /**
@@ -360,13 +408,23 @@ export class GreedyMesher {
         };
 
         if (yMax >= yMin) {
+            // The masks are all zero between slices (a merge clears what it
+            // takes); this is for a job that stopped half way.
+            this._mask.fill(0);
+            this._maskT.fill(0);
+            this._buildRows(voxels, nbr, yMin, yMax, smooth ? smooth.occ : this._solid, smooth ? smooth.partial : null);
             for (const i of faceDefIndices) {
                 this._sweepFace(FACE_DEFS[i], voxels, nbr, opaque, transp, yMin, yMax, smooth);
             }
+        } else {
+            // Nothing in the chunk: no rows either (closedRows).
+            this._rowSrc.fill(0);
+            this._rowOcc.fill(0);
         }
 
         smooth?.emit?.(opaque);
         if (models && yMax >= yMin) this._emitModels(voxels, yMin, yMax, opaque);
+        const sections = this._sortSections(opaque);
         this._orderTranslucent(transp);
 
         const o = _sinkArrays(opaque);
@@ -385,7 +443,63 @@ export class GreedyMesher {
             // Tight local-space Y bounds, so the render layer can set a bounding
             // sphere without Three.js scanning every position on the main thread.
             yMin, yMax,
+            // Where each section's triangles are in `indices`: section s is
+            // indices sections[s] … sections[s + 1] (engine/Visibility.js).
+            sections,
         };
+    }
+
+    /**
+     * Put the opaque mesh's triangles in order of section, lowest first, from
+     * the runs markSection noted. Returns Uint32Array(SECTIONS + 1): where
+     * each section's indices begin, and where the last ends.
+     */
+    _sortSections(sink) {
+        const offsets = new Uint32Array(SECTIONS + 1);
+        const total = sink.idx.n, runs = sink.sec.a, nr = sink.sec.n;
+        const fill = this._secFill;
+        fill.fill(0);
+        // Anything written before the first mark would be section 0's; every
+        // writer marks first, so there is nothing.
+        const first = nr > 0 ? runs[0] : total;
+        fill[0] = first;
+        for (let r = 0; r < nr; r += 2) {
+            const end = r + 2 < nr ? runs[r + 2] : total;
+            fill[runs[r + 1]] += end - runs[r];
+        }
+        let at = 0;
+        for (let k = 0; k < SECTIONS; k++) { offsets[k] = at; at += fill[k]; fill[k] = offsets[k]; }
+        offsets[SECTIONS] = at;
+        if (total === 0) return offsets;
+
+        const sorted = this._idxSorted;
+        sorted.n = 0;
+        const out = sorted.reserve(total), src = sink.idx.a;
+        for (let i = 0; i < first; i++) out[fill[0]++] = src[i];
+        for (let r = 0; r < nr; r += 2) {
+            const end = r + 2 < nr ? runs[r + 2] : total, sec = runs[r + 1];
+            let o = fill[sec];
+            for (let i = runs[r]; i < end; i++) out[o++] = src[i];
+            fill[sec] = o;
+        }
+        sorted.n = total;
+        // The sink takes the sorted buffer; its old one is next job's scratch.
+        this._idxSorted = sink.idx;
+        sink.idx = sorted;
+        return offsets;
+    }
+
+    /**
+     * For the chunk meshGroup was last given: a word for each row of sixteen
+     * cells along x (rows numbered y · 16 + z), with a bit for each cell that
+     * is a full opaque cube — what sight cannot pass through. For
+     * engine/Visibility.js (connectivityOfRows), which then has no voxel to
+     * read. In a smooth world a Mesh voxel cut to a shape is not one.
+     */
+    closedRows() {
+        const src = this._rowSrc, occ = this._rowOcc, out = this._rowClosed;
+        for (let i = 0; i < out.length; i++) out[i] = src[i] & occ[i];
+        return out;
     }
 
     /** Full mesh — all 6 face directions. */
@@ -409,6 +523,7 @@ export class GreedyMesher {
                 for (let lx = 0; lx < N_XZ; lx++) {
                     const id = voxels[row + lx];
                     if (model[id] !== 1) continue;
+                    markSection(sink, ly >> SECTION_SHIFT);   // a model is inside its own cell
                     const cb = id * 18 + 2 * 3;   // the top face's colour
                     tables.layer = this._layerTop[id];
                     tables.color[0] = this._colors[cb];
@@ -505,14 +620,83 @@ export class GreedyMesher {
     // ── Internal helpers ────────────────────────────────────────────────────────
 
     /**
+     * For each row of sixteen cells along x in the band, two words with a bit
+     * a cell:
+     *   _rowSrc — it can have a face: not air, and not a Mesh voxel the smooth
+     *             pass draws (`skip`);
+     *   _rowOcc — it hides a face drawn against it (`occ`).
+     * Rows are numbered y · 16 + z, so the row beside one is ± 1 and the one
+     * above or below ± 16. The cells of the neighbouring chunks that touch
+     * this one are noted the same way: a bit a row for the two across x
+     * (_edgePX / _edgeNX), a word a level for the two across z.
+     *
+     * With these a sweep finds the cells that can have a face in its direction
+     * sixteen at a time — `src & ~occ` of the row it faces — instead of
+     * reading every voxel and its neighbour for each of the six directions,
+     * which was half of meshing a blocky chunk: nearly all of a chunk is air
+     * or buried rock, and has none.
+     */
+    _buildRows(voxels, nbr, yMin, yMax, occ, skip) {
+        const rowSrc = this._rowSrc, rowOcc = this._rowOcc;
+        rowSrc.fill(0);
+        rowOcc.fill(0);
+        for (let lz = 0; lz < N_XZ; lz++) {
+            for (let ly = yMin; ly <= yMax; ly++) {
+                let i = ly * SY + lz * SZ, src = 0, oc = 0;
+                for (let x = 0; x < N_XZ; x++, i++) {
+                    const id = voxels[i];
+                    if (id === 0) continue;
+                    if (skip === null || skip[i] === 0) src |= 1 << x;
+                    if (occ[id] === 1) oc |= 1 << x;
+                }
+                const r = ly * N_XZ + lz;
+                rowSrc[r] = src;
+                rowOcc[r] = oc;
+            }
+        }
+        const px = nbr.px, nx = nbr.nx, pz = nbr.pz, nz = nbr.nz;
+        if (px !== null || nx !== null) {
+            const ePX = this._edgePX, eNX = this._edgeNX;
+            for (let lz = 0; lz < N_XZ; lz++) {
+                for (let ly = yMin; ly <= yMax; ly++) {
+                    const i = ly * SY + lz * SZ, r = ly * N_XZ + lz;
+                    if (px !== null) ePX[r] = occ[px[i]];                    // its x = 0
+                    if (nx !== null) eNX[r] = occ[nx[i + N_XZ - 1]];         // its x = 15
+                }
+            }
+        }
+        if (pz !== null || nz !== null) {
+            const ePZ = this._edgePZ, eNZ = this._edgeNZ, last = (N_XZ - 1) * SZ;
+            for (let ly = yMin; ly <= yMax; ly++) {
+                const i = ly * SY;
+                let a = 0, b = 0;
+                for (let x = 0; x < N_XZ; x++) {
+                    if (pz !== null && occ[pz[i + x]] === 1) a |= 1 << x;          // its z = 0
+                    if (nz !== null && occ[nz[i + x + last]] === 1) b |= 1 << x;   // its z = 15
+                }
+                ePZ[ly] = a;
+                eNZ[ly] = b;
+            }
+        }
+    }
+
+    /**
      * Build the visibility masks for every slice of one face direction and
      * merge each into quads.
      *
-     * Voxels are addressed by flat index with per-axis strides rather than
-     * through coordinate arrays. Within a slice every voxel's neighbour in the
-     * face direction lives in the same array at the same index offset — this
-     * chunk for interior slices, one neighbour chunk for the boundary slice —
-     * so that is resolved once per slice and the inner loop is a plain read.
+     * A slice is done in two steps. First the cells that can have a face this
+     * way are picked out from the row words (_buildRows): a cell that is
+     * something, facing a cell that does not hide it. Then only those are
+     * looked at — the block, the block it faces, and which mask the face goes
+     * in. Within a slice every voxel's neighbour in the face direction lives
+     * in the same array at the same index offset — this chunk for interior
+     * slices, one neighbour chunk for the boundary slice — so that is resolved
+     * once per slice.
+     *
+     * The masks are not cleared and not filled: a merge zeroes every cell it
+     * takes, and takes every cell that was set, so they are all zero again
+     * when the next slice begins. The merge is given the box of cells that
+     * were set, not the whole slice.
      */
     _sweepFace(fd, voxels, nbr, opaque, transp, yMin, yMax, smooth) {
         const { faceAxis, uAxis, vAxis, positive, ni } = fd;
@@ -522,7 +706,6 @@ export class GreedyMesher {
         const blendT = this._blend;
         // Blocky worlds: the adjacent test uses the same table as the source test.
         const occ   = smooth ? smooth.occ     : solid;
-        const skip  = smooth ? smooth.partial : null;
 
         const nFace = DIM[faceAxis];
         const nU    = DIM[uAxis];
@@ -531,29 +714,19 @@ export class GreedyMesher {
         // Restrict the swept range to the band that can contain blocks.
         const faceLo = faceAxis === 1 ? Math.max(0, yMin - 1)       : 0;
         const faceHi = faceAxis === 1 ? Math.min(nFace - 1, yMax + 1) : nFace - 1;
-        const uLo    = uAxis === 1 ? yMin : 0;
-        const uHi    = uAxis === 1 ? yMax : nU - 1;
-        const vLo    = vAxis === 1 ? yMin : 0;
-        const vHi    = vAxis === 1 ? yMax : nV - 1;
 
-        const sF = STRIDE[faceAxis], sU = STRIDE[uAxis], sV = STRIDE[vAxis];
+        const sF = STRIDE[faceAxis];
         const dir = positive ? 1 : -1;
 
-        // Fill in memory order: whichever of u / v has the smaller voxel stride
-        // runs innermost. The masks are indexed u·nV + v either way.
-        const vInner = sV < sU;
-        const oLo = vInner ? uLo : vLo, oHi = vInner ? uHi : vHi;
-        const iLo = vInner ? vLo : uLo, iHi = vInner ? vHi : uHi;
-        const oS  = vInner ? sU : sV,   iS  = vInner ? sV : sU;
-        const oC  = vInner ? nV : 1,    iC  = vInner ? 1  : nV;
-
         const mask = this._mask, maskT = this._maskT;
+        const rowSrc = this._rowSrc, rowOcc = this._rowOcc;
+        const cSrc = this._cSrc, cU = this._cU, cV = this._cV;
 
         for (let f = faceLo; f <= faceHi; f++) {
             // Which array holds this slice's neighbours, and the index shift from
             // a source voxel to its neighbour in that array.
             const a = f + dir;
-            let adj = voxels, shift = dir * sF;
+            let adj = voxels, shift = dir * sF, inside = true;
             if (a < 0 || a >= nFace) {
                 // Above or below the world, or toward an unloaded chunk, the
                 // neighbour is SOLID_SENTINEL: it hides every opaque face and is
@@ -564,48 +737,94 @@ export class GreedyMesher {
                 if (adj === null) continue;
                 // Same position on the far side of the neighbouring chunk.
                 shift = (a < 0 ? nFace - 1 : 1 - nFace) * sF;
+                inside = false;
             }
 
-            // Every cell in range is written, so the masks need no clearing.
-            let anyO = 0, anyT = 0;
-            const base = f * sF;
-            for (let o = oLo; o <= oHi; o++) {
-                let src  = base + o * oS + iLo * iS;
-                let cell = o * oC + iLo * iC;
-                for (let i = iLo; i <= iHi; i++, src += iS, cell += iC) {
-                    const id = voxels[src];
-                    let m = 0, mt = 0;
-                    // Air emits no face in either pass; a deformed Mesh voxel is
-                    // drawn by the smooth pass instead.
-                    if (id !== 0 && (skip === null || skip[src] === 0)) {
-                        const adjId = adj[src + shift];
-                        if (solid[id] === 1) {
-                            if (occ[adjId] !== 1) m = id;
-                        } else if (cutout[id] === 1) {
-                            // Leaves, glass: against anything that does not hide
-                            // them, but not against more of themselves.
-                            if (adjId !== id && occ[adjId] !== 1) m = id;
-                        } else if (glassy[id] === 1 && (airLike[adjId] === 1 || cutout[adjId] === 1)) {
-                            // Water, ice: against air (or a torch), and against
-                            // a cutout block, which shows what is behind it.
-                            // Model blocks are neither: they draw themselves
-                            // (_emitModels).
-                            mt = id;
-                        }
+            // The cells that can have a face: something there (and not the
+            // smooth pass's), and what it faces does not hide it. Each with
+            // its place in the mask, u · nV + v.
+            let n = 0;
+            if (faceAxis === 0) {
+                // ±X: the slice is x = f; u is y and v is z, so a row is a cell.
+                const edge = positive ? this._edgePX : this._edgeNX;
+                for (let y = yMin; y <= yMax; y++) {
+                    const r0 = y * N_XZ;
+                    for (let z = 0; z < N_XZ; z++) {
+                        const r = r0 + z;
+                        if (((rowSrc[r] >> f) & 1) === 0) continue;
+                        if (inside ? ((rowOcc[r] >> a) & 1) === 1 : edge[r] === 1) continue;
+                        cSrc[n] = f + y * SY + z * SZ; cU[n] = y; cV[n] = z;
+                        n++;
                     }
-                    mask[cell]  = m;
-                    maskT[cell] = mt;
-                    anyO |= m;
-                    anyT |= mt;
                 }
+            } else if (faceAxis === 1) {
+                // ±Y: the slice is y = f; u is z and v is x. The row above or below.
+                const r0 = f * N_XZ, ra = a * N_XZ;
+                for (let z = 0; z < N_XZ; z++) {
+                    let w = rowSrc[r0 + z] & ~rowOcc[ra + z];
+                    while (w !== 0) {
+                        const x = 31 - Math.clz32(w & -w);
+                        w &= w - 1;
+                        cSrc[n] = x + f * SY + z * SZ; cU[n] = z; cV[n] = x;
+                        n++;
+                    }
+                }
+            } else {
+                // ±Z: the slice is z = f; u is x and v is y. The row beside.
+                const edge = positive ? this._edgePZ : this._edgeNZ;
+                for (let y = yMin; y <= yMax; y++) {
+                    let w = rowSrc[y * N_XZ + f];
+                    if (w === 0) continue;
+                    w &= ~(inside ? rowOcc[y * N_XZ + a] : edge[y]);
+                    while (w !== 0) {
+                        const x = 31 - Math.clz32(w & -w);
+                        w &= w - 1;
+                        cSrc[n] = x + y * SY + f * SZ; cU[n] = x; cV[n] = y;
+                        n++;
+                    }
+                }
+            }
+            if (n === 0) continue;
+
+            // Which of them do have one, and in which mesh. The box of cells
+            // set in each mask is what its merge has to look at.
+            let anyO = false, anyT = false;
+            let u0 = nU, u1 = -1, v0 = nV, v1 = -1;         // opaque
+            let tu0 = nU, tu1 = -1, tv0 = nV, tv1 = -1;     // translucent
+            for (let k = 0; k < n; k++) {
+                const src = cSrc[k], id = voxels[src], adjId = adj[src + shift];
+                if (solid[id] === 1) {
+                    if (occ[adjId] === 1) continue;
+                } else if (cutout[id] === 1) {
+                    // Leaves, glass: against anything that does not hide
+                    // them, but not against more of themselves.
+                    if (adjId === id || occ[adjId] === 1) continue;
+                } else {
+                    // Water, ice: against air (or a torch), and against a
+                    // cutout block, which shows what is behind it. Model
+                    // blocks are neither: they draw themselves (_emitModels).
+                    if (glassy[id] === 1 && (airLike[adjId] === 1 || cutout[adjId] === 1)) {
+                        const u = cU[k], v = cV[k];
+                        maskT[u * nV + v] = id;
+                        anyT = true;
+                        if (u < tu0) tu0 = u; if (u > tu1) tu1 = u;
+                        if (v < tv0) tv0 = v; if (v > tv1) tv1 = v;
+                    }
+                    continue;
+                }
+                const u = cU[k], v = cV[k];
+                mask[u * nV + v] = id;
+                anyO = true;
+                if (u < u0) u0 = u; if (u > u1) u1 = u;
+                if (v < v0) v0 = v; if (v > v1) v1 = v;
             }
 
             // Most slices have no transparent faces at all, many no opaque ones.
-            if (anyO !== 0) {
+            if (anyO) {
                 if (blendRead !== null) {
                     // +Y: u is z and v is x. The code goes in the mask's high half.
-                    for (let u = uLo; u <= uHi; u++) {
-                        for (let v = vLo; v <= vHi; v++) {
+                    for (let u = u0; u <= u1; u++) {
+                        for (let v = v0; v <= v1; v++) {
                             const cell = u * nV + v, id = mask[cell];
                             if (id === 0 || blendT[id] === 0) continue;
                             const code = this.blendCode(blendRead, v, f, u, id);
@@ -613,9 +832,11 @@ export class GreedyMesher {
                         }
                     }
                 }
-                this._greedyMerge(mask, f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, opaque, false);
+                // A top or bottom face is seen from the level it faces.
+                if (faceAxis === 1) markSection(opaque, a >> SECTION_SHIFT);
+                this._greedyMerge(mask, f, faceAxis, uAxis, vAxis, nV, u0, u1, v0, v1, positive, ni, opaque, false);
             }
-            if (anyT !== 0) this._greedyMerge(maskT, f, faceAxis, uAxis, vAxis, nV, uLo, uHi, vLo, vHi, positive, ni, transp, true);
+            if (anyT) this._greedyMerge(maskT, f, faceAxis, uAxis, vAxis, nV, tu0, tu1, tv0, tv1, positive, ni, transp, true);
         }
     }
 
@@ -632,20 +853,29 @@ export class GreedyMesher {
 
         const posArr = sink.pos, colArr = sink.col, uvArr = sink.uv, layArr = sink.lay, nrmArr = sink.nrm, idxArr = sink.idx;
 
+        // An opaque side face belongs to the section it is in, and no quad may
+        // span two: a rectangle stops growing at the top of its section. Which
+        // of u and v is the vertical depends on the face (tops and bottoms have
+        // neither, and are marked a slice at a time by _sweepFace).
+        const splitU = !translucent && uAxis === 1, splitV = !translucent && vAxis === 1;
+        const LAST = SECTION_SIZE - 1;
+
         for (let u = uLo; u <= uHi; u++) {
             const rowBase = u * nV;
+            const uEnd = splitU ? Math.min(uHi, u | LAST) : uHi;
             for (let v = vLo; v <= vHi; v++) {
                 const cell = rowBase + v;
                 const startV = mask[cell];
                 if (startV === 0) continue;
 
                 // Grow rectangle: expand v first, then u
+                const vEnd = splitV ? Math.min(vHi, v | LAST) : vHi;
                 let vW = 1;
-                while (v + vW <= vHi && mask[cell + vW] === startV) vW++;
+                while (v + vW <= vEnd && mask[cell + vW] === startV) vW++;
 
                 let uW = 1;
                 expand_u:
-                while (u + uW <= uHi) {
+                while (u + uW <= uEnd) {
                     const probe = (u + uW) * nV + v;
                     for (let k = 0; k < vW; k++) {
                         if (mask[probe + k] !== startV) break expand_u;
@@ -723,6 +953,8 @@ export class GreedyMesher {
                 uvArr.n = n + 8;
 
                 if (!translucent) {
+                    if (splitU) markSection(sink, u >> SECTION_SHIFT);
+                    else if (splitV) markSection(sink, v >> SECTION_SHIFT);
                     if (positive) {
                         idxArr.push6(base, base + 1, base + 2, base, base + 2, base + 3);
                     } else {

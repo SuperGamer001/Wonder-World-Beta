@@ -6,6 +6,12 @@ const gamePacks = ["-**DEFAULT**-"];
 // Served by the game server, so use whatever origin this page came from — the
 // server binds an OS-assigned port rather than a fixed 3000. The literal is a
 // fallback for loading the page straight off disk in development.
+// Which screen of a split screen this page is — 0 the first, or the only one —
+// and what it was opened with (index.js makes the others: `?pane=1&pad=…&world=…`;
+// src/players.js is the rest of it).
+const PARAMS = new URLSearchParams(location.search);
+const PANE   = Math.max(0, parseInt(PARAMS.get('pane') ?? '0') || 0);
+
 const SERVER_URL = (location.origin && location.origin !== 'null')
     ? location.origin
     : 'http://127.0.0.1:3000';
@@ -88,7 +94,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     applyPlayerSettings(getSettings());   // apply accessibility/HUD prefs from the start
 
     DOM.appLoadingContainer.classList.add("hidden");
-    DOM.titleScreen.classList.remove("hidden");
+    // Who is playing, and where they go: the title screen, or — a further
+    // player of a split screen, a guest from the network — straight into the
+    // world (players.js).
+    await enterGame();
 });
 
 /* =========================================================
@@ -176,7 +185,9 @@ function cacheDOM() {
 }
 
 function bindEvents() {
-    DOM.startButton.addEventListener("click", showWorldList);
+    DOM.startButton.addEventListener("click", goToWorlds);
+    document.getElementById('titleCreditsBtn')?.addEventListener('click', () => document.getElementById('CreditsScreen')?.classList.remove('hidden'));
+    document.getElementById('creditsBackBtn')?.addEventListener('click', () => document.getElementById('CreditsScreen')?.classList.add('hidden'));
     DOM.createWorldBtn.addEventListener("click", showCreateWorldModal);
 
     // Click the game to re-acquire the pointer if we're playing but somehow
@@ -187,11 +198,7 @@ function bindEvents() {
             lockPointer(DOM.gameScreen);
         }
     });
-    DOM.worldListBackBtn.addEventListener("click", () => {
-        DOM.worldListScreen.classList.add("hidden");
-        DOM.titleScreen.classList.remove("hidden");
-        DOM.titleLogo?.classList.remove("hidden");
-    });
+    DOM.worldListBackBtn.addEventListener("click", backToTitle);
 
     DOM.worldDetailCloseBtn.addEventListener("click", () => DOM.worldDetailModal.classList.add("hidden"));
     DOM.worldPlayBtn.addEventListener("click", () => {
@@ -235,6 +242,17 @@ function bindEvents() {
     DOM.pauseSettingsBtn?.addEventListener("click", () => openSettings('pause'));
     DOM.settingsBackBtn.addEventListener("click", closeSettings);
 
+    document.getElementById('titleCharacterBtn')?.addEventListener('click', () => openCharacter('title'));
+    document.getElementById('pauseCharacterBtn')?.addEventListener('click', () => openCharacter('pause'));
+    document.getElementById('characterDoneBtn')?.addEventListener('click', closeCharacter);
+    document.getElementById('characterRandomBtn')?.addEventListener('click', () => {
+        _showCharacter(window.__wwCharacter?.random() ?? {});
+        commitCharacter();
+    });
+    for (const sel of document.querySelectorAll('.charLook')) sel.addEventListener('change', commitCharacter);
+    // Drag across the figure to turn it.
+    const stage = document.getElementById('characterCanvas');
+    stage?.addEventListener('mousemove', (e) => { if (e.buttons & 1) window.__wwCharacter?.turn(e.movementX * 0.012); });
     document.getElementById('titleHowToBtn')?.addEventListener('click', () => openHowToPlay('title'));
     document.getElementById('pauseHowToBtn')?.addEventListener('click', () => openHowToPlay('pause'));
     document.getElementById('howToBackBtn')?.addEventListener('click', closeHowToPlay);
@@ -250,7 +268,7 @@ function bindEvents() {
     const settingIds = [
         'settingSensitivity', 'settingInvertY', 'settingFov', 'settingRenderDist',
         'settingGraphics', ...Object.values(GRAPHICS_CONTROLS).map(c => c.id),
-        'settingBrightness', 'settingWeatherVolume', 'settingShowCoords', 'settingCrosshair', 'settingShowFps',
+        'settingBrightness', ...AUDIO_SLIDERS.map(([id]) => id), 'settingShowCoords', 'settingCrosshair', 'settingShowFps',
         'settingColorblind', 'settingHighContrast', 'settingReduceMotion', 'settingLargeText',
     ];
     for (const id of settingIds) {
@@ -265,8 +283,9 @@ function bindEvents() {
     // and again when a background download finishes.
     fetchUpdateStatus();
     setInterval(() => {
-        // Skip while actively playing — the banner is menu-only anyway.
-        if (gameStarted && !paused && !_menuOpen) return;
+        // Skip while actively playing — the banner is menu-only anyway — and in
+        // someone else's game, which has no updates of its own to offer.
+        if ((gameStarted && !paused && !_menuOpen) || isGuest()) return;
         fetchUpdateStatus();
     }, UPDATE_POLL_MS);
 
@@ -367,7 +386,8 @@ document.addEventListener('pointerlockchange', () => {
  * in an active document.
  */
 function lockPointer(el) {
-    if (!el || document.pointerLockElement === el) return;
+    // A further pane of a split screen is its controller's: the mouse is the first player's.
+    if (!el || PANE > 0 || document.pointerLockElement === el) return;
 
     // requestPointerLock may either throw synchronously or return a rejecting
     // promise depending on the browser and the failure, so both have to be
@@ -666,7 +686,97 @@ const DEFAULT_SETTINGS = {
     graphics: 'classic',    // 'classic' | 'normal' | 'pro' | 'simple' | 'custom'
     graphicsCustom: null,   // one value per GRAPHICS_CONTROLS key
     weatherVolume: 0.8,     // rain, wind and thunder (WeatherAudio.js)
+    skin: null,             // the player's Quiddle (Character screen); null = the default look
+    playerName: '',         // what other players see over it
+    masterVolume: 1,        // everything (Sound.js)
+    musicVolume: 0.6,
+    sfxVolume: 0.9,         // footsteps, blocks, animals
+    ambienceVolume: 0.7,    // birds, crickets, caves, water
 };
+
+// The volume sliders: [control id, setting]. Each shows a percentage.
+const AUDIO_SLIDERS = [
+    ['settingMasterVolume', 'masterVolume'], ['settingMusicVolume', 'musicVolume'], ['settingSfxVolume', 'sfxVolume'],
+    ['settingAmbienceVolume', 'ambienceVolume'], ['settingWeatherVolume', 'weatherVolume'],
+];
+
+// The place behind the menus (src/scripts/MenuScene.js draws it: a model baked
+// from real terrain, with the player's figure in it). `view` is where its
+// camera rests: 'title' behind the title screen, 'worlds' behind the list.
+let _menuWorld = false;       // it is showing, or loading
+let _menuWorldOff = false;    // a test has asked for the plain background (window.__wwMenuWorld(false))
+let _menuTravel = false;      // its camera is on its way between views: the menu is hidden, and waits
+
+function startMenuWorld(view = 'title') {
+    if (gameStarted || _menuWorldOff || isGuest()) return;
+    const scene = window.__wwMenuScene;
+    if (!scene) return;
+    _menuWorld = true;
+    document.body.classList.add('menuWorld');
+    scene.setSkin(getSettings().skin ?? null);
+    scene.show(view).then((ok) => { if (ok && _menuWorld) document.body.classList.add('menuReady'); });
+}
+
+function stopMenuWorld() {
+    if (!_menuWorld) return;
+    _menuWorld = false;
+    document.body.classList.remove('menuWorld', 'menuReady');
+    window.__wwMenuScene?.hide();
+}
+window.__wwMenuWorld = (on) => { _menuWorldOff = !on; if (on) startMenuWorld(); else stopMenuWorld(); };
+
+/**
+ * Play: the menu is put away, the camera goes to another part of the place,
+ * and the list of worlds comes up there. Back does the same the other way.
+ */
+async function goToWorlds() {
+    if (_menuTravel) return;
+    _menuTravel = true;
+    DOM.titleScreen.classList.add("hidden");
+    DOM.titleLogo?.classList.add("hidden");
+    await (window.__wwMenuScene?.goto('worlds') ?? Promise.resolve());
+    _menuTravel = false;
+    if (!gameStarted) showWorldList();
+}
+async function backToTitle() {
+    if (_menuTravel) return;
+    _menuTravel = true;
+    DOM.worldListScreen.classList.add("hidden");
+    await (window.__wwMenuScene?.goto('title') ?? Promise.resolve());
+    _menuTravel = false;
+    if (gameStarted) return;
+    DOM.titleScreen.classList.remove("hidden");
+    DOM.titleLogo?.classList.remove("hidden");
+}
+
+// ── Sharing the screen ───────────────────────────────────────────────────────
+// With two to four games drawn on one machine, each is kept light: a short
+// view, and none of what costs most. How many are playing on this screen is
+// index.js's to know; it tells every pane when it changes.
+let _splitCount = PANE > 0 ? (parseInt(PARAMS.get('of')) || 2) : 1;
+window.__wwSplitCount = (n) => {
+    if (n === _splitCount) return;
+    _splitCount = n;
+    applyPlayerSettings(getSettings());
+};
+/** The graphics a player chose, as far as a shared screen allows them. */
+function limitForSplit(g) {
+    document.getElementById('splitGraphicsNote')?.classList.toggle('hidden', _splitCount < 2);
+    if (_splitCount < 2) return g;
+    const few = _splitCount === 2, order = ['off', 'low', 'medium', 'high'];
+    return {
+        ...g,
+        renderDistance: Math.min(g.renderDistance ?? 8, few ? 6 : 4),
+        farTerrain: 0, shadows: 'off', clouds: 'fast', eyeAdaptation: 'off',
+        particles: order[Math.min(order.indexOf(g.particles ?? 'medium'), few ? 2 : 1)],
+        maxFps: g.maxFps ? Math.min(g.maxFps, 60) : 60,
+    };
+}
+
+// The music of the menus (data/sounds/music/). It starts with the game, gives
+// way to the world's own sounds when one is entered, and is there again on
+// the way out.
+const MENU_MUSIC = 'Adventure Awaits';
 
 // ── Where the settings are kept ──────────────────────────────────────────────
 // With the game server, in user/settings.json (GET / PUT /api/settings), which
@@ -693,6 +803,12 @@ async function loadSettings() {
     } catch { /* no server: localStorage below */ }
     if (saved && Object.keys(saved).length > 0) { _settings = saved; return; }
     _settings = _localSettings() ?? {};
+    // A guest in a game on the network brings their own settings with them
+    // (index.js hands them over in the address): the host's are the host's.
+    try {
+        const me = /[#&]me=([^&]+)/.exec(location.hash);
+        if (me) _settings = { ..._settings, ...JSON.parse(decodeURIComponent(me[1])) };
+    } catch { /* not ours */ }
     // Nothing on the server yet: hand it what this browser had.
     if (saved && Object.keys(_settings).length > 0) _pushSettings();
 }
@@ -700,7 +816,9 @@ async function loadSettings() {
 function _pushSettings() {
     clearTimeout(_settingsPushTimer);
     _settingsPushTimer = null;
-    if (!_settings) return;
+    // The settings on the server are the first player's own. A second pane's
+    // are for as long as it plays, and a guest's are kept by their browser.
+    if (!_settings || isGuest()) return;
     // keepalive: the request outlives the page, so a change made just before
     // the window closes still arrives.
     fetch(`${SERVER_URL}/api/settings`, {
@@ -725,8 +843,8 @@ function getSettings() {
 }
 
 function saveSettings(s) {
-    _settings = { ...s };
-    try { localStorage.setItem('ww_settings', JSON.stringify(_settings)); } catch { /* storage unavailable */ }
+    _settings = { ...s, profiles: _settings?.profiles ?? s.profiles };
+    if (PANE === 0) try { localStorage.setItem('ww_settings', JSON.stringify(_settings)); } catch { /* storage unavailable */ }
     clearTimeout(_settingsPushTimer);
     _settingsPushTimer = setTimeout(_pushSettings, SETTINGS_PUSH_MS);
 }
@@ -754,16 +872,24 @@ function applyPlayerSettings(s) {
     if (fpsEl) fpsEl.classList.toggle('hidden', !s.showFps);
     _fpsEnabled = !!s.showFps;
 
-    _maxFps = resolveGraphics(s).maxFps || 0;
+    const graphics = limitForSplit(resolveGraphics(s));
+    _maxFps = graphics.maxFps || 0;
+    window.__wwMenuScene?.setSkin(s.skin ?? null);
 
     callWorldJS('applySettings', {
         sensitivity:     s.sensitivity,
         invertY:         s.invertY,
         fov:             s.fov,
-        ...resolveGraphics(s),   // every GRAPHICS_CONTROLS value
+        ...graphics,             // every GRAPHICS_CONTROLS value, as far as a shared screen allows
         brightness:      s.brightness,
         colorblind:      s.colorblind,
         weatherVolume:   s.weatherVolume,
+        masterVolume:    s.masterVolume,
+        musicVolume:     s.musicVolume,
+        sfxVolume:       s.sfxVolume,
+        ambienceVolume:  s.ambienceVolume,
+        skin:            s.skin ?? null,
+        playerName:      s.playerName ?? '',
         // Also damps lightning flashes — rapid bright flicker is a
         // photosensitivity trigger.
         reduceMotion:    !!s.reduceMotion,
@@ -805,6 +931,48 @@ function closeSettings() {
     }
 }
 
+// ── Character ─────────────────────────────────────────────────────────────────
+// The player's own Quiddle (settings: `skin`, a choice for each of the model's
+// looks; `playerName`). Each control is one look; the figure beside them shows
+// the result (Character.js), and a change is kept and sent to the game at once.
+let _characterOrigin = 'title';
+
+function _showCharacter(skin) {
+    const clean = window.__wwCharacter?.clean(skin) ?? skin ?? {};
+    for (const sel of document.querySelectorAll('.charLook')) sel.value = String(clean[sel.dataset.look] ?? 0);
+    syncSegments();
+    return clean;
+}
+
+function openCharacter(origin) {
+    _characterOrigin = origin;
+    const s = getSettings();
+    const skin = _showCharacter(s.skin ?? window.__wwCharacter?.defaultSkin());
+    _showPlayerName();
+    if (origin === 'title') DOM.titleScreen.classList.add("hidden");
+    else                    DOM.pauseScreen.classList.add("hidden");
+    document.getElementById('CharacterScreen')?.classList.remove("hidden");
+    window.__wwCharacter?.show(document.getElementById('characterCanvas'), skin);
+}
+
+function commitCharacter() {
+    const skin = {};
+    for (const sel of document.querySelectorAll('.charLook')) skin[sel.dataset.look] = parseInt(sel.value) || 0;
+    const s = { ...getSettings(), skin };
+    saveSettings(s);
+    if (s.playerName) saveProfile(s.playerName, skin);       // the look is kept with the name
+    window.__wwCharacter?.set(skin);
+    applyPlayerSettings(s);
+}
+
+function closeCharacter() {
+    commitCharacter();
+    document.getElementById('CharacterScreen')?.classList.add("hidden");
+    window.__wwCharacter?.hide();
+    if (_characterOrigin === 'pause') DOM.pauseScreen.classList.remove("hidden");
+    else                              DOM.titleScreen.classList.remove("hidden");
+}
+
 // ── How To Play ───────────────────────────────────────────────────────────────
 let _howToOrigin = 'title';
 function openHowToPlay(origin) {
@@ -830,7 +998,7 @@ function populateSettingsForm() {
     set('settingGraphics', s.graphics);
     for (const [key, { id }] of Object.entries(GRAPHICS_CONTROLS)) set(id, g[key]);
     set('settingBrightness', s.brightness);
-    set('settingWeatherVolume', s.weatherVolume);
+    for (const [id, key] of AUDIO_SLIDERS) set(id, s[key]);
     chk('settingShowCoords', s.showCoords);   chk('settingCrosshair', s.crosshair);
     chk('settingShowFps', s.showFps);
     set('settingColorblind', s.colorblind);
@@ -850,7 +1018,7 @@ function _updateSettingLabels() {
     t('settingResScaleVal', `${Math.round(parseFloat(v('settingResScale')) * 100)}%`);
     t('settingFogDistVal', `${Math.round(parseFloat(v('settingFogDist')) * 100)}%`);
     t('settingBrightnessVal', `${Math.round(parseFloat(v('settingBrightness')) * 100)}%`);
-    t('settingWeatherVolumeVal', `${Math.round(parseFloat(v('settingWeatherVolume')) * 100)}%`);
+    for (const [id] of AUDIO_SLIDERS) t(`${id}Val`, `${Math.round(parseFloat(v(id)) * 100)}%`);
     // Each slider is filled up to its handle (--fill, game.css).
     document.querySelectorAll('.settingsSlider').forEach(el => {
         const lo = parseFloat(el.min), hi = parseFloat(el.max);
@@ -863,13 +1031,15 @@ function commitSettingsFromForm(e) {
     const num = id => parseFloat(document.getElementById(id)?.value);
     const on  = id => !!document.getElementById(id)?.checked;
     const s = {
+        // What no control here shows — the character, the player's name — stays as it is.
+        ...getSettings(),
+        ...Object.fromEntries(AUDIO_SLIDERS.map(([id, key]) => [key, num(id)])),
         sensitivity:    num('settingSensitivity'),
         invertY:        on('settingInvertY'),
         fov:            num('settingFov'),
         graphics:        document.getElementById('settingGraphics')?.value ?? 'classic',
         graphicsCustom:  getSettings().graphicsCustom,
         brightness:      num('settingBrightness'),
-        weatherVolume:   num('settingWeatherVolume'),
         showCoords:     on('settingShowCoords'),
         crosshair:      on('settingCrosshair'),
         showFps:        on('settingShowFps'),
@@ -893,7 +1063,9 @@ function commitSettingsFromForm(e) {
 }
 
 function resetSettings() {
-    saveSettings({ ...DEFAULT_SETTINGS });
+    // Who the player is — their character, their name — is not a setting to put back.
+    const { skin, playerName, clientId, profiles } = getSettings();
+    saveSettings({ ...DEFAULT_SETTINGS, skin, playerName, clientId, profiles });
     populateSettingsForm();
     applyPlayerSettings(getSettings());
 }
@@ -998,6 +1170,13 @@ function buildSegments() {
             b.className = 'segBtn';
             b.textContent = opt.textContent;
             b.dataset.value = opt.value;
+            // A colour is a patch of it; its name is the tooltip.
+            if (opt.dataset.swatch) {
+                b.classList.add('swatch');
+                b.style.setProperty('--swatch', opt.dataset.swatch);
+                b.title = opt.textContent;
+                b.textContent = '';
+            }
             b.addEventListener('click', () => {
                 if (sel.value === opt.value) return;
                 sel.value = opt.value;
@@ -1270,6 +1449,7 @@ async function createWorld() {
 ========================================================= */
 
 function startWorld(world) {
+    stopMenuWorld();
     activeWorld = world;
     gameStarted = true;
     paused      = false;
@@ -1308,12 +1488,18 @@ function startWorld(world) {
         worldGen: world.worldGen ?? 1,
         // A Flat world's settings (what it is made of), or null for a normal one.
         flat: world.worldType === 'flat' ? (world.flat ?? {}) : null,
+        // Not this player's world (a further pane, a guest from the network):
+        // their place in it is kept under their own name.
+        guest: isGuest(), stateKey: isGuest() ? guestStateKey() : '',
+        workers: PANE > 0 ? Math.max(2, Math.floor(((navigator.hardwareConcurrency || 4) - 1) / (parseInt(PARAMS.get('of')) || 2))) : 0,
         // World Settings → Daylight Cycle and Weather ('dynamic' or a held type).
         daylightCycle: world.daylightCycle !== false,
         weather: world.weather ?? 'dynamic',
     });
 
     startLoadingTextRotation();
+    const quit = document.getElementById('pauseQuitBtn');
+    if (quit) quit.textContent = isGuest() ? 'Leave Game' : 'Save & Quit';
 
     // Start ticking now so terrain generates/meshes *behind* the loading screen.
     // We reveal the world from ww_loadProgress once enough chunks have rendered;
@@ -1335,6 +1521,7 @@ window.addEventListener('ww_loadProgress', (e) => {
 function finishGameStartup() {
     if (!_loadingActive) return;   // guard against the fallback + ready both firing
     _loadingActive = false;
+    window.__wwSound?.stopMusic();
     clearTimeout(_loadFallbackTimer);
 
     if (DOM.loadingBar) DOM.loadingBar.style.width = "100%";
@@ -2215,7 +2402,8 @@ function resumeGame() {
     if (window.__wwPad?.active) paused = false;
 }
 
-async function leaveWorld() {
+async function leaveWorld(over = false) {
+    const wasIn = gameStarted;
     gameStarted = false;
     paused = false;
     activeWorld = null;
@@ -2235,7 +2423,19 @@ async function leaveWorld() {
     DOM.titleLogo.classList.remove("hidden");
     DOM.logo.classList.remove("Loading");
     DOM.loadingBar.style.width = "0%";
+    document.getElementById('PlayersScreen')?.classList.add('hidden');
+    document.getElementById('CharacterScreen')?.classList.add('hidden');
+    window.__wwCharacter?.hide();
+    if (isGuest()) {
+        // Someone else's world: there is no menu of this player's to go back to.
+        DOM.titleLogo.classList.add("hidden");
+        if (!over && wasIn) sessionOver('left');
+        return;
+    }
+    splitManager()?.closeAll();              // the other players on this screen were in this world
+    window.__wwSound?.playMusic(MENU_MUSIC);
     showWorldList();
+    startMenuWorld('worlds');
 }
 
 /* =========================================================
@@ -2257,16 +2457,18 @@ let _loopActive = false;   // prevents two animation loops running after a world
 // up: new terrain is installed a frame at a time.
 const MENU_FPS       = 30;   // pause screen (and settings from it), inventory, crafting, death
 const BACKGROUND_FPS = 15;   // the game window does not have focus, or is hidden
-let _appFocused = document.hasFocus();
-window.addEventListener('focus', () => { _appFocused = true; });
-window.addEventListener('blur',  () => { _appFocused = false; });
+// "Has focus" is the whole window's: of a split screen's frames only one has
+// the keyboard, and the others are being played all the same.
+function appFocused() {
+    try { return window.top.document.hasFocus(); } catch { return document.hasFocus(); }
+}
 
 /** The frame-rate cap right now (0 = none): the player's, or lower while idle. */
 function frameCap() {
     // __wwNoIdleCap: the render benchmark measures play, where headless has no
     // pointer lock and so sits on the pause screen.
     if (_loadingActive || window.__wwNoIdleCap) return _maxFps;
-    const idle = (document.hidden || !_appFocused) ? BACKGROUND_FPS
+    const idle = (document.hidden || !appFocused()) ? BACKGROUND_FPS
                : (paused || _menuOpen) ? MENU_FPS : 0;
     return idle && (_maxFps === 0 || idle < _maxFps) ? idle : _maxFps;
 }
@@ -2340,6 +2542,13 @@ function updateUIVisibility() {
     DOM.pauseScreen.classList.toggle("hidden", !paused || _menuOpen);
     DOM.gameUI.classList.toggle("hidden", (paused && !_menuOpen) || isSpectator);
 }
+
+// A button says so when it is pressed (the mouse, or a controller's A).
+document.addEventListener('click', (e) => {
+    if (e.target.closest?.('.menuButton, .segBtn, .settingsTab, .worldCard, .recipeListItem, .settingsToggle, .invGridSlot')) {
+        window.__wwSound?.play('click', { volume: 0.5, vary: 0.03 });
+    }
+}, true);
 
 /* =========================================================
    CONFIRM DIALOG
