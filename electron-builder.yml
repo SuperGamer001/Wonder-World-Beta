@@ -43,6 +43,13 @@ files:
   # three ships ~35 MB but the game loads exactly one build file. Dropping the
   # examples, the TypeScript-facing sources and the unused bundles takes ~33 MB
   # off the installer with no runtime effect.
+  # msgpackr-extract is a native speed-up for msgpackr under @colyseus/sdk, in
+  # Node. The game loads the SDK's browser bundle in the page, where it is never
+  # touched — and npm installs only the build machine's binary, so the x64 and
+  # arm64 halves of the universal macOS app held the same file and could not be
+  # merged.
+  - "!node_modules/msgpackr-extract${/*}"
+  - "!node_modules/@msgpackr-extract${/*}"
   - "!node_modules/three/examples${/*}"
   - "!node_modules/three/src${/*}"
   - "!node_modules/three/test${/*}"
