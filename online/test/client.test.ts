@@ -303,6 +303,9 @@ describe('several players of one machine', () => {
         await g1.s.enter(one.s.code, HELLO('Gus', { slot: 0 }));
         await g2.s.enter(one.s.code, HELLO('Gil', { slot: 1 }));
         assert.deepStrictEqual([g1.s.id, g2.s.id], [4, 5]);
+        // A state is passed on only for a player the game has been told of, and the roster comes by
+        // another road (the room's state) than the states do: sent once, at once, it can get there first.
+        await until(() => one.s.players.has(5));
         g2.at(9, 70, 9);
         await until(() => one.log.some(l => l[0] === 'state' && l[1] === 5));
         assert.strictEqual(registry.roomsOf('dev:gus'), 1);
