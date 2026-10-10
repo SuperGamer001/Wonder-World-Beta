@@ -30,6 +30,7 @@ src/
     Players.js                   The other players, as this game draws them
     Character.js                 The figure on the Character screen (its own small renderer)
     MenuScene.js                 The place behind the menus: draws the baked model (its own small renderer)
+    Online.js                    Playing over the internet, as this page does it: sign-in, the one room (see *Online*)
     Shadows.js / Particles.js    Sun shadow map / block-break debris
     MobModels.js                 Draws the mob models: one mesh per mob, skinned on the CPU
     PostFX.js                    Eye Adaptation: auto-exposure + bloom (post-processing)
@@ -46,6 +47,10 @@ src/
       ChunkManager.js            Chunk load/unload lifecycle and priority scheduling
       WorldClient.js             WebSocket chunk persistence client
       Multiplayer.js             This game's line to the others in the same world (see *Playing together*)
+      net/                       … and its line to them over the internet (see *Online*; no Three.js, no DOM)
+        OnlineSession.js         The room, as world.js uses it: the same surface as Multiplayer.js
+        OnlineProtocol.js        The messages and codes (the game's copy), and the fingerprint of a game's content
+        ChunkCodec.js            A chunk packed to go from the host's game to a guest's
       PlayerPhysics.js           AABB collision, gravity, jump, fall damage
       Inventory.js               Slots, hotbar, equipment, quiver
       CraftingSystem.js          Recipe matching
@@ -86,6 +91,7 @@ data/
   textures/                      Block, item, UI and mob (entities/) textures
   sounds/                        blocks/ entities/ ambiant/ ui/ (made by tools/gen_sounds.mjs) and music/
   menu/scene.glb                 The place behind the menus, baked (tools/gen_menu_scene.mjs)
+  online.json                    Where the online server is (`url`; empty: this copy of the game has no online play)
 tools/
   gen_block_textures.py          Paints every block texture, 32 × 32, tiling (Pillow + numpy)
   gen_mob_textures.mjs           Paints the mob textures from the model definitions
@@ -95,8 +101,11 @@ gamepacks/                       Optional add-on packs (HD, Minecraft, Pre-Relea
 server/
   server.js                      Express static host + REST API + WebSocket chunk I/O; the listener for guests
   multiplayer.js                 Sessions: who is in which world, and what they are told
+online/                          The online server (Colyseus, TypeScript): deployed by itself, never shipped to players.
+                                 A project of its own — its README says what is where (see *Online*)
 electron/
   main.js                        Desktop launcher (boots the server, opens the window)
+  steam.js                       A Steam ticket for the online server, where the game runs under Steam
 test/
   chunkdata.test.mjs             Chunk storage vs a plain array: edits, snapshots, the save format
   mesher.test.mjs                Greedy-mesher correctness vs a brute-force reference
@@ -114,6 +123,7 @@ test/
   pipelinebench.mjs              Stage timings + output hashes for the worker pipeline
   renderbench.mjs                Frame times of the real game on the real GPU, per preset
   smoke.mjs                      Headless end-to-end run of the real game
+  online.smoke.mjs               … of two of them, playing one world through the online server
   worldmap.mjs                   Top-down map or vertical section of a seed's world (PNG)
   terrainshots.mjs               Screenshots of landscapes on a seed, in the real game
 ```
@@ -2774,11 +2784,14 @@ speak through `EntityManager.onSound`: now and then, when near, and when hit.
 
 ## Playing together (`server/multiplayer.js`, `engine/Multiplayer.js`, `src/players.js`, `index.js`)
 
-Two ways, and under both the same thing. **Every world played through the
-server is a session there** — one player alone is a session of one — and
-another player joins it: a second pane of a split screen, or a guest from
-another machine. So the game has no multiplayer mode: it always tells the
-session what it does and listens, and alone, nothing is sent but the blocks.
+Three ways, and under all of them the same thing. **Every world played
+through the server is a session there** — one player alone is a session of
+one — and another player joins it: a second pane of a split screen, or a
+guest from another machine. So the game has no multiplayer mode: it always
+tells the session what it does and listens, and alone, nothing is sent but the
+blocks. Over the internet (*Online*, below) the session is a room on another
+server instead, and `world.js` is handed that in place of this one's — it uses
+the two alike.
 
 ### What is shared, and who runs it
 
@@ -2802,6 +2815,13 @@ game also runs what there must be only one of.
 - **Saving.** Every game saves the chunks it has changed or been told were
   changed, as it always did. A copy saved a moment too early is put right by
   that game's next save, since it holds the later change too.
+- **Changes to chunks the owner's game never loads** — another player
+  building far from them — are kept with the world as changes
+  (`pending-edits.json`, `GET` / `PUT /api/worlds/:id/pending-edits`; the
+  leftover of `WorldState.pendingChanges` at each save, `_savePendingEdits`)
+  and put down when the chunk is next loaded there. A guest on the network
+  saves such a chunk itself; a guest of an online game cannot reach this
+  server, and without this their building would be gone when the host quit.
 - **Guests.** Every player after the first is a guest of the world: their
   place, health and inventory in it are kept in a file of their own
   (`players/<key>.json`, by name — `?player=` on the player-state requests),
@@ -2872,6 +2892,61 @@ The player's own listener is as it was, this machine only.
   toggle is turned off (the guests are sent away; the host plays on).
 - Windows asks, the first time, whether to let the game through the firewall:
   that is this listener.
+
+### Online (`online/`, `src/scripts/Online.js`, `engine/net/`)
+
+The Players panel's **Open online** opens the world to players anywhere, and
+shows a code; **Play → Join a game** takes one. Between them is the **online
+server** — `online/`, a Colyseus server run somewhere else, a project of its
+own with its own tests and documents (`online/docs/`: ARCHITECTURE, SECURITY,
+OPERATIONS). `data/online.json` (or `WW_ONLINE_URL`) says where it is; empty,
+as shipped, and the game has no online play and shows none of this.
+
+- **The host still hosts.** The online server does not run the world and does
+  not store it: one player's game is the host, as above, and the world stays
+  on their disk. The server is the one place every message goes through, and
+  it is the authority on what can be decided without a copy of the world —
+  who a connection is and which edition it has, who is in the room and who
+  the host is, who may send what, what a message may look like, how often,
+  and whether it is plausible (a block within reach of its player, a blow
+  within reach of the mob). What it cannot check is in `online/docs/SECURITY.md`.
+- **The game's end is `OnlineSession`** (`engine/net/`), with the same surface
+  as `Multiplayer` — `id`, `hostId`, `players`, `state()`, `block()`, `all()`,
+  `host()`, `to()`, the `on…` callbacks — so `world.js` does not know which it
+  has, except in the three places it must (all under *Online* in `world.js`).
+  `Online.js` is the page's side: the SDK (loaded only when someone goes
+  online), who this game is to the server, and the one room it is in.
+- **A world is in one session.** Opening it online moves the running world
+  from this machine's server to the room (`goOnline`), and closing it moves it
+  back (`goOffline`); whoever was in it by split screen or the network joins
+  again. The host's further panes then join the room too (`?online=<code>`),
+  each as a further player of the same account (`slot`), and still read the
+  world from this machine.
+- **A guest cannot reach the host's machine**, so the host's game answers for
+  its world through the room (`_serveGuests`): which chunks it has data for,
+  each of them (`ChunkCodec`: the save format, gzipped), and each guest's
+  saved place — kept in the world's `players/` folder as on the network, under
+  a key the server makes. Every other chunk a guest generates from the seed.
+  `OnlineWorldClient` stands in for `WorldClient` on a guest; it saves
+  nothing, and notes which chunks to ask the host for again.
+- **Every block change comes round to its sender**, numbered by the server,
+  and a change the server refuses comes back to be undone
+  (`onBlockRejected`). `WorldState.onSet` therefore hands over what the block
+  *was* as well.
+- **A line that drops is picked up again** by the SDK; the game asks for the
+  changes it missed and then sends the ones it made. A host that does not
+  come back ends the room: the world was theirs.
+- **Who a player is**: under Steam, the Steam account — the launcher fetches a
+  ticket (`electron/steam.js`, `POST /api/online/steam-ticket`), and the
+  online server checks it with Steam, which is what makes an edition "full".
+  Otherwise a guest, with the free edition: a credential the server made up,
+  kept with the player's settings (`onlineCredential`). It is never handed to
+  a game joined on the network.
+- **Games must match to share a world**: the same protocol number, and the
+  same fingerprint of blocks, biomes and geology (`contentHash`). When
+  `data/blocks`, `data/biomes` or `data/terrain` change, run `npm run content`
+  in `online/` and deploy the server before the game; a test there fails
+  until it has been run.
 
 ---
 
@@ -3248,6 +3323,8 @@ New worlds record `format`, `worldHeight` and `worldMinY` in their metadata.
 | `npm run sounds [-- name …] [--wav]` | Makes the sounds in `data/sounds/` (see *Sound*); `WW_SOUND_OUT=<dir>` writes somewhere else to listen first. |
 | `npm run blocktex [-- name …]` | Repaints the block textures (`tools/gen_block_textures.py`; Python with Pillow and numpy). See *Block System*. |
 | `npm run shots -- [--seed N] [--only a,b] [--preset normal/far/classic] [--far chunks] [--terrain blocky] [--mobs] [--pitch r] [--cull-check]` | Finds a mountain range, river valley, lake, coast, fjord and a dozen biomes on the seed's geography, flies the real game (GPU) to each, and screenshots it (into the system temp folder unless `--out` says otherwise); reports each view's load time and draw calls. `panorama`, `far-range` and `edge` look into the distance, for Far Terrain (`--far` overrides the preset's: normal 16, far 64, classic off). `--mobs` stands one of every mob in front of each view. `--cull-check` draws each view — and looking down from it, and from inside the caves under it — with and without leaving out what the camera cannot see, and fails if a patch of pixels differs or more pinholes open onto the sky (see *What the camera cannot see*; best with `--preset classic`). |
+| `npm run test:online` | The online server's own tests (`online/`; needs `npm install` there once): the real server booted and real clients connected — sign-in and forged tokens, rooms and codes, every message checked, rates and limits, dropped lines, and the game's own `engine/net/` code against it. About a minute. |
+| `npm run test:online:e2e` | Two real games in a headless browser, one world: starts the online server and two of the game's own servers (the host's machine and the guest's), opens the host's world online from the game, joins by the code, and checks that each sees the other, that what the host had built reaches the guest, that building goes both ways, that a refused block is put back, and that the guest's place and far-off building are kept on the host's disk. |
 | `npm run test:smoke` | Boots the server, drives the real game in headless Edge/Chrome into a smooth world (the default) and then one switched to blocky, and fails on any console error, page exception, failed request, or a world loading in the wrong terrain style. Also drives the update banner through its states. Set `BROWSER=<path>` to pick the browser, and `SMOKE_SHOTS=<dir>` to save a screenshot of each world. |
 
 `test/smooth.test.mjs` checks the smooth-terrain rules directly: every smooth
@@ -3319,13 +3396,13 @@ requests. Treat any of those being non-zero as a failure, not as noise.
 | Water | Incremental BFS spread (`WaterSimulator`) | Proper fluid levels / pressure |
 | Structures | Hardcoded builders (trees, plants, boulders, a house), frequencies per biome | GamePack-defined structure blueprints; villages |
 | Mobs | Six kinds with jointed, skinned limbs, variants, and gaits that plant their feet; A* paths, jumps, no walking into pits; passive or defensive; voices | Hands that hold things (a player's too: what they hold is not shown); ears and tails that hang by their weight; a gallop; feet that find the height of the ground on a slope (they are placed on the level the mob stands at); spawning by biome (`spawnRules.biomes` is not enforced yet); herds that keep together; Quiddle villages, trades and talk; mobs that are hostile unprovoked |
-| Playing together | Split screen (2–4, a controller each) and other machines on the network, in one session a world; blocks, players, the host's mobs, clock and weather are shared | Mobs live round the host: a guest far from the host meets none. Dropped items are each game's own (a mob's drops go to whoever killed it; what a player throws down the others do not see). Players cannot hurt each other. Each pane of a split screen is a whole game — its own chunks, meshes and workers — so two cost twice the memory. When the host leaves, the session ends. No chat. The network is the local one: no way through a router |
+| Playing together | Split screen (2–4, a controller each) and other machines on the network, in one session a world; blocks, players, the host's mobs, clock and weather are shared | Mobs live round the host: a guest far from the host meets none. Dropped items are each game's own (a mob's drops go to whoever killed it; what a player throws down the others do not see). Players cannot hurt each other. Each pane of a split screen is a whole game — its own chunks, meshes and workers — so two cost twice the memory. When the host leaves, the session ends. No chat |
 | Menu scene | A model baked from real terrain (19 MB, 490 thousand triangles): two views of it and the way between them | Only what those cameras see is in it, so a new view means a new bake, and a screen wider than 16:9 is cropped, not widened. One afternoon's light: no weather, no shadows, still water. The animals graze but do not walk. It does not follow the game: after a change to the generator, the mesher or a block texture it goes on looking as the game did until it is baked again |
 | Sound | Footsteps, blocks, animals, ambience and thunder from files made by a script; rain and wind made as they fall; menu music | The voices are built, not recorded (a cow is a larynx and a mouth in arithmetic): recordings dropped in under the same names replace them. No music in the world itself. Nothing is muffled by walls; other players' footsteps are not heard |
 | World generation | Continents, mountain belts, rivers and creeks at sea level, elevated lakes, fjords, cliffs, mesas, 28 biomes chosen after the terrain, six kinds of cave | Waterfalls (rivers all run at sea level, so none are needed yet — a spring feature would add them); grass tufts and flowers (needs a cross-shaped model that sits on the smooth surface); per-biome grass tint; mobs spawning by biome (entity `spawnRules.biomes` is not enforced yet) |
 | Far terrain | The geography as a heightfield, with trees and buildings as boxes in the two nearest levels (thinned in woods) and the surfaces of chunks the player has changed; no caves or overhangs; a river narrower than a cell shows only where a sample falls in it; a new level of detail pops in when tiles swap, and trees become a tinted canopy at the third level | Blend (geomorph) between levels; a changed chunk shows only its highest blocks (a bridge is a wall down to the ground) |
 | Underground geometry | Every cave wall is meshed, and the sections of a chunk the camera could not see are left out of the draw (*What the camera cannot see*): about half the triangles from the surface | A chunk draws one range, from the lowest section it needs to the highest: one visible cave deep down brings everything above it with it. Ranges of sections a chunk (multi-draw) would leave more out. The pinholes in the mesh, which are there with or without this |
-| Multiplayer | Architecture ready | Server/peer connection layer |
+| Online | A world opened online from the Players panel, joined by a code, through the online server (`online/`): it checks who everyone is and what they send, and the host's game still runs the world. Not deployed: `data/online.json` is empty | Steam sign-in is written and has never run against Steam (it needs `steamworks.js` and the App ID); the free edition's limits are placeholders. The server cannot check what only the world knows — whether a player had the block they placed, or is where they say (`online/docs/SECURITY.md`). A guest is sent every chunk the host has saved near them, changed or not (a few kilobytes each): a mark for chunks that were really changed would spare most. Far terrain does not show a guest what the host has built. Opening or closing a world online sends away whoever was in it by split screen or network, to join again. No list of games, no chat, no way to rejoin a host who has moved to another room |
 | See-through blocks | Leaves and glass are cutouts in the opaque pass; water and ice are blended, ordered exactly along each axis and chunk by chunk | Between axes the order is fixed (horizontal faces first), so the side of an ice block standing in water can blend in the wrong order; glass is clear with a frame, not tinted; nothing but terrain is veiled by cloud (mobs, items, rain) |
 | Smooth terrain | Diagonal slopes of one block or half a block a block are planes; a lone block is a low mound; ground of different kinds blends along a ragged line, and a lone block keeps its face; shading is smooth | A gentle slope is still terraces joined by one-block ramps (leaning every terrace was tried and taken out: it changed the look of all terrain); diagonal steps three or more wide still zigzag; a step of two blocks right beside low ground is a wall, so ground steeper than the diagonal breaks into teeth; a slope between an axis and a diagonal is close to a plane, not one |
 | Controller | Play and every menu, analog movement, no pointer lock needed; names typed on a keypad | No rumble; no remapping; the other text boxes (a world's name, the creative search, a network address) still need a keyboard; sensitivity is shared with the mouse |

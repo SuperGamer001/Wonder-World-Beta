@@ -19,13 +19,22 @@ artifactName: "WonderWorld-${version}-${arch}.${ext}"
 # Only the runtime files are shipped; dev tooling, local saves, and CI/build
 # helpers are excluded below.
 asar: false
+
+# Do not recompile native modules for Electron. The only one is msgpackr-extract
+# (an optional speed-up inside @colyseus/sdk, which the game loads in the page,
+# where it is never used); it ships prebuilt N-API binaries, and compiling it
+# needs Visual Studio and fails outright in a folder with a space in its path.
+npmRebuild: false
+
 files:
   - "**/*"
   - "!user${/*}"                 # local dev world saves — never ship these
   - "!server/node_modules${/*}"  # stale duplicate; deps resolve from root node_modules
   - "!.github${/*}"
   - "!.claude${/*}"
+  - "!.ui-shots${/*}"            # screenshots taken while working on the menus
   - "!test${/*}"                 # dev-only test harnesses
+  - "!online${/*}"               # the online server: deployed by itself, never shipped to players
   - "!tools${/*}"                # texture generators
   - "!**/*.py"
   - "!INSTRUCT.md"

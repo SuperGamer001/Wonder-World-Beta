@@ -1,0 +1,8 @@
+node_modules
+build
+.colyseus-cloud.json
+.devmode.json
+# Secrets never go in the repository: only the .example file is tracked.
+.env
+.env.*
+!.env.example

@@ -20,6 +20,11 @@
  *     world list has "Join a game" for the other end. A guest's page is this
  *     game served by the host (server.js, *On the network*), so it is told it
  *     is a guest (`/api/lan/info`) and goes straight into the host's world.
+ *   • Online. The same panel opens the world to players anywhere, through the
+ *     online server (online/; src/scripts/Online.js is this page's end of it),
+ *     and shows the code they join with; "Join a game" takes a code. A guest
+ *     of an online game plays in their own copy of the game, from their own
+ *     menu, and goes back to it afterwards.
  *
  * Every player after the first — a pane or a guest — is a **guest** of the
  * world: their place and inventory in it are kept in a file of their own (by
@@ -31,6 +36,11 @@ const NAME_OK = /[^A-Za-z0-9 ._'-]/g;       // what a name may not contain
 
 let _lanGuest = false;                       // this page is a guest's view of someone's open world
 const isGuest = () => PANE > 0 || _lanGuest;
+// This player, from their own menu, is in an online game somebody else hosts.
+// (Not `isGuest`: they have a menu, settings and worlds of their own to go back to.)
+let _onlineGuest = false;
+// Which player of this machine this page is, to the online server: 0 the first.
+const SLOT = PANE > 0 ? Math.max(1, Math.min(3, parseInt(PARAMS.get('slot')) || PANE)) : 0;
 /** The split-screen manager in the page round this one (index.js), if there is one. */
 const splitManager = () => { try { return window.parent !== window ? window.parent.__wwSplit ?? null : null; } catch { return null; } };
 
@@ -275,11 +285,20 @@ async function enterGame() {
         if (!name) return splitManager()?.close(PANE);       // backed out: the pane goes away again
         splitManager()?.named(PANE, name);
         let world = null;
+        // The first player's game is online: this pane joins the same room, as a further player of this machine.
+        const code = PANE > 0 ? PARAMS.get('online') : null, theirs = PARAMS.get('world') === 'online';
+        if (code) {
+            try {
+                await window.__wwOnline.join(code, { name, skin: getSettings().skin, slot: SLOT, gamepack: mergedGamePackData }, !theirs);
+            } catch (e) { return sessionOver(e?.reason ?? 'unreachable'); }
+        }
         try {
-            world = PANE > 0 ? await (await fetch(`${SERVER_URL}/api/worlds/${encodeURIComponent(PARAMS.get('world') ?? '')}`)).json()
+            world = code && theirs ? window.__wwOnline.world()
+                  : PANE > 0 ? await (await fetch(`${SERVER_URL}/api/worlds/${encodeURIComponent(PARAMS.get('world') ?? '')}`)).json()
                              : (await (await fetch(`${SERVER_URL}/api/lan/info`)).json()).world;
         } catch { /* below */ }
         if (!world?.id) return sessionOver('unreachable');
+        if (code) world = { ...world, online: true };
         DOM.titleLogo?.classList.remove('hidden');
         return startWorld(world);
     }
@@ -297,9 +316,22 @@ async function enterGame() {
 }
 
 /** The world this player was in has gone (the host left, the network closed) or could not be reached. */
+/** Why a game ended or could not be joined, as the player is told it. */
+const SESSION_WHY = {
+    left: 'You have left the game.', host: 'The host has left the game.', closed: 'The game was closed to the network.',
+    lost: 'The connection to the game was lost.', unreachable: 'The game could not be reached.', full: 'The game is full.',
+    // Online (the reasons of OnlineError, src/scripts/engine/net/OnlineSession.js).
+    code: 'No game has that code — or it is full, or closed to new players.', kicked: 'The host removed you from the game.',
+    update: 'Update the game to play online.', content: 'That game uses different game packs from yours.',
+    edition: 'The free edition cannot host an online game.', busy: 'Too many attempts. Wait a minute and try again.',
+    auth: 'Could not sign in to the online server.', unavailable: 'This copy of the game has no online server set.',
+    world: "This world's seed cannot be shared online.", shutdown: 'The online server is restarting. Try again in a moment.',
+    flood: 'The online server closed the connection.',
+};
+const sessionWhy = (reason) => SESSION_WHY[reason] ?? 'The game has ended.';
+
 function sessionOver(reason) {
-    const why = { left: 'You have left the game.', host: 'The host has left the game.', closed: 'The game was closed to the network.', lost: 'The connection to the game was lost.',
-                  unreachable: 'The game could not be reached.', full: 'The game is full.' }[reason] ?? 'The game has ended.';
+    const why = sessionWhy(reason);
     if (gameStarted) leaveWorld(true);
     if (PANE > 0) return splitManager()?.close(PANE);
     if (_lanGuest) {
@@ -311,8 +343,13 @@ function sessionOver(reason) {
 }
 window.addEventListener('ww_sessionClosed', (e) => {
     // The host's own session ending (the server went away) leaves the host playing alone.
-    if (!isGuest()) return showNotice('Other players can no longer join: the connection to the server was lost.');
+    if (!isGuest() && !_onlineGuest) return showNotice('Other players can no longer join: the connection to the server was lost.');
     sessionOver(e.detail?.reason);
+});
+// The host's online room has gone; the world plays on (world.js has gone back to the game's own server).
+window.addEventListener('ww_onlineEnded', (e) => {
+    showNotice(`The online game has ended. ${e.detail?.reason === 'shutdown' ? SESSION_WHY.shutdown : e.detail?.reason === 'flood' ? SESSION_WHY.flood : 'The connection to the online server was lost.'}`);
+    if (_playersTimer) _refreshPlayers();
 });
 
 // ── The Players panel (pause menu) ───────────────────────────────────────────
@@ -343,15 +380,25 @@ async function _refreshPlayers() {
     if (!gameStarted) { clearInterval(_playersTimer); _playersTimer = 0; return; }
     const list = document.getElementById('playersList');
     const players = window.__wwPlayers?.() ?? [];
-    list.innerHTML = players.map(p =>
+    const net = window.__wwWorld?.online?.() ?? null;       // this world's online room, if it is in one
+    // Online, the host can send a player away (and their account does not come back).
+    const removable = (p) => net?.host && !p.you ? `<span class="menuButton small quiet playerKick" data-kick="${p.id}">Remove</span>` : '';
+    const html = players.map(p =>
         `<div class="playerRow"><span class="playerName">${escapeHtml(p.name)}</span>` +
-        `<span class="playerNote">${p.you ? 'you' : ''}${p.you && p.host ? ' · ' : ''}${p.host ? 'host' : ''}</span></div>`).join('') ||
+        `<span class="playerNote">${p.you ? 'you' : ''}${p.you && p.host ? ' · ' : ''}${p.host ? 'host' : ''}</span>${removable(p)}</div>`).join('') ||
         '<div class="formNote">Only you, so far.</div>';
+    // Only when it has changed: the list is rebuilt twice a second, and a button rebuilt under a press is not pressed.
+    if (list.dataset.html !== html) {
+        list.dataset.html = html;
+        list.innerHTML = html;
+        for (const b of list.querySelectorAll('[data-kick]')) b.addEventListener('click', () => { window.__wwWorld?.kick(Number(b.dataset.kick)); });
+    }
 
-    const split = splitManager(), own = !isGuest();
+    const split = splitManager(), own = !isGuest() && !_onlineGuest;
     // Split screen: for the first screen to start, on a page that can show more than one.
-    document.getElementById('splitSection').classList.toggle('hidden', !own || !split);
-    if (own && split) {
+    const mine = own || (_onlineGuest && PANE === 0);       // the first screen of this machine, in whoever's game
+    document.getElementById('splitSection').classList.toggle('hidden', !mine || !split);
+    if (mine && split) {
         const n = split.count();
         document.getElementById('splitNote').textContent = n >= split.max ? 'The screen is full: four players.'
             : 'To join on this screen, press  A  on another controller.';
@@ -364,12 +411,52 @@ async function _refreshPlayers() {
         const open = !!st?.open && st.worldId === activeWorld?.id;
         const toggle = document.getElementById('lanOpenToggle');
         if (toggle && document.activeElement !== toggle) toggle.checked = open;
+        if (toggle) toggle.disabled = !!net;                   // a world is in one session: the network's, or the online room's
         document.getElementById('lanNote').innerHTML = !st ? 'There is no game server to open.'
+            : net ? 'This world is online. Close it there to open it to your network instead.'
             : !open ? 'Lets other computers on your network join this world.'
             : !st.addresses.length ? 'Open — but this computer is not on a network.'
             : `Others on your network can join from <b>Play → Join a game</b>, or by opening this address in a browser:<br>` +
               st.addresses.map(a => `<span class="lanAddress">http://${escapeHtml(a)}</span>`).join(' ');
     }
+    // Online: the host's to open, where this copy of the game has an online server to open it on.
+    const available = !!(await window.__wwOnline?.available().catch(() => false));
+    document.getElementById('onlineSection').classList.toggle('hidden', !available || !(own || net));
+    if (available && (own || net)) {
+        const toggle = document.getElementById('onlineOpenToggle');
+        document.getElementById('onlineRow').classList.toggle('hidden', !own);
+        if (toggle && document.activeElement !== toggle && !_onlineBusy) toggle.checked = !!net;
+        const note = document.getElementById('onlineNote');
+        if (_onlineBusy) note.textContent = 'One moment…';
+        else if (!net) note.textContent = 'Lets anyone you give the code to join this world over the internet.';
+        else {
+            const code = window.__wwOnline.showCode(net.code);
+            note.innerHTML = (net.host ? 'Others can join from <b>Play → Join a game</b> with this code:' : 'You are in an online game. Its code:') +
+                `<br><span class="lanAddress" id="onlineCode">${escapeHtml(code)}</span>` +
+                (net.down ? '<br>The connection was lost: reconnecting…' : '') +
+                (net.edition === 'free' ? '<br>You are playing the free edition.' : '');
+        }
+    }
+}
+
+let _onlineBusy = false;
+/** Open this world to players over the internet, or close it again. */
+async function setOnlineOpen(on) {
+    if (!activeWorld || _onlineBusy || isGuest() || _onlineGuest) return;
+    _onlineBusy = true;
+    _refreshPlayers();
+    try {
+        if (on) await window.__wwWorld.goOnline(activeWorld);
+        else await window.__wwWorld.goOffline();
+        // Done (had it failed, nothing would have changed). The players who were in this game through this
+        // machine — a split screen, the network — were in its old session, which is over: they join again.
+        splitManager()?.closeAll();
+        if (on) await fetch(`${SERVER_URL}/api/lan/close`, { method: 'POST' }).catch(() => {});
+    } catch (e) {
+        showNotice(e?.reason ? sessionWhy(e.reason) : 'The game could not be opened online.');
+    }
+    _onlineBusy = false;
+    _refreshPlayers();
 }
 
 async function setLanOpen(on) {
@@ -388,6 +475,7 @@ function _watchForJoiners() {
     requestAnimationFrame(_watchForJoiners);
     const split = splitManager();
     if (!split || isGuest() || !activeWorld || split.count() >= split.max) return;
+    if (_onlineBusy) return;
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     for (let i = 0; i < pads.length; i++) {
         const gp = pads[i], down = !!gp?.connected && !!gp.buttons[0]?.pressed;
@@ -396,7 +484,8 @@ function _watchForJoiners() {
         // Not the controller this player is using, nor one that already has a screen.
         if (!hit || split.padTaken(i) || (window.__wwPad?.active && window.__wwPad.index === i)) continue;
         const taken = [getSettings().playerName, ...split.names()].filter(Boolean);
-        split.add(i, activeWorld.id, taken);
+        // Online, the new player joins the room this one is in; otherwise the world on this machine's own server.
+        split.add(i, activeWorld.id, taken, window.__wwWorld?.online?.()?.code ?? '');
         showNotice(`Player ${split.count()} is joining`);
         closePlayers();
         resumeGame();
@@ -410,6 +499,9 @@ let _lanGamesTimer = 0;
 function openLanJoin() {
     document.getElementById('LanJoinModal').classList.remove('hidden');
     document.getElementById('lanJoinNote').textContent = '';
+    document.getElementById('onlineJoinCode').value = '';
+    // The code box is there where this copy of the game has an online server to join through.
+    window.__wwOnline?.available().then((yes) => document.getElementById('onlineJoinRow').classList.toggle('hidden', !yes), () => {});
     _refreshLanGames();
     clearInterval(_lanGamesTimer);
     _lanGamesTimer = setInterval(_refreshLanGames, 2000);
@@ -446,8 +538,33 @@ async function joinLan(address) {
     closeLanJoin();
     // The host serves the game to its guests. In the app, and from the game's own
     // page, the frame round this one swaps to it; a bare page just goes there.
-    if (window.parent !== window) window.parent.postMessage({ type: 'ww_joinLan', url, me: getSettings() }, '*');
+    // What is handed over is the player's settings — not who they are online, which is nobody else's to hold.
+    const { onlineCredential: _mine, ...me } = getSettings();
+    if (window.parent !== window) window.parent.postMessage({ type: 'ww_joinLan', url, me }, '*');
     else location.href = `${url}/`;
+}
+
+let _joiningOnline = false;
+/** Go to an online game: `text` is its code, as the host's Players panel shows it. */
+async function joinOnline(text) {
+    const note = document.getElementById('lanJoinNote');
+    const code = window.__wwOnline?.cleanCode(text);
+    if (!code) { note.textContent = 'A game code is eight letters and digits, like ABCD-EFGH. It is on the host\'s Players panel.'; return; }
+    if (_joiningOnline) return;
+    _joiningOnline = true;
+    note.textContent = 'Joining…';
+    try {
+        const s = getSettings();
+        await window.__wwOnline.join(code, { name: s.playerName, skin: s.skin, slot: 0, gamepack: mergedGamePackData });
+    } catch (e) {
+        _joiningOnline = false;
+        note.textContent = sessionWhy(e?.reason ?? 'unreachable');
+        return;
+    }
+    _joiningOnline = false;
+    closeLanJoin();
+    _onlineGuest = true;
+    startWorld(window.__wwOnline.world());
 }
 
 // ── Wiring ───────────────────────────────────────────────────────────────────
@@ -476,8 +593,14 @@ document.addEventListener('DOMContentLoaded', () => {
     on('lanOpenToggle', (e) => setLanOpen(e.target.checked), 'change');
     on('joinLanBtn', openLanJoin);
     on('lanJoinCloseBtn', closeLanJoin);
-    on('lanJoinGoBtn', () => joinLan(document.getElementById('lanJoinAddress').value));
+    // One Join button: a code if one was typed, else the address.
+    on('lanJoinGoBtn', () => {
+        const code = document.getElementById('onlineJoinCode').value.trim();
+        if (code) joinOnline(code); else joinLan(document.getElementById('lanJoinAddress').value);
+    });
     on('lanJoinAddress', (e) => { if (e.key === 'Enter') joinLan(e.target.value); }, 'keydown');
+    on('onlineJoinCode', (e) => { if (e.key === 'Enter') joinOnline(e.target.value); }, 'keydown');
+    on('onlineOpenToggle', (e) => setOnlineOpen(e.target.checked), 'change');
     on('guestOverBtn', () => {
         // Back to this player's own game, if the page round this one is theirs; else try the host again.
         if (window.parent !== window) window.parent.postMessage({ type: 'ww_leaveLan' }, '*');

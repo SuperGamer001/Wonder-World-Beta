@@ -1259,6 +1259,9 @@ body.usingPad .padOnly { display: block; }
 }
 .playerName { font-weight: 600; }
 .playerNote { color: var(--text-soft); font-size: 0.95vw; }
+/* Online, the host's list has a Remove button on each other player's row. */
+.playerRow .playerNote { margin-left: auto; }
+.playerKick { margin-left: 1vw; }
 #PlayersScreen .settingsSectionTitle, #PlayersScreen .settingsRow { align-self: stretch; }
 .lanAddress {
     display: inline-block; margin-top: 0.3vw; padding: 0.15vw 0.6vw;

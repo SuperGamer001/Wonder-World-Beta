@@ -10,6 +10,7 @@ import WebSocket from 'ws';
 process.env.WONDER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-mp-'));
 process.env.WW_LAN_PORT = '0';                                    // any free port
 process.env.WW_BEACON_PORT = String(41000 + (process.pid % 2000));
+process.env.WW_ONLINE_URL = 'https://online.example.com/';         // where the online server is, for this run
 
 const { serverReady } = await import('../server/server.js');
 const { port, host } = await serverReady;
@@ -196,6 +197,57 @@ await sleep(1800);
 const after = await (await json(`${base}/api/lan/status`)).json();
 check('when the last player leaves, a guest can still save where they were', lingering === 200);
 check('… and then the world closes to the network', again.open === true && after.open === false, JSON.stringify({ again, after }));
+
+// ── Online: what this server has to do with it ───────────────────────────────
+// (The online server itself is online/, with tests of its own: cd online && npm test.)
+const conf = await (await json(`${base}/api/online/config`)).json();
+check('the page is told where the online server is', conf.url === 'https://online.example.com' && typeof conf.version === 'string' && conf.steam === false, JSON.stringify(conf));
+check('… which, as shipped, is nowhere: the game has no online play until it is given one',
+    JSON.parse(fs.readFileSync(new URL('../data/online.json', import.meta.url), 'utf8')).url === '');
+// A token — and under Steam, a ticket — is sent there: only over https, or to this machine.
+const urlFor = async (value) => { process.env.WW_ONLINE_URL = value; return (await (await json(`${base}/api/online/config`)).json()).url; };
+const refused = [];
+for (const bad of ['http://online.example.com', 'ws://online.example.com', 'https://online.example.com/path', 'https://user:pw@online.example.com',
+    'javascript:alert(1)', '//online.example.com', 'https://online.example.com?x=1', 'http://127.0.0.1.evil.example:2567', 'not a url']) {
+    if (await urlFor(bad) !== '') refused.push(bad);
+}
+check('an address that is not https (or this machine) is no address at all', refused.length === 0, refused.join(' | '));
+check('… a developer\'s own server on this machine is', await urlFor('http://127.0.0.1:2567') === 'http://127.0.0.1:2567' && await urlFor('http://localhost:2567/') === 'http://localhost:2567');
+process.env.WW_ONLINE_URL = 'https://online.example.com/';
+check('with no launcher there is no Steam ticket to be had', (await (await json(`${base}/api/online/steam-ticket`, 'POST')).json()).ticket === null);
+
+// Blocks changed in chunks the owner's game never loaded are kept with the world until it does.
+const pend = `${base}/api/worlds/${world.id}/pending-edits`;
+check('a world has no changes waiting to begin with', JSON.stringify(await (await json(pend)).json()) === '{}');
+await json(pend, 'PUT', {
+    '3,-2': [[5, 7], [114687, 0], [114688, 1], [-1, 1], [2.5, 1], [9, 70000], ['x', 1], [11, 3, 'extra']],
+    'not a chunk': [[1, 1]], '4,4': 'nonsense', '5,5': [], '../../evil': [[1, 1]],
+});
+const kept = await (await json(pend)).json();
+check('changes are kept by chunk, and only what could be a block in one',
+    JSON.stringify(kept) === JSON.stringify({ '3,-2': [[5, 7], [114687, 0], [11, 3]] }), JSON.stringify(kept));
+check('… beside the world\'s other files, so they are copied and deleted with it',
+    fs.existsSync(path.join(process.env.WONDER_DATA_DIR, 'user', 'worlds', world.id, 'pending-edits.json')));
+await json(pend, 'PUT', {});
+check('what is sent replaces what was kept; nothing waiting is no file at all',
+    JSON.stringify(await (await json(pend)).json()) === '{}' &&
+    !fs.existsSync(path.join(process.env.WONDER_DATA_DIR, 'user', 'worlds', world.id, 'pending-edits.json')));
+check('a world that does not exist keeps nothing', (await json(`${base}/api/worlds/nope/pending-edits`, 'PUT', { '0,0': [[1, 1]] })).status === 404);
+
+// A guest from the network has no business with any of it.
+const openedAgain = await (await json(`${base}/api/lan/open`, 'POST', { worldId: world.id })).json();
+const lanBase = `http://127.0.0.1:${openedAgain.port}`;
+await json(`${base}/api/settings`, 'PUT', { onlineCredential: 'the-owners-own' });
+check('a guest from the network cannot reach the owner\'s online identity, a Steam ticket, or the changes kept for the world',
+    (await json(`${lanBase}/api/online/steam-ticket`, 'POST')).status === 403 &&
+    (await (await json(`${lanBase}/api/online/config`)).json()).url === '' &&        // … nor go online from the host's copy of the game
+    (await json(`${lanBase}/api/worlds/${world.id}/pending-edits`)).status === 403 &&
+    (await json(`${lanBase}/api/worlds/${world.id}/pending-edits`, 'PUT', { '0,0': [[1, 1]] })).status === 403 &&
+    !JSON.stringify(await (await json(`${lanBase}/api/settings`)).json()).includes('the-owners-own') &&
+    (await json(`${lanBase}/user/settings.json`)).status === 403 &&
+    (await json(`${lanBase}/online/src/app.config.ts`)).status === 403 &&
+    (await json(`${lanBase}/online/.env.example`)).status === 403);
+await json(`${base}/api/lan/close`, 'POST');
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 await sleep(150);

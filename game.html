@@ -649,6 +649,15 @@
                 </div>
                 <div class="formNote" id="lanNote"></div>
             </div>
+            <!-- Over the internet, through the online server (src/scripts/Online.js): shown where the game has one. -->
+            <div id="onlineSection" class="hidden">
+                <div class="settingsSectionTitle">Online</div>
+                <div class="settingsRow" id="onlineRow">
+                    <span class="settingsLabel">Open online</span>
+                    <label class="settingsToggle"><input type="checkbox" id="onlineOpenToggle"><span class="track"></span></label>
+                </div>
+                <div class="formNote" id="onlineNote"></div>
+            </div>
             <div class="popupButtons">
                 <div class="menuButton primary" id="playersBackBtn">Done</div>
             </div>
@@ -660,6 +669,10 @@
         <div class="panel popup wide">
             <div class="popupTitle">Join a game</div>
             <div id="lanGameList" class="nameList"></div>
+            <div class="formGrid hidden" id="onlineJoinRow">
+                <label class="formLabel" for="onlineJoinCode">An online game's code<small>on the host's Players panel</small></label>
+                <input class="worldFormInput" id="onlineJoinCode" type="text" placeholder="ABCD-EFGH" maxlength="12" autocomplete="off" spellcheck="false">
+            </div>
             <div class="formGrid">
                 <label class="formLabel" for="lanJoinAddress">Or its address<small>on the host's Players panel</small></label>
                 <input class="worldFormInput" id="lanJoinAddress" type="text" placeholder="192.168.1.20:25599" maxlength="60" autocomplete="off" spellcheck="false">

@@ -17,6 +17,7 @@ import { app, BrowserWindow, shell, dialog, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { setupSteam } from './steam.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -83,6 +84,8 @@ async function startApp() {
 
     createWindow();
     setupUpdates(server);
+    // Online play: under Steam, the launcher is what can ask it to vouch for the player (steam.js).
+    setupSteam(server, path.join(__dirname, '..')).catch(err => console.warn('[steam]', err?.message ?? err));
 
     app.on('activate', () => {
         // macOS: re-create a window when the dock icon is clicked and none open.
@@ -223,7 +226,12 @@ async function runUpdateCheck(setUpdateState) {
     if (canAutoInstall()) {
         try {
             if (!_autoUpdater) {
-                const { autoUpdater } = await import('electron-updater');
+                // electron-updater is CommonJS and defines `autoUpdater` with a
+                // getter, which Node cannot see as a named export: it has to be
+                // read off the default export. (As a named import it was
+                // undefined, and auto-update failed on its first line.)
+                const updater = await import('electron-updater');
+                const autoUpdater = (updater.default ?? updater).autoUpdater;
                 _autoUpdater = autoUpdater;
                 autoUpdater.autoDownload = true;
                 // Let the player finish their session; apply on the next launch.

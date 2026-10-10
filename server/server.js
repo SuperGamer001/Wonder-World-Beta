@@ -18,6 +18,10 @@
  *   GET  /api/data/manifest       list all data JSON files by category
  *   POST /api/lan/open | close    let players on the network into a world (see *On the network*)
  *   GET  /api/lan/status | games | info
+ *   GET  /api/worlds/:id/pending-edits   blocks changed in chunks this game never had loaded
+ *   PUT  /api/worlds/:id/pending-edits   … all of them, replacing what was kept
+ *   GET  /api/online/config       where the online server is (see *Online*)
+ *   POST /api/online/steam-ticket a Steam ticket for it, in the desktop app
  *
  * WebSocket — multiplayer: every `mp:*` text message goes to multiplayer.js.
  *
@@ -395,7 +399,7 @@ app.use((req, res, next) => {
     const world = `/api/worlds/${lan.worldId}`, get = req.method === 'GET', put = req.method === 'PUT';
     const ok =
         (get && (p === '/' || GUEST_FILES.test(p) || GUEST_DIRS.test(p))) ||
-        (get && ['/api/data/manifest', '/api/lan/info', '/api/settings', '/api/update-status', world, `${world}/far-edits`].includes(p)) ||
+        (get && ['/api/data/manifest', '/api/lan/info', '/api/settings', '/api/update-status', '/api/online/config', world, `${world}/far-edits`].includes(p)) ||
         ((get || put) && p === `${world}/player-state` && typeof req.query.player === 'string' && req.query.player.length > 0) ||
         (put && p === `${world}/far-edits`);
     if (!ok) return res.status(403).json({ error: 'Not for guests' });
@@ -595,6 +599,74 @@ app.put('/api/worlds/:id/far-edits', (req, res) => {
     }
     fs.writeFileSync(farEditsPath(req.params.id), JSON.stringify(all));
     res.json({ ok: true });
+});
+
+// Blocks changed in chunks the owner's game never had loaded — by another
+// player, far from the owner — kept as changes ("cx,cz" → [[voxelIndex,
+// blockId], …]) until the chunk is next loaded there, when they are put down
+// in it and it is saved whole (world.js: WorldState.pendingChanges). A guest
+// on the network saves such a chunk itself; a guest of an online game cannot
+// reach this server, and without this their building far from the host would
+// be gone when the host quit. The whole set is sent each time and replaces
+// what was kept.
+const MAX_PENDING_CHUNKS = 20000, MAX_PENDING_PER_CHUNK = 8192;
+function pendingEditsPath(id) { return path.join(worldDir(id), 'pending-edits.json'); }
+
+app.get('/api/worlds/:id/pending-edits', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    try { res.json(JSON.parse(fs.readFileSync(pendingEditsPath(req.params.id), 'utf8'))); }
+    catch { res.json({}); }
+});
+
+app.put('/api/worlds/:id/pending-edits', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const out = {};
+    let chunks = 0;
+    for (const [key, list] of Object.entries(req.body ?? {})) {
+        if (chunks >= MAX_PENDING_CHUNKS) break;
+        if (!/^-?\d{1,7},-?\d{1,7}$/.test(key) || !Array.isArray(list)) continue;
+        const clean = [];
+        for (const e of list.slice(0, MAX_PENDING_PER_CHUNK)) {
+            if (Array.isArray(e) && Number.isInteger(e[0]) && e[0] >= 0 && e[0] < CHUNK_VOLUME &&
+                Number.isInteger(e[1]) && e[1] >= 0 && e[1] <= 65535) clean.push([e[0], e[1]]);
+        }
+        if (clean.length) { out[key] = clean; chunks++; }
+    }
+    const file = pendingEditsPath(req.params.id);
+    if (chunks === 0) { try { fs.rmSync(file, { force: true }); } catch { /* nothing kept */ } }
+    else fs.writeFileSync(file, JSON.stringify(out));
+    res.json({ ok: true });
+});
+
+// ── Online ────────────────────────────────────────────────────────────────────
+// Playing over the internet goes through the online server (online/, a Colyseus
+// server run somewhere else), not through this one. All this server has to do
+// with it is tell the page where that is — WW_ONLINE_URL, or data/online.json
+// as shipped; empty means the game has no online play — and, in the desktop
+// app, fetch a Steam ticket for it: the page has no way to Steam, and the
+// launcher (which shares this process) does.
+let _onSteamTicket = null;
+
+/** Called by the launcher: `steamTicket` resolves with a fresh ticket as hex, or null. */
+export function setOnlineHandlers({ steamTicket }) { _onSteamTicket = steamTicket ?? null; }
+
+function onlineUrl() {
+    let url = process.env.WW_ONLINE_URL;
+    if (url === undefined) {
+        try { url = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'online.json'), 'utf8')).url; } catch { url = ''; }
+    }
+    url = String(url ?? '').trim().replace(/\/+$/, '');
+    // https, or this machine for a developer's own server: a token is not sent anywhere else in the clear.
+    return /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/.test(url) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/.test(url) ? url : '';
+}
+
+// A guest from the network plays in the host's copy of the game, as the host's guest: going online is not theirs to do from here.
+app.get('/api/online/config', (req, res) => res.json({ url: req.lan ? '' : onlineUrl(), version: _appVersion, steam: !req.lan && !!_onSteamTicket }));
+
+app.post('/api/online/steam-ticket', async (_req, res) => {
+    if (!_onSteamTicket) return res.json({ ticket: null });
+    try { res.json({ ticket: await _onSteamTicket() ?? null }); }
+    catch { res.json({ ticket: null }); }
 });
 
 // Global player settings

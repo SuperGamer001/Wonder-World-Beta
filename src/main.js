@@ -1064,8 +1064,8 @@ function commitSettingsFromForm(e) {
 
 function resetSettings() {
     // Who the player is — their character, their name — is not a setting to put back.
-    const { skin, playerName, clientId, profiles } = getSettings();
-    saveSettings({ ...DEFAULT_SETTINGS, skin, playerName, clientId, profiles });
+    const { skin, playerName, clientId, profiles, onlineCredential } = getSettings();
+    saveSettings({ ...DEFAULT_SETTINGS, skin, playerName, clientId, profiles, onlineCredential });
     populateSettingsForm();
     applyPlayerSettings(getSettings());
 }
@@ -1490,7 +1490,9 @@ function startWorld(world) {
         flat: world.worldType === 'flat' ? (world.flat ?? {}) : null,
         // Not this player's world (a further pane, a guest from the network):
         // their place in it is kept under their own name.
-        guest: isGuest(), stateKey: isGuest() ? guestStateKey() : '',
+        guest: isGuest() || _onlineGuest, stateKey: isGuest() ? guestStateKey() : '',
+        // An online game (src/scripts/Online.js holds its room): the session, and for a guest the world itself, come through it.
+        online: !!world.online,
         workers: PANE > 0 ? Math.max(2, Math.floor(((navigator.hardwareConcurrency || 4) - 1) / (parseInt(PARAMS.get('of')) || 2))) : 0,
         // World Settings → Daylight Cycle and Weather ('dynamic' or a held type).
         daylightCycle: world.daylightCycle !== false,
@@ -1499,7 +1501,9 @@ function startWorld(world) {
 
     startLoadingTextRotation();
     const quit = document.getElementById('pauseQuitBtn');
-    if (quit) quit.textContent = isGuest() ? 'Leave Game' : 'Save & Quit';
+    if (quit) quit.textContent = isGuest() || _onlineGuest ? 'Leave Game' : 'Save & Quit';
+    // Someone else's world: its settings are not this player's to change (game.css hides them).
+    document.body.classList.toggle('isGuest', isGuest() || _onlineGuest);
 
     // Start ticking now so terrain generates/meshes *behind* the loading screen.
     // We reveal the world from ww_loadProgress once enough chunks have rendered;
@@ -2412,6 +2416,9 @@ async function leaveWorld(over = false) {
     stopLoadingTextRotation();
     if (document.pointerLockElement) document.exitPointerLock();
     callWorldJS("quitWorld");
+    // Out of an online game somebody else hosted: this player is their own again.
+    _onlineGuest = false;
+    document.body.classList.toggle('isGuest', isGuest());
     DOM.gameScreen.classList.add("hidden");
     DOM.pauseScreen.classList.add("hidden");
     DOM.deathScreen?.classList.add("hidden");

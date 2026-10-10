@@ -22,6 +22,9 @@
     "dist:mac": "electron-builder --mac",
     "test": "node test/chunkdata.test.mjs && node test/mobai.test.mjs && node test/physics.test.mjs && node test/mesher.test.mjs && node test/smooth.test.mjs && node test/light.test.mjs && node test/visibility.test.mjs && node test/weather.test.mjs && node test/worker.test.mjs && node test/terrain.test.mjs && node test/chunkmanager.test.mjs && node test/persistence.test.mjs && node test/multiplayer.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
     "test:smoke": "node test/smoke.mjs && node test/update-ui.test.mjs",
+    "online": "npm --prefix online start",
+    "test:online": "npm --prefix online test",
+    "test:online:e2e": "node test/online.smoke.mjs",
     "bench:load": "node test/loadbench.mjs",
     "bench:pipeline": "node test/pipelinebench.mjs",
     "bench:render": "node test/renderbench.mjs",
@@ -34,6 +37,7 @@
     "shots": "node test/terrainshots.mjs"
   },
   "dependencies": {
+    "@colyseus/sdk": "^0.18.5",
     "cors": "^2.8.5",
     "electron-updater": "^6.8.9",
     "express": "^4.21.2",

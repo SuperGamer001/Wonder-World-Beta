@@ -1,3 +1,4 @@
 */node_modules
 /node_modules
-/dist.ui-shots/
+/dist
+.ui-shots/

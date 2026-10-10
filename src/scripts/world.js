@@ -22,7 +22,7 @@ import { WorldState }                        from './engine/WorldState.js';
 import { WorkerPool }                        from './engine/WorkerPool.js';
 import { ChunkManager }                      from './engine/ChunkManager.js';
 import { WorldClient }                       from './engine/WorldClient.js';
-import { CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, CHUNK_SHIFT } from './engine/ChunkData.js';
+import { ChunkData, CHUNK_SIZE, CHUNK_SIZE_Y, WORLD_MIN_Y, CHUNK_SHIFT } from './engine/ChunkData.js';
 import { PlayerPhysics }                     from './engine/PlayerPhysics.js';
 import { Inventory }                         from './engine/Inventory.js';
 import { raycast }                           from './engine/Raycast.js';
@@ -48,6 +48,9 @@ import { sound }                             from './Sound.js';
 import { GameSounds }                        from './GameSounds.js';
 import { PlayerModel, DEFAULT_SKIN }         from './PlayerModel.js';
 import { Multiplayer }                       from './engine/Multiplayer.js';
+import { online }                            from './Online.js';
+import { packChunk, packEdits }              from './engine/net/ChunkCodec.js';
+import { ChunkStatus }                       from './engine/net/OnlineProtocol.js';
 import { RemotePlayers, packState }          from './Players.js';
 
 // The page is served by the game server itself, so derive both URLs from the
@@ -92,6 +95,10 @@ let _others      = null;   // RemotePlayers — the other players, as drawn here
 let _loadToken   = 0;      // which load of a world is the one wanted (startWorldLoad)
 let _guest       = false;  // this world is someone else's: our own state file, and no say over the world
 let _stateKey    = '';     // … and which file that is (the server's ?player=)
+let _remote      = false;  // … and on a machine this one cannot reach: an online game (see *Online*, below)
+let _gamepack    = null;   // the gamepack data the world was loaded with (its fingerprint goes to the online server)
+let _reader      = null;   // WorldClient — the host's own line for reading saved chunks for its online guests
+let _pendingSig  = '';     // what of pendingChanges the server was last sent (see _savePendingEdits)
 let _autoSaveTimer = null;
 let _wasLocked     = false;
 
@@ -1119,7 +1126,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
         gamepackData = {}, worldId = null, worldSeed = null,
         playerPos = null, gameMode = 'SURVIVAL', terrainStyle = 'blocky',
         daylightCycle = true, weather = 'dynamic', worldGen = 1, flat = null,
-        guest = false, stateKey = '', workers = 0,
+        guest = false, stateKey = '', workers = 0, online: viaOnline = false,
     } = e.data ?? {};
     // A load takes a few seconds and waits on the network, the workers and the
     // textures; the world can be left, and another begun, while it does. Each
@@ -1127,6 +1134,10 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     const token = ++_loadToken, stale = () => token !== _loadToken;
     _guest = !!guest;
     _stateKey = _guest ? String(stateKey || 'guest') : '';
+    // An online game somebody else hosts: the room is in hand already (Online.js), and it is the only way to the world.
+    _remote = !!viaOnline && !!online.session && online.remote;
+    _gamepack = gamepackData;
+    _pendingSig = '';
 
     _gameMode = gameMode;
     _terrainStyle = terrainStyle === 'smooth' ? 'smooth' : 'blocky';
@@ -1211,7 +1222,17 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     chunkManager.onLightReady       = _onLightReady;
     chunkManager.onChunkUnload      = _onChunkUnload;
 
-    if (worldId) {
+    if (worldId && _remote) {
+        // The host's world: its chunks, and this player's place in it, come through the room.
+        worldClient = online.worldClient(worldState);
+        await worldClient.fetchManifest();
+        if (stale()) return;
+        chunkManager.worldClient = worldClient;
+        _autoSaveTimer = setInterval(() => { _saveAll(); _savePlayerState(); }, AUTO_SAVE_MS);
+        const state = await online.session?.loadState();
+        if (stale()) return;
+        if (state) _applyPlayerState(state);
+    } else if (worldId) {
         worldClient = new WorldClient(WS_URL);
         try {
             await worldClient.connect();
@@ -1234,6 +1255,8 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
                 if (!_guest) _savedAtmos = state?.atmosphere ?? null;
             }
         } catch { /* server offline */ }
+        // What other players changed in chunks this game never had loaded, last time.
+        if (!_guest) await _loadPendingEdits(worldId);
     }
 
     if (stale() || !_physics) return; // guard if quitWorld raced
@@ -1244,7 +1267,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     // as each chunk arrives, and has to be known by then.
     let hostAt = null;
     if (worldId) {
-        const welcome = await _joinSession(worldId);
+        const welcome = await _joinSession(worldId, viaOnline ? online.session : null);
         if (stale() || !_physics) return;
         if (welcome && !_mp.isHost) {
             if (welcome.atmos) _savedAtmos = welcome.atmos;
@@ -1263,7 +1286,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     _far.setDistance(_farExtra);
     _applyViewDistance();
     _farEditsOut = new Map();
-    if (worldId) _loadFarEdits(worldId);
+    if (worldId && !_remote) _loadFarEdits(worldId);
 
     // Time of day and weather: carried on from the save, with the world's
     // Daylight Cycle and Weather settings from its world.json.
@@ -1413,7 +1436,10 @@ document.addEventListener('WorldJS_quitWorld', () => {
     // Release mob geometries, sprite materials and item textures before the
     // scene is torn down; these are GPU-side and are not reclaimed by GC alone.
     _mp?.close();
+    if (_mp && _mp === online.session) online.release();
     _mp = null;
+    _reader?.close();
+    _reader = null;
     _others?.dispose();
     _others = null;
     _playerModel?.dispose();
@@ -2952,7 +2978,7 @@ function _summariseEdited(key) {
 
 /** Send the summaries made since the last save to the server. */
 function _saveFarEdits() {
-    if (!chunkManager?.worldId || _farEditsOut.size === 0) return;
+    if (!chunkManager?.worldId || _remote || _farEditsOut.size === 0) return;
     const body = {};
     for (const [key, bytes] of _farEditsOut) body[key] = btoa(String.fromCharCode(...bytes));
     _farEditsOut = new Map();
@@ -3198,11 +3224,14 @@ function _disposeAll() {
 
 function _saveAll() {
     if (!(chunkManager?.worldId && worldClient?.connected)) return;
+    // Someone else's world, online: the host's game keeps it. This only notes which chunks to ask the host for again.
+    if (_remote) { chunkManager.saveAll(); return; }
 
     const client = worldClient;   // capture — quitWorld may null worldClient mid-save
     window.dispatchEvent(new CustomEvent('ww_saving', { detail: { active: true } }));
 
     chunkManager.saveAll();   // queues the batch onto the WebSocket send buffer
+    if (!_guest) _savePendingEdits();
     for (const key of [...worldState.edited]) _summariseEdited(key);
     _saveFarEdits();
     if (!_guest) _saveScreenshot(chunkManager.worldId);
@@ -3517,6 +3546,7 @@ async function _savePlayerState() {
         // The clock and the weather are the world's, kept with its owner.
         atmosphere: !_guest && _atmos?.active ? _atmos.toJSON() : null,
     };
+    if (_remote) { online.session?.saveState(state); return; }
     try {
         await fetch(_stateUrl(chunkManager.worldId), {
             // It must outlive the page: a split screen's pane is taken away as its player leaves.
@@ -3610,9 +3640,12 @@ function _playerCasters() {
     _entities.extraCasters = [(out, o) => _playerModel?.caster(out, o), ...(_others?.casters() ?? [])];
 }
 
-/** Join the world's session; resolves with the server's welcome, or null (no server: playing alone and unseen). */
-async function _joinSession(worldId) {
-    const mp = _mp = new Multiplayer(WS_URL);
+/**
+ * Join the world's session; resolves with the server's welcome, or null (no server: playing alone and unseen).
+ * `session`: an online room already in hand (Online.js) instead of the game's own server — see *Online*, below.
+ */
+async function _joinSession(worldId, session = null) {
+    const mp = _mp = session ?? new Multiplayer(WS_URL);
     mp.onJoined = (p) => {
         _others?.add(p);
         _playerCasters();
@@ -3628,6 +3661,9 @@ async function _joinSession(worldId) {
     mp.onState = (id, s) => _others?.state(id, s);
     mp.onProfile = (p) => _others?.profile(p);
     mp.onBlock = (x, y, z, b) => _applyRemoteBlock(x, y, z, b);
+    // The online server would not have a block this game changed: back it goes.
+    mp.onBlockRejected = (x, y, z, was) => _applyRemoteBlock(x, y, z, was, true);
+    mp.onDown = (down) => _notice(down ? 'Connection lost — reconnecting…' : 'Reconnected');
     mp.onAtmos = (a) => { if (!mp.isHost) _atmos?.sync(a); };
     mp.onMsg = (from, d) => {
         switch (d?.t) {
@@ -3650,6 +3686,13 @@ async function _joinSession(worldId) {
     };
     mp.onClosed = (reason) => {
         if (_mp !== mp) return;
+        if (mp.online && !_guest) {
+            // The host's own online room has gone (the server restarted, the line was lost for good):
+            // the world is here and plays on, back on the game's own server.
+            goOffline().catch(() => { /* playing alone and unseen */ });
+            window.dispatchEvent(new CustomEvent('ww_onlineEnded', { detail: { reason } }));
+            return;
+        }
         window.dispatchEvent(new CustomEvent('ww_sessionClosed', { detail: { reason } }));
     };
 
@@ -3658,8 +3701,10 @@ async function _joinSession(worldId) {
     if (!welcome) { _mp = null; return null; }
     if (!_entities || !worldState) return welcome;
 
-    worldState.onSet = (x, y, z, id) => { if (!_mpApplying) mp.block(x, y, z, id); };
+    // (onSet is called before the block is changed, so getBlock still says what it was.)
+    worldState.onSet = (x, y, z, id) => { if (!_mpApplying) mp.block(x, y, z, id, worldState.getBlock(x, y, z)); };
     for (let i = 0, e = welcome.edits ?? []; i + 3 < e.length; i += 4) _applyRemoteBlock(e[i], e[i + 1], e[i + 2], e[i + 3], true);
+    _others?.dispose();
     _others = new RemotePlayers(scene, _entities.models);
     for (const p of welcome.players ?? []) _others.add(p);
     _playerCasters();
@@ -3668,6 +3713,7 @@ async function _joinSession(worldId) {
     _entities.onRemoteHit = (id, dmg) => mp.host({ t: 'hit', id, dmg });
     _entities.onRemoteAttack = (pid, dmg) => mp.to(pid, { t: 'attack', dmg });
     _entities.onRemoteDrops = (pid, pos, items) => mp.to(pid, { t: 'drops', pos, items });
+    if (mp.online && mp.isHost) _serveGuests(mp);
     return welcome;
 }
 
@@ -3679,7 +3725,8 @@ function _mpTick(dt) {
         _others.update(dt, _lightAt, _atmos?.state.lightDir ?? null, _gfx.shadows !== 'off');
         if (_entities) _entities.others = _others.positions(_otherPos);
     }
-    if (mp.alone) return;
+    // Online, where this player is is said even alone: the server judges a block by where its player stands.
+    if (mp.alone && !mp.online) return;
     _mpStateT -= dt;
     if (_mpStateT <= 0) {
         _mpStateT = 1 / STATE_HZ;
@@ -3688,7 +3735,7 @@ function _mpTick(dt) {
             hidden: _gameMode === 'SPECTATOR' || _spawnPending, swings: _swings, hurt: Math.min(1, _damageFade * 1.5),
         }));
     }
-    if (!mp.isHost || !_entities) return;
+    if (mp.alone || !mp.isHost || !_entities) return;
     _mpMobT -= dt;
     if (_mpMobT <= 0) {
         _mpMobT = MOB_SEND;
@@ -3707,6 +3754,158 @@ window.__wwPlayers = () => !_mp || _mp.id === 0 ? [] : [
     { id: _mp.id, name: _playerName || 'You', you: true, host: _mp.isHost },
     ...[..._mp.players.values()].map(p => ({ id: p.id, name: p.name, you: false, host: p.id === _mp.hostId })),
 ];
+
+// ── Online ────────────────────────────────────────────────────────────────────
+//
+// A world can be opened to players over the internet (the Players panel). Then
+// its session is a room on the online server (online/, Colyseus) instead of on
+// the game's own: `_mp` is an OnlineSession (engine/net/), which world.js uses
+// exactly as it does Multiplayer. Three things differ, and they are all here:
+//
+//   • Going online and coming back are a change of session in a world that is
+//     already running (`goOnline` / `goOffline`): the host stays the host.
+//   • A guest's machine cannot reach the host's, so the host's game answers
+//     for its world (`_serveGuests`): which chunks it has data for, each of
+//     them, and each guest's saved place — kept on this machine, with the
+//     world, under a key the server gives.
+//   • Blocks other players change in chunks this game never loads are kept
+//     with the world (`_savePendingEdits`) until it does: a guest of an online
+//     game cannot save a chunk here itself, as a guest on the network does.
+
+/** Answer the room for this world: the host's game, for its guests. */
+function _serveGuests(session) {
+    const worldId = chunkManager?.worldId;
+    const stateUrl = (key) => `${SERVER_URL}/api/worlds/${worldId}/player-state?player=online-${key}`;
+    const KEY = /^[A-Za-z0-9_-]{8,40}$/;
+    const reading = new Map();
+
+    /** A saved chunk, read on a line of its own (worldClient's is the game's, one request a chunk). */
+    function readSaved(cx, cz) {
+        const key = `${cx},${cz}`;
+        let job = reading.get(key);
+        if (!job) {
+            job = (async () => {
+                if (!_reader) { _reader = new WorldClient(WS_URL); await _reader.connect(); }
+                return _reader.loadChunk(worldId, cx, cz);
+            })().catch(() => null).finally(() => reading.delete(key));
+            reading.set(key, job);
+        }
+        return job;
+    }
+
+    session.serve.manifest = async () => {
+        // Every chunk this game has anything for: saved, or changed and not saved yet. All others are as the seed makes them.
+        const keys = new Set(worldState.pendingChanges.keys());
+        for (const key of worldClient?._savedChunks ?? []) keys.add(key);
+        if (!worldClient?.savedKeys) for (const key of worldState.chunks.keys()) keys.add(key);     // not sure what is saved: say all
+        return { keys: [...keys].slice(0, 60000) };
+    };
+
+    session.serve.chunk = async ({ cx, cz }) => {
+        if (!worldState || !Number.isInteger(cx) || !Number.isInteger(cz)) return { s: ChunkStatus.NONE };
+        const key = `${cx},${cz}`;
+        const live = worldState.chunks.get(key);
+        if (live?.generated) return { s: ChunkStatus.DATA, d: await packChunk(live) };
+        const pending = worldState.pendingChanges.get(key);
+        const saved = worldClient?._savedChunks?.has(key) !== false ? await readSaved(cx, cz) : null;
+        if (saved && pending?.size) {
+            // Saved, and changed since by someone while it was not loaded here: both.
+            const chunk = ChunkData.deserialize(cx, cz, saved);
+            chunkManager?._applyPendingChanges(chunk, cx, cz);
+            return { s: ChunkStatus.DATA, d: await packChunk(chunk) };
+        }
+        if (saved) return { s: ChunkStatus.DATA, d: await packChunk(saved) };
+        if (pending?.size) return { s: ChunkStatus.EDITS, d: packEdits(pending) };
+        return { s: ChunkStatus.NONE };
+    };
+
+    session.serve.pload = async ({ key }) => {
+        if (!KEY.test(key ?? '')) return { state: null };
+        const res = await fetch(stateUrl(key));
+        return { state: res.ok ? await res.json() : null };
+    };
+
+    session.serve.psave = async ({ key, state }) => {
+        if (!KEY.test(key ?? '') || !state || typeof state !== 'object') return {};
+        await fetch(stateUrl(key), { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(state) });
+        return {};
+    };
+}
+
+/** The changes waiting for chunks that are not loaded here, to the server — when they have changed. */
+function _savePendingEdits() {
+    const worldId = chunkManager?.worldId;
+    if (!worldId || !worldState) return;
+    const body = {};
+    let n = 0;
+    for (const [key, changes] of worldState.pendingChanges) {
+        if (changes.size === 0 || worldState.chunks.has(key)) continue;       // loaded: it is saved as a chunk
+        body[key] = [...changes];
+        n += changes.size;
+    }
+    const sig = `${Object.keys(body).length}:${n}`;
+    if (sig === _pendingSig || (sig === '0:0' && _pendingSig === '')) return;
+    _pendingSig = sig;
+    const text = JSON.stringify(body);
+    fetch(`${SERVER_URL}/api/worlds/${worldId}/pending-edits`, {
+        method: 'PUT', keepalive: text.length < 60000, headers: { 'Content-Type': 'application/json' }, body: text,
+    }).catch(() => { /* offline */ });
+}
+
+/** … and back, when the world is next loaded: they are put down as each chunk arrives. */
+async function _loadPendingEdits(worldId) {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/worlds/${worldId}/pending-edits`);
+        if (!res.ok || !worldState) return;
+        let chunks = 0, n = 0;
+        for (const [key, list] of Object.entries(await res.json())) {
+            if (!Array.isArray(list) || worldState.pendingChanges.has(key)) continue;
+            worldState.pendingChanges.set(key, new Map(list));
+            chunks++; n += list.length;
+        }
+        _pendingSig = chunks ? `${chunks}:${n}` : '';
+    } catch { /* offline, or a world from before this */ }
+}
+
+/**
+ * Open this world to players over the internet: the session moves from the
+ * game's own server to a room on the online one, and this game hosts it.
+ * Resolves with the room's code. Throws OnlineError (its `reason` is why).
+ * @param {object} world  the world's world.json (main.js: activeWorld)
+ */
+async function goOnline(world) {
+    if (!worldState || !chunkManager?.worldId || _guest || !_entities) throw new Error('no world to open');
+    if (_mp?.online) return _mp.code;
+    const session = await online.host(world, { name: _playerName, skin: _skin, slot: 0, gamepack: _gamepack });
+    if (!worldState) { online.release(); throw new Error('the world was left'); }
+    // Whoever was in the game through this machine's own server (a split screen, the network) is told it is over there.
+    const old = _mp;
+    _mp = null;
+    old?.close();
+    await _joinSession(chunkManager.worldId, session);
+    _mpStateT = _mpMobT = _mpAtmosT = 0;
+    return session.code;
+}
+
+/** Close the room and go back to the game's own server. */
+async function goOffline() {
+    if (!_mp?.online) return;
+    const worldId = chunkManager?.worldId;
+    _mp = null;
+    online.release();
+    _others?.dispose();
+    _others = null;
+    _playerCasters();
+    if (worldId && worldState && !_remote) await _joinSession(worldId);
+}
+
+window.__wwWorld = {
+    goOnline, goOffline,
+    /** What the Players panel shows: whether this world is online, its code, and whose it is. */
+    online: () => _mp?.online ? { code: _mp.code, host: _mp.isHost, edition: _mp.edition, down: _mp.down, players: _mp.players.size + 1 } : null,
+    kick: (id) => _mp?.online && _mp.kick(id),
+    lock: (locked) => _mp?.online && _mp.lock(locked),
+};
 
 // ── Sounds ────────────────────────────────────────────────────────────────────
 

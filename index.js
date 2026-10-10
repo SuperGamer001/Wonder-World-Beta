@@ -55,17 +55,25 @@
         padTaken: (i) => panes.some(p => p.pad === i && !p.going),
         names: () => panes.filter(p => !p.going).map(p => p.name).filter(Boolean),
 
-        /** Another player, on controller `pad`, into world `worldId`. `taken`: the names in use. */
-        add(pad, worldId, taken = []) {
+        /**
+         * Another player, on controller `pad`, into world `worldId`. `taken`: the names in use.
+         * `online`: the code of the online room the first player's game is in, if it is in one —
+         * the new player joins that, as a further player of this machine (`slot`).
+         */
+        add(pad, worldId, taken = [], online = '') {
             if (this.count() >= MAX || this.padTaken(pad)) return 0;
             const id = nextId++;
+            // The lowest of slots 1–3 that no pane has: a pane's id only ever goes up, a slot is used again.
+            let slot = 1;
+            while (panes.some(p => p.slot === slot && !p.going)) slot++;
             const frame = document.createElement('iframe');
             frame.className = 'pane';
             frame.allow = ALLOW;
             frame.src = `game.html?pane=${id}&pad=${pad}&world=${encodeURIComponent(worldId)}` +
-                        `&taken=${encodeURIComponent(taken.join('|'))}&of=${2 + panes.length}`;
+                        `&taken=${encodeURIComponent(taken.join('|'))}&of=${2 + panes.length}&slot=${slot}` +
+                        (online ? `&online=${encodeURIComponent(online)}` : '');
             stage.appendChild(frame);
-            panes.push({ id, frame, pad, name: null });
+            panes.push({ id, frame, pad, slot, name: null });
             layout();
             requestAnimationFrame(layout);
             return id;
