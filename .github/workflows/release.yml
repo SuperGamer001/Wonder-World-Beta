@@ -113,15 +113,20 @@ jobs:
           # Globs overlap (*.exe.blockmap also matches *.blockmap), so dedupe —
           # gh rejects the same asset twice. Skip the NSIS uninstaller stub and
           # build diagnostics, which are not release assets.
-          declare -A seen=()
+          # No associative array for the dedupe: macOS runners have bash 3.2,
+          # which has none ("declare: -A: invalid option"). The names seen are
+          # kept in one string, each between slashes — a file name has none.
+          seen="/"
           files=()
           for f in dist/*.exe dist/*.dmg dist/*.zip dist/*.blockmap dist/*.yml; do
             base=$(basename "$f")
             case "$base" in
               builder-debug.yml|*__uninstaller*) continue ;;
             esac
-            [ -n "${seen[$base]:-}" ] && continue
-            seen[$base]=1
+            case "$seen" in
+              */"$base"/*) continue ;;
+            esac
+            seen="$seen$base/"
             files+=("$f")
           done
           if [ ${#files[@]} -eq 0 ]; then
