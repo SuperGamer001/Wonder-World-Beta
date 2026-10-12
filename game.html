@@ -649,9 +649,16 @@
                 </div>
                 <div class="formNote" id="lanNote"></div>
             </div>
-            <!-- Over the internet, through the online server (src/scripts/Online.js): shown where the game has one. -->
+            <!-- Over the internet, through Ably (src/scripts/Online.js): shown where this copy of the game has online play. -->
             <div id="onlineSection" class="hidden">
                 <div class="settingsSectionTitle">Online</div>
+                <div class="settingsRow" id="onlineWhoRow">
+                    <span class="settingsLabel">Who can join</span>
+                    <select class="seg" id="onlineVisibility">
+                        <option value="private">Whoever has the code</option>
+                        <option value="public">Anyone</option>
+                    </select>
+                </div>
                 <div class="settingsRow" id="onlineRow">
                     <span class="settingsLabel">Open online</span>
                     <label class="settingsToggle"><input type="checkbox" id="onlineOpenToggle"><span class="track"></span></label>
@@ -664,23 +671,36 @@
         </div>
     </div>
 
-    <!-- ── Join a game on the network (world list) ────────────────────────── -->
+    <!-- ── Join a game (world list): first where it is, then which ────────────── -->
     <div class="scrim hidden" id="LanJoinModal">
         <div class="panel popup wide">
-            <div class="popupTitle">Join a game</div>
-            <div id="lanGameList" class="nameList"></div>
-            <div class="formGrid hidden" id="onlineJoinRow">
-                <label class="formLabel" for="onlineJoinCode">An online game's code<small>on the host's Players panel</small></label>
-                <input class="worldFormInput" id="onlineJoinCode" type="text" placeholder="ABCD-EFGH" maxlength="12" autocomplete="off" spellcheck="false">
+            <div class="popupTitle" id="joinTitle">Join a game</div>
+            <!-- Where the game is. -->
+            <div id="joinChoose" class="joinChoose">
+                <div class="menuButton joinWay" id="joinLanWayBtn"><b>On your network</b><small>A game open on a computer on the same network as this one</small></div>
+                <div class="menuButton joinWay" id="joinOnlineWayBtn"><b>Online</b><small id="joinOnlineWayNote">A public game, or a friend’s game with its code</small></div>
             </div>
-            <div class="formGrid">
-                <label class="formLabel" for="lanJoinAddress">Or its address<small>on the host's Players panel</small></label>
-                <input class="worldFormInput" id="lanJoinAddress" type="text" placeholder="192.168.1.20:25599" maxlength="60" autocomplete="off" spellcheck="false">
+            <!-- On the network: the games that are open on it. -->
+            <div id="joinLanView" class="joinView hidden">
+                <div id="lanGameList" class="nameList"></div>
+            </div>
+            <!-- Online: the public games, or a private one by its code. -->
+            <div id="joinOnlineView" class="joinView hidden">
+                <div class="roomsHead">
+                    <div class="settingsSectionTitle">Public games</div>
+                    <div class="menuButton small quiet" id="onlineRoomsRefresh">Refresh</div>
+                </div>
+                <div id="onlineRoomList" class="nameList"></div>
+                <div class="settingsSectionTitle">A private game</div>
+                <div class="codeRow">
+                    <label class="formLabel" for="onlineJoinCode">Its code<small>on the host’s Players panel</small></label>
+                    <input class="worldFormInput" id="onlineJoinCode" type="text" placeholder="ABCD-EFGH" maxlength="12" autocomplete="off" spellcheck="false">
+                    <div class="menuButton primary small" id="onlineJoinGoBtn">Join</div>
+                </div>
             </div>
             <div class="formNote" id="lanJoinNote"></div>
             <div class="popupButtons">
                 <div class="menuButton" id="lanJoinCloseBtn">Back</div>
-                <div class="menuButton primary" id="lanJoinGoBtn">Join</div>
             </div>
         </div>
     </div>

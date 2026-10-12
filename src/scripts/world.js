@@ -3871,11 +3871,12 @@ async function _loadPendingEdits(worldId) {
  * game's own server to a room on the online one, and this game hosts it.
  * Resolves with the room's code. Throws OnlineError (its `reason` is why).
  * @param {object} world  the world's world.json (main.js: activeWorld)
+ * @param {{ visibility?: 'private'|'public' }} [o]  public: listed for anyone to join
  */
-async function goOnline(world) {
+async function goOnline(world, { visibility = 'private' } = {}) {
     if (!worldState || !chunkManager?.worldId || _guest || !_entities) throw new Error('no world to open');
     if (_mp?.online) return _mp.code;
-    const session = await online.host(world, { name: _playerName, skin: _skin, slot: 0, gamepack: _gamepack });
+    const session = await online.host(world, { name: _playerName, skin: _skin, slot: 0, gamepack: _gamepack }, { visibility });
     if (!worldState) { online.release(); throw new Error('the world was left'); }
     // Whoever was in the game through this machine's own server (a split screen, the network) is told it is over there.
     const old = _mp;
@@ -3901,7 +3902,7 @@ async function goOffline() {
 window.__wwWorld = {
     goOnline, goOffline,
     /** What the Players panel shows: whether this world is online, its code, and whose it is. */
-    online: () => _mp?.online ? { code: _mp.code, host: _mp.isHost, down: _mp.down, players: _mp.players.size + 1 } : null,
+    online: () => _mp?.online ? { code: _mp.code, host: _mp.isHost, down: _mp.down, players: _mp.players.size + 1, visibility: _mp.visibility } : null,
     kick: (id) => _mp?.online && _mp.kick(id),
     lock: (locked) => _mp?.online && _mp.lock(locked),
 };

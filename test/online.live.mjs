@@ -12,10 +12,13 @@
 import Ably from 'ably';
 import { createAuth } from '../online/auth.js';
 import { OnlineSession, OnlineAuth } from '../src/scripts/engine/net/OnlineSession.js';
-import { channels, ChunkStatus, PART_BYTES, RATE } from '../src/scripts/engine/net/OnlineProtocol.js';
+import { channels, ChunkStatus, PART_BYTES, RATE, LOBBY } from '../src/scripts/engine/net/OnlineProtocol.js';
 
 const KEY = process.env.WW_ABLY_KEY;
 if (!KEY) { console.error('Set WW_ABLY_KEY to an Ably API key (online/README.md). Nothing was run.'); process.exit(2); }
+
+// Ably's SDK also rejects, unheard, when a channel a test tried on purpose is refused: that refusal is the point.
+process.on('unhandledRejection', (e) => { if (e?.code !== 40160) { console.error(e); process.exit(1); } });
 
 let failures = 0;
 function check(name, ok, detail = '') {
@@ -145,6 +148,33 @@ try {
     check('when the host closes the game its guest is told at once', await until(() => ivy.closed === 'host', 8000, 'the goodbye'), String(ivy.closed));
     await sleep(1500);
     check('… and the code is no game any more', (await failure(game('Kay').s.enter(host.s.code, host.hello)))?.reason === 'code');
+
+    // Public games: the lobby, and the list the token service reads from Ably with the key.
+    const rooms = async () => { await sleep(3200); return (await service.respond({ method: 'GET', path: '/rooms', ip: 'live' })).body?.rooms ?? null; };
+    const pub = game('Pat'), priv = game('Pia'), ann = game('Ann');
+    await pub.s.open(pub.hello, { ...WORLD, name: 'Open House' }, 4, { visibility: 'public' });
+    await priv.s.open(priv.hello, WORLD);
+    let listed = await rooms();
+    check('a public game is in the list the service reads from Ably, as its host describes it; a private one is not',
+        JSON.stringify(listed?.filter(r => r.code === pub.s.code)) === JSON.stringify([{ code: pub.s.code, name: 'Open House', host: 'Pat', players: 1, max: 4, mode: 'SURVIVAL', flat: false }]) &&
+        !listed.some(r => r.code === priv.s.code), JSON.stringify(listed));
+    await ann.s.enter(listed.find(r => r.code === pub.s.code).code, ann.hello);
+    await until(() => pub.s.players.size === 1, 5000, 'the guest');
+    listed = await rooms();
+    check('it is joined with the code the list gave, and the list counts its players', listed?.find(r => r.code === pub.s.code)?.players === 2, JSON.stringify(listed));
+    const lobbyTries = {
+        "a private room's host cannot stand in the lobby": () => priv.s._rt.channels.get(LOBBY, { modes: ['PRESENCE'] }).presence.enter({ code: priv.s.code }),
+        'a guest cannot stand in the lobby': () => ann.s._rt.channels.get(LOBBY, { modes: ['PRESENCE'] }).presence.enter({ code: pub.s.code }),
+        'a public host cannot read the lobby or speak in it': () => pub.s._rt.channels.get(LOBBY, { modes: ['PRESENCE'] }).publish('x', {}),
+    };
+    for (const [what, attempt] of Object.entries(lobbyTries)) {
+        const e = await Promise.race([failure(attempt()), sleep(6000).then(() => ({ code: 'no answer' }))]);
+        check(`Ably agrees: ${what}`, e?.code === 40160, `code ${e?.code ?? 'none: it was allowed'}`);
+    }
+    pub.s.close();
+    await sleep(1500);
+    listed = await rooms();
+    check('a public game that has ended is gone from the list', !!listed && !listed.some(r => r.code === pub.s.code), JSON.stringify(listed));
 } catch (e) {
     check('the run finished', false, e?.stack ?? String(e));
 }

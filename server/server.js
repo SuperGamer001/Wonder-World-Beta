@@ -21,7 +21,7 @@
  *   GET  /api/worlds/:id/pending-edits   blocks changed in chunks this game never had loaded
  *   PUT  /api/worlds/:id/pending-edits   … all of them, replacing what was kept
  *   GET  /api/online/config       where the online token service is (see *Online*)
- *   POST /api/online/auth/host | token   … which is this server, on a developer's machine (WW_ABLY_KEY)
+ *   POST /api/online/auth/host | token, GET …/rooms   … which is this server, on a developer's machine (WW_ABLY_KEY)
  *
  * WebSocket — multiplayer: every `mp:*` text message goes to multiplayer.js.
  *
@@ -654,7 +654,8 @@ async function onlineAuth() {
     if (!process.env.WW_ABLY_KEY) return null;
     if (_onlineAuth?.key !== process.env.WW_ABLY_KEY) {
         const { createAuth } = await import('../online/auth.js');
-        _onlineAuth = { key: process.env.WW_ABLY_KEY, auth: createAuth({ key: process.env.WW_ABLY_KEY }) };
+        // (WW_ABLY_REST: where Ably's REST API is, for a test that stands in for it.)
+        _onlineAuth = { key: process.env.WW_ABLY_KEY, auth: createAuth({ key: process.env.WW_ABLY_KEY, ...(process.env.WW_ABLY_REST ? { ablyRest: process.env.WW_ABLY_REST } : {}) }) };
     }
     return _onlineAuth.auth;
 }
@@ -677,7 +678,8 @@ app.get('/api/online/config', (req, res) => res.json({ auth: req.lan ? '' : onli
 app.all('/api/online/auth/:op', async (req, res) => {
     const auth = req.lan ? null : await onlineAuth().catch(() => null);
     if (!auth) return res.status(404).json({ error: 'Not found' });
-    const r = await auth.respond({ method: req.method, path: req.path, origin: req.get('origin') ?? '', body: req.body, ip: req.socket.remoteAddress ?? '' });
+    const r = await auth.respond({ method: req.method, path: req.path, origin: req.get('origin') ?? '', body: req.body, ip: req.socket.remoteAddress ?? '',
+        query: Object.fromEntries(Object.entries(req.query).filter(([, v]) => typeof v === 'string')) });
     res.status(r.status).set(r.headers);
     if (r.body === null) res.end(); else res.json(r.body);
 });

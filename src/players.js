@@ -415,8 +415,7 @@ async function _refreshPlayers() {
             : net ? 'This world is online. Close it there to open it to your network instead.'
             : !open ? 'Lets other computers on your network join this world.'
             : !st.addresses.length ? 'Open — but this computer is not on a network.'
-            : `Others on your network can join from <b>Play → Join a game</b>, or by opening this address in a browser:<br>` +
-              st.addresses.map(a => `<span class="lanAddress">http://${escapeHtml(a)}</span>`).join(' ');
+            : 'Open. Others on your network can join from <b>Play → Join a game → On your network</b>.';
     }
     // Online: the host's to open, where this copy of the game has an online server to open it on.
     const available = !!(await window.__wwOnline?.available().catch(() => false));
@@ -425,12 +424,18 @@ async function _refreshPlayers() {
         const toggle = document.getElementById('onlineOpenToggle');
         document.getElementById('onlineRow').classList.toggle('hidden', !own);
         if (toggle && document.activeElement !== toggle && !_onlineBusy) toggle.checked = !!net;
+        // Who can join is chosen before the game is opened; open, it is what it was opened as.
+        document.getElementById('onlineWhoRow').classList.toggle('hidden', !own || !!net || _onlineBusy);
+        const open = document.getElementById('onlineVisibility').value === 'public';
         const note = document.getElementById('onlineNote');
         if (_onlineBusy) note.textContent = 'One moment…';
-        else if (!net) note.textContent = 'Lets anyone you give the code to join this world over the internet.';
+        else if (!net) note.textContent = open ? 'Lists this world under Play → Join a game → Online, for anyone to join.'
+                                               : 'Lets anyone you give the code to join this world over the internet.';
         else {
             const code = window.__wwOnline.showCode(net.code);
-            note.innerHTML = (net.host ? 'Others can join from <b>Play → Join a game</b> with this code:' : 'You are in an online game. Its code:') +
+            note.innerHTML = (!net.host ? 'You are in an online game. Its code:'
+                    : net.visibility === 'public' ? 'This game is public: anyone can join it from <b>Play → Join a game → Online</b>. A friend can also use its code:'
+                    : 'Others can join from <b>Play → Join a game → Online</b> with this code:') +
                 `<br><span class="lanAddress" id="onlineCode">${escapeHtml(code)}</span>` +
                 (net.down ? '<br>The connection was lost: reconnecting…' : '');
         }
@@ -444,7 +449,7 @@ async function setOnlineOpen(on) {
     _onlineBusy = true;
     _refreshPlayers();
     try {
-        if (on) await window.__wwWorld.goOnline(activeWorld);
+        if (on) await window.__wwWorld.goOnline(activeWorld, { visibility: document.getElementById('onlineVisibility').value });
         else await window.__wwWorld.goOffline();
         // Done (had it failed, nothing would have changed). The players who were in this game through this
         // machine — a split screen, the network — were in its old session, which is over: they join again.
@@ -491,48 +496,107 @@ function _watchForJoiners() {
     }
 }
 
-// ── Joining a game on the network (world list) ───────────────────────────────
+// ── Joining a game (world list): where it is, then which ──────────────────────
 
-let _lanGamesTimer = 0;
+const ONLINE_ROOMS_MS = 8000;        // how often the list of public games is asked for while it is on screen
+const MODE_NAMES = { SURVIVAL: 'Survival', CREATIVE: 'Creative', SPECTATOR: 'Spectator' };
+let _lanGamesTimer = 0, _onlineRoomsTimer = 0, _onlineRoomsAsk = 0, _joinView = 'choose';
+
 function openLanJoin() {
     document.getElementById('LanJoinModal').classList.remove('hidden');
-    document.getElementById('lanJoinNote').textContent = '';
     document.getElementById('onlineJoinCode').value = '';
-    // The code box is there where this copy of the game has an online server to join through.
-    window.__wwOnline?.available().then((yes) => document.getElementById('onlineJoinRow').classList.toggle('hidden', !yes), () => {});
-    _refreshLanGames();
-    clearInterval(_lanGamesTimer);
-    _lanGamesTimer = setInterval(_refreshLanGames, 2000);
+    // Online is there to choose where this copy of the game has online play.
+    const way = document.getElementById('joinOnlineWayBtn'), wayNote = document.getElementById('joinOnlineWayNote');
+    const set = (yes) => {
+        way.classList.toggle('cannot', !yes);
+        wayNote.textContent = yes ? 'A public game, or a friend’s game with its code' : 'This copy of the game has no online play set up';
+    };
+    set(false);
+    window.__wwOnline?.available().then(set, () => set(false));
+    _showJoin('choose');
+}
+/** One of the Join screen's three views: 'choose' (where the game is), 'lan', 'online'. */
+function _showJoin(view) {
+    _joinView = view;
+    document.getElementById('joinChoose').classList.toggle('hidden', view !== 'choose');
+    document.getElementById('joinLanView').classList.toggle('hidden', view !== 'lan');
+    document.getElementById('joinOnlineView').classList.toggle('hidden', view !== 'online');
+    document.getElementById('joinTitle').textContent = view === 'lan' ? 'Games on your network' : view === 'online' ? 'Online games' : 'Join a game';
+    document.getElementById('lanJoinNote').textContent = '';
+    clearInterval(_lanGamesTimer); clearInterval(_onlineRoomsTimer);
+    _lanGamesTimer = _onlineRoomsTimer = 0;
+    if (view === 'lan') { _refreshLanGames(); _lanGamesTimer = setInterval(_refreshLanGames, 2000); }
+    if (view === 'online') { refreshOnlineRooms(); _onlineRoomsTimer = setInterval(refreshOnlineRooms, ONLINE_ROOMS_MS); }
 }
 function closeLanJoin() {
-    clearInterval(_lanGamesTimer);
+    clearInterval(_lanGamesTimer); clearInterval(_onlineRoomsTimer);
+    _lanGamesTimer = _onlineRoomsTimer = 0;
+    _onlineRoomsAsk++;                              // an answer still on its way is for a screen that has gone
     document.getElementById('LanJoinModal').classList.add('hidden');
 }
+/** Back: from a list to the choice, from the choice to the menu. */
+function backFromJoin() { if (_joinView === 'choose') closeLanJoin(); else _showJoin('choose'); }
+
 async function _refreshLanGames() {
     let games = [];
     try { games = await (await fetch(`${SERVER_URL}/api/lan/games`)).json(); } catch { /* none */ }
+    if (_joinView !== 'lan') return;
     const list = document.getElementById('lanGameList');
     list.innerHTML = '';
     for (const g of games) {
         const b = document.createElement('div');
-        b.className = 'menuButton nameItem';
-        b.textContent = `${g.name} — ${g.host || g.address} (${g.players} playing)`;
+        b.className = 'menuButton nameItem roomItem';
+        const name = document.createElement('span');
+        name.className = 'roomName';
+        name.textContent = String(g.name ?? 'World');
+        const about = document.createElement('span');
+        about.className = 'roomAbout';
+        about.textContent = `${g.host || 'someone'} · ${g.players | 0} playing`;
+        b.append(name, about);
         b.addEventListener('click', () => joinLan(g.address));
         list.appendChild(b);
     }
-    if (games.length === 0) list.innerHTML = '<div class="formNote">Looking for games on your network…</div>';
+    if (games.length === 0) list.innerHTML = '<div class="formNote">Looking for games on your network…<br>A game shows here when its host has turned on <b>Open to the network</b> in their Players panel.</div>';
 }
-/** Go to a host's game: `address` is "192.168.1.20:25599" (or a whole http:// address). */
+
+/** The public games open now: asked of the online service, and asked again every few seconds while they are on screen. */
+async function refreshOnlineRooms() {
+    const list = document.getElementById('onlineRoomList');
+    if (!list || !window.__wwOnline || _joiningOnline) return;
+    const ask = ++_onlineRoomsAsk;
+    let rooms = null, why = '';
+    try { rooms = await window.__wwOnline.rooms({ gamepack: mergedGamePackData }); }
+    catch (e) { why = e?.reason === 'busy' ? sessionWhy('busy') : 'The list of public games could not be reached.'; }
+    if (ask !== _onlineRoomsAsk || _joinView !== 'online') return;      // a newer asking has been answered, or the screen has gone
+    list.innerHTML = '';
+    if (!rooms) { const n = document.createElement('div'); n.className = 'formNote'; n.textContent = why; list.appendChild(n); return; }
+    for (const r of rooms) {
+        const b = document.createElement('div');
+        b.className = 'menuButton nameItem roomItem';
+        // Everything here was typed by a stranger: it goes in as text, never as markup.
+        const name = document.createElement('span');
+        name.className = 'roomName';
+        name.textContent = String(r.name ?? '').slice(0, 32);
+        const about = document.createElement('span');
+        about.className = 'roomAbout';
+        about.textContent = `${String(r.host ?? '').slice(0, 16) || 'someone'} · ${MODE_NAMES[r.mode] ?? 'Survival'}${r.flat ? ' · flat' : ''} · ${r.players | 0}/${r.max | 0}`;
+        b.append(name, about);
+        b.addEventListener('click', () => joinOnline(r.code, true));
+        list.appendChild(b);
+    }
+    if (rooms.length === 0) list.innerHTML = '<div class="formNote">No public games are open just now. To open your own: in a world, <b>pause → Players → Open online</b>, with <b>Anyone</b>.</div>';
+}
+
+/** Go to a host's game on the network: `address` is "192.168.1.20:25599", as the list of games gives it. */
 async function joinLan(address) {
     const note = document.getElementById('lanJoinNote');
     address = String(address ?? '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
-    if (!/^[A-Za-z0-9.\-]+(:\d{1,5})?$/.test(address)) { note.textContent = 'That does not look like an address. It is on the host\'s Players panel.'; return; }
-    if (!address.includes(':')) address += ':25599';
+    if (!/^[A-Za-z0-9.\-]+:\d{1,5}$/.test(address)) return;
     const url = `http://${address}`;
-    note.textContent = 'Looking for the game…';
-    // Is there a game there? (A guest's page tells us; nothing else answers like it.)
+    note.textContent = 'Joining…';
+    // Is the game still there? (A guest's page tells us; nothing else answers like it.)
     try { await fetch(`${url}/api/lan/info`, { mode: 'no-cors', signal: AbortSignal.timeout(4000) }); }
-    catch { note.textContent = 'No game answered at that address.'; return; }
+    catch { note.textContent = 'That game is no longer there.'; return; }
     closeLanJoin();
     // The host serves the game to its guests. In the app, and from the game's own
     // page, the frame round this one swaps to it; a bare page just goes there.
@@ -543,8 +607,8 @@ async function joinLan(address) {
 }
 
 let _joiningOnline = false;
-/** Go to an online game: `text` is its code, as the host's Players panel shows it. */
-async function joinOnline(text) {
+/** Go to an online game: `text` is its code, as the host's Players panel shows it — or, `listed`, as the list of public games gave it. */
+async function joinOnline(text, listed = false) {
     const note = document.getElementById('lanJoinNote');
     const code = window.__wwOnline?.cleanCode(text);
     if (!code) { note.textContent = 'A game code is eight letters and digits, like ABCD-EFGH. It is on the host\'s Players panel.'; return; }
@@ -556,7 +620,9 @@ async function joinOnline(text) {
         await window.__wwOnline.join(code, { name: s.playerName, skin: s.skin, slot: 0, gamepack: mergedGamePackData });
     } catch (e) {
         _joiningOnline = false;
-        note.textContent = sessionWhy(e?.reason ?? 'unreachable');
+        // A public game that has gone or filled since the list was drawn: say so, and draw the list again.
+        note.textContent = listed && e?.reason === 'code' ? 'That game has just ended.' : sessionWhy(e?.reason ?? 'unreachable');
+        if (listed) refreshOnlineRooms();
         return;
     }
     _joiningOnline = false;
@@ -590,14 +656,13 @@ document.addEventListener('DOMContentLoaded', () => {
     on('playersBackBtn', closePlayers);
     on('lanOpenToggle', (e) => setLanOpen(e.target.checked), 'change');
     on('joinLanBtn', openLanJoin);
-    on('lanJoinCloseBtn', closeLanJoin);
-    // One Join button: a code if one was typed, else the address.
-    on('lanJoinGoBtn', () => {
-        const code = document.getElementById('onlineJoinCode').value.trim();
-        if (code) joinOnline(code); else joinLan(document.getElementById('lanJoinAddress').value);
-    });
-    on('lanJoinAddress', (e) => { if (e.key === 'Enter') joinLan(e.target.value); }, 'keydown');
+    on('lanJoinCloseBtn', backFromJoin);
+    on('joinLanWayBtn', () => _showJoin('lan'));
+    on('joinOnlineWayBtn', () => _showJoin('online'));
+    on('onlineRoomsRefresh', refreshOnlineRooms);
+    on('onlineJoinGoBtn', () => joinOnline(document.getElementById('onlineJoinCode').value));
     on('onlineJoinCode', (e) => { if (e.key === 'Enter') joinOnline(e.target.value); }, 'keydown');
+    on('onlineVisibility', () => _refreshPlayers(), 'change');
     on('onlineOpenToggle', (e) => setOnlineOpen(e.target.checked), 'change');
     on('guestOverBtn', () => {
         // Back to this player's own game, if the page round this one is theirs; else try the host again.

@@ -48,6 +48,13 @@ export function makeFakeAbly({ key }) {
         get messages() { return this.count.inbound + this.count.outbound; },
         refused: [],                 // what was tried and not allowed: "publish ww:…:host"
         reset() { this.count.inbound = this.count.outbound = 0; },
+        /** What Ably's REST API answers for `GET /channels/<name>/presence`: data that is not text comes as JSON text, marked so. */
+        restPresence(name) {
+            return [...(this.channels.get(name)?.present.values() ?? [])].map((p) => ({
+                clientId: p.clientId, connectionId: p.conn.id, action: 1, timestamp: Date.now(),
+                ...(typeof p.data === 'string' ? { data: p.data } : { data: JSON.stringify(p.data), encoding: 'json' }),
+            }));
+        },
         /** The line of the connection with this clientId drops, and comes back. */
         async blip(clientId) {
             const c = [...this.connections].find(x => x.clientId === clientId);

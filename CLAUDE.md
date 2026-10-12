@@ -2873,8 +2873,9 @@ round the game — opens a second copy of the game beside the first
 ### On the network (`server.js`: *On the network*)
 
 The Players panel's **Open to the network** starts a second listener, on every
-interface (`WW_LAN_PORT`, 25599, or any port if that one is taken), and shows
-the address. **What comes in through it is a guest**, and may fetch the game
+interface (`WW_LAN_PORT`, 25599, or any port if that one is taken). (The
+panel used to show its address, and the Join screen took one typed in: the
+list of games is how a game is found.) **What comes in through it is a guest**, and may fetch the game
 itself and play in the one world that is open — its chunks, its own player
 file, its session — and nothing else: not the list of worlds, not another
 world, not the owner's state or settings, not a way to make, delete or open
@@ -2883,8 +2884,8 @@ The player's own listener is as it was, this machine only.
 
 - **A guest runs the host's copy of the game**, served by that listener, so
   both ends are always the same version. In the app, and from the game's own
-  page, **Play → Join a game** lists the games on the network (each open
-  world announces itself by UDP broadcast, port 25598) or takes an address;
+  page, **Play → Join a game → On your network** lists the games on the
+  network (each open world announces itself by UDP broadcast, port 25598);
   `index.js` swaps its frame for the host's page and hands it the guest's own
   settings. Anyone else can simply open the address in a browser. A guest's
   page knows what it is (`GET /api/lan/info`) and goes straight into the
@@ -2896,8 +2897,11 @@ The player's own listener is as it was, this machine only.
 
 ### Online (`online/`, `src/scripts/Online.js`, `engine/net/`)
 
-The Players panel's **Open online** opens the world to players anywhere, and
-shows a code; **Play → Join a game** takes one. The games talk through
+The Players panel's **Open online** opens the world to players anywhere: to
+**whoever has the code** it then shows (a private game), or to **anyone** (a
+public one, which is listed). **Play → Join a game** first asks where the game
+is — **On your network** or **Online** — and Online shows the public games
+and takes a private one's code. The games talk through
 **Ably** (ably.com), a service that carries messages between whoever is on a
 channel; there is no game server in the middle. `online/README.md` is the
 guide to setting it up (an Ably account, a key, the token service) and says
@@ -2928,6 +2932,19 @@ of this.
   block put right), `up` (guests speak, only the host hears: a blow on a mob,
   what a guest asks of the host's world) and `to:<clientId>` (the host to one
   guest: the welcome, answers).
+- **Public games** (`visibility`, chosen in the Players panel before the world
+  is opened; `goOnline(world, { visibility })`). Every room has a code; a
+  public one is a room whose code is given out. Its host's token may also be
+  *present* on one more channel, `ww:lobby`, where it keeps a line about the
+  room (name, host's name, players, mode — `OnlineSession._lobby`), and it is
+  handed a *tag*: a keyed hash of the code and of who it is. No game reads
+  the lobby. The token service does (`GET /rooms`: Ably's REST API, with the
+  key, at most once every few seconds) and answers with the rooms whose tag
+  is right and which have a place free — so a listed room is one the service
+  made public, advertised by the game it made it for; what it says of itself
+  is its host's word, cleaned. `online.rooms()` asks it;
+  `refreshOnlineRooms` (`players.js`) draws it, every eight seconds while it
+  is on screen, as text.
 - **The host's game decides what a server would have**: who is let in (same
   protocol, same content fingerprint, room not full or shut, not sent away)
   and their number; and what a block ends up as. A guest's block further
@@ -3424,7 +3441,7 @@ requests. Treat any of those being non-zero as a failure, not as noise.
 | World generation | Continents, mountain belts, rivers and creeks at sea level, elevated lakes, fjords, cliffs, mesas, 28 biomes chosen after the terrain, six kinds of cave | Waterfalls (rivers all run at sea level, so none are needed yet — a spring feature would add them); grass tufts and flowers (needs a cross-shaped model that sits on the smooth surface); per-biome grass tint; mobs spawning by biome (entity `spawnRules.biomes` is not enforced yet) |
 | Far terrain | The geography as a heightfield, with trees and buildings as boxes in the two nearest levels (thinned in woods) and the surfaces of chunks the player has changed; no caves or overhangs; a river narrower than a cell shows only where a sample falls in it; a new level of detail pops in when tiles swap, and trees become a tinted canopy at the third level | Blend (geomorph) between levels; a changed chunk shows only its highest blocks (a bridge is a wall down to the ground) |
 | Underground geometry | Every cave wall is meshed, and the sections of a chunk the camera could not see are left out of the draw (*What the camera cannot see*): about half the triangles from the surface | A chunk draws one range, from the lowest section it needs to the highest: one visible cave deep down brings everything above it with it. Ranges of sections a chunk (multi-draw) would leave more out. The pinholes in the mesh, which are there with or without this |
-| Online | A world opened online from the Players panel, joined by a code, through Ably: the host's game still runs the world and settles what a server would have. Works against Ably itself (`npm run test:online:live`, with a key); **the token service is not deployed**, so it only runs where `WW_ABLY_KEY` is set (`online/README.md`) | Deploy the token service and put its address in `data/online.json`. Compare the message counts with Ably's statistics. The free plan's six million messages a month is tens of hours of four-player play in total (cost grows with the square of the players): lower the rates, or pay, before shipping to many. No server checks movement or inventories: a changed game can fly or place what it does not have, within reach. A removed player is silenced but could go on listening until the room is opened again. Names are display names. A guest is sent every chunk the host has saved near them, changed or not. Far terrain does not show a guest what the host has built. Opening or closing a world online sends away whoever was in it by split screen or network, to join again. No list of games, no chat |
+| Online | A world opened online from the Players panel, joined by a code, through Ably: the host's game still runs the world and settles what a server would have. Works against Ably itself (`npm run test:online:live`, with a key); **the token service is not deployed**, so it only runs where `WW_ABLY_KEY` is set (`online/README.md`) | Deploy the token service and put its address in `data/online.json`. Compare the message counts with Ably's statistics. The free plan's six million messages a month is tens of hours of four-player play in total (cost grows with the square of the players): lower the rates, or pay, before shipping to many. No server checks movement or inventories: a changed game can fly or place what it does not have, within reach. A removed player is silenced but could go on listening until the room is opened again. Names are display names. A guest is sent every chunk the host has saved near them, changed or not. Far terrain does not show a guest what the host has built. Opening or closing a world online sends away whoever was in it by split screen or network, to join again. Public games are unmoderated: names are restricted to plain characters, but nothing filters words and nothing reports a room. No chat |
 | See-through blocks | Leaves and glass are cutouts in the opaque pass; water and ice are blended, ordered exactly along each axis and chunk by chunk | Between axes the order is fixed (horizontal faces first), so the side of an ice block standing in water can blend in the wrong order; glass is clear with a frame, not tinted; nothing but terrain is veiled by cloud (mobs, items, rain) |
 | Smooth terrain | Diagonal slopes of one block or half a block a block are planes; a lone block is a low mound; ground of different kinds blends along a ragged line, and a lone block keeps its face; shading is smooth | A gentle slope is still terraces joined by one-block ramps (leaning every terrace was tried and taken out: it changed the look of all terrain); diagonal steps three or more wide still zigzag; a step of two blocks right beside low ground is a wall, so ground steeper than the diagonal breaks into teeth; a slope between an axis and a diagonal is close to a plane, not one |
 | Controller | Play and every menu, analog movement, no pointer lock needed; names typed on a keypad | No rumble; no remapping; the other text boxes (a world's name, the creative search, a network address) still need a keyboard; sensitivity is shared with the mouse |

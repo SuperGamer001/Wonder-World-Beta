@@ -22,7 +22,9 @@
  *     disk.
  *
  * A room is found by a code. `open()` makes one (this game hosts);
- * `enter(code)` joins one. `join()` then only hands back the welcome, so a
+ * `enter(code)` joins one. A host may make its room public: it then stands in
+ * the lobby with a line about the room, and the token service lists it
+ * (`OnlineAuth.rooms`) with its code, for anyone to join. `join()` then only hands back the welcome, so a
  * world can be loaded after the room is in hand.
  *
  * A guest has no way to the host's machine, so what it needs of the host's
@@ -40,7 +42,7 @@
  */
 import {
     PROTOCOL, MSG, RATE, REACH, WORLD, PART_BYTES, ChunkStatus, HARD_MAX_PLAYERS, MAX_LOCAL_PLAYERS,
-    channels, cleanCode, cleanName, cleanSkin,
+    LOBBY, channels, cleanCode, cleanName, cleanRoomName, cleanSkin,
 } from './OnlineProtocol.js';
 
 const REQUEST_MS = 12000;
@@ -107,10 +109,27 @@ export class OnlineAuth {
         return r;
     }
 
-    /** A new room, and this game as its host: `{ code, ticket, clientId, tokenRequest }`. */
-    host() { return this._post('host', { device: this.device(), slot: 0 }); }
-    /** A token for a room: as its host with the ticket, else as a guest. */
-    token(code, slot, ticket = null) { return this._post('token', { code, device: this.device(), slot, ...(ticket ? { ticket } : {}) }); }
+    /** A new room, and this game as its host: `{ code, ticket, clientId, tokenRequest }`, and a `tag` if it is to be public. */
+    host(open = false) { return this._post('host', { device: this.device(), slot: 0, ...(open ? { public: true } : {}) }); }
+    /** A token for a room: as its host with the ticket (and its tag, for a public one), else as a guest. */
+    token(code, slot, ticket = null, tag = null) {
+        return this._post('token', { code, device: this.device(), slot, ...(ticket ? { ticket } : {}), ...(ticket && tag ? { tag } : {}) });
+    }
+
+    /**
+     * The public games open now: `[{ code, name, host, players, max, mode, flat }]`.
+     * @param {{ mode?: string, content?: string, protocol?: number }} [filter]  only those of one game mode; only those this game could play in
+     */
+    async rooms(filter = {}) {
+        const query = new URLSearchParams();
+        for (const [k, v] of Object.entries(filter)) if (v !== undefined && v !== null && v !== '') query.set(k, String(v));
+        let res;
+        try { res = await this._fetch(`${this.url}/rooms?${query}`, { method: 'GET' }); } catch { throw new OnlineError('unreachable'); }
+        if (res.status === 429) throw new OnlineError('busy');
+        if (!res.ok) throw new OnlineError('unreachable');
+        const rooms = (await res.json().catch(() => null))?.rooms;
+        return Array.isArray(rooms) ? rooms : [];
+    }
 }
 
 // ── The session ───────────────────────────────────────────────────────────────
@@ -134,6 +153,7 @@ export class OnlineSession {
         this.max = HARD_MAX_PLAYERS;
         this.down = false;           // the line has dropped and is being picked up
         this.locked = false;
+        this.visibility = 'private'; // 'public': listed for anyone to join
 
         this.onJoined = null;        // (player)
         this.onLeft = null;          // (id)
@@ -177,6 +197,9 @@ export class OnlineSession {
         this._asks = new Map();      // rid → { resolve, timer, parts }
         this._paceAt = 0; this._paceQueue = []; this._paceTimer = null;
         this._chunkWaiting = []; this._chunkActive = 0;
+        this._tag = null;            // the host of a public room: what lets it stand in the lobby
+        this._lobbyCh = null;
+        this._roomName = '';
     }
 
     get isHost() { return this.id !== 0 && this.id === this.hostId; }
@@ -189,14 +212,15 @@ export class OnlineSession {
      * Host a world online. Resolves with the welcome (as `join()` gives it).
      * @param {object} hello  { version, content, worldGen, name, skin, slot }
      * @param {object} world  the world as a guest's game needs it (Online.js: describe)
+     * @param {{ visibility?: 'private'|'public', roomName?: string }} [o]  public: listed for anyone to join
      */
-    async open(hello, world, maxPlayers = HARD_MAX_PLAYERS) {
+    async open(hello, world, maxPlayers = HARD_MAX_PLAYERS, { visibility = 'private', roomName = '' } = {}) {
         this._hello = hello;
         this.world = world;
         this.max = Math.max(1, Math.min(HARD_MAX_PLAYERS, maxPlayers | 0));
         for (let tries = 0; ; tries++) {
-            const grant = await this.auth.host();
-            await this._connect(grant.code, 0, grant, grant.ticket);
+            const grant = await this.auth.host(visibility === 'public');
+            await this._connect(grant.code, 0, grant, grant.ticket, grant.tag ?? null);
             const ch = this._ch;
             try {
                 await ch.all.attach();
@@ -216,6 +240,9 @@ export class OnlineSession {
             break;
         }
         this._ready = true;
+        this.visibility = this._tag ? 'public' : 'private';
+        this._roomName = roomName || world?.name || '';
+        this._lobby();
         this._welcome = { id: 1, hostId: 1, players: [], edits: [], atmos: null };
         return this._welcome;
     }
@@ -266,8 +293,10 @@ export class OnlineSession {
     async join() { return this._welcome; }
 
     /** Connect to Ably as one player of one room. `grant`: what the token service just gave (used for the first token). */
-    async _connect(code, slot, grant, ticket) {
+    async _connect(code, slot, grant, ticket, tag = null) {
         this.code = code;
+        this._tag = tag;
+        this._lobbyCh = null;
         this._client = grant.clientId;
         this._closed = false;
         let first = grant;
@@ -277,7 +306,7 @@ export class OnlineSession {
                 // Ably asks for a token when it connects and again before each runs out.
                 authCallback: (_params, callback) => {
                     const have = first; first = null;
-                    (have ? Promise.resolve(have) : this.auth.token(code, slot, ticket))
+                    (have ? Promise.resolve(have) : this.auth.token(code, slot, ticket, tag))
                         .then((g) => callback(null, g.tokenRequest), (e) => callback(e?.reason ?? 'auth', null));
                 },
                 echoMessages: false,       // what this game says is not sent back to it (and not counted)
@@ -319,6 +348,21 @@ export class OnlineSession {
                 this._over('lost');
             }
         });
+    }
+
+    /** The host of a public room: its line in the lobby, as it stands now (the token service lists it from this). */
+    _lobby() {
+        if (!this._tag || !this.isHost || this._closed || !this._rt) return;
+        const data = {
+            v: PROTOCOL, code: this.code, tag: this._tag, name: cleanRoomName(this._roomName), host: cleanName(this._hello.name),
+            players: this._ids.size + 1, max: this.max, locked: this.locked,
+            mode: String(this.world?.gameMode ?? 'SURVIVAL'), flat: !!this.world?.flat, content: String(this._hello.content ?? ''),
+        };
+        try {
+            const first = !this._lobbyCh;
+            if (first) this._lobbyCh = this._rt.channels.get(LOBBY, { modes: ['PRESENCE'] });
+            (first ? this._lobbyCh.presence.enter(data) : this._lobbyCh.presence.update(data))?.catch?.(() => { /* not listed; the room is still there */ });
+        } catch { /* closing */ }
     }
 
     _presenceData() {
@@ -517,6 +561,7 @@ export class OnlineSession {
         this._reconcile();
         this._welcomeTo(client);
         this._publish(this._ch.host, MSG.ROSTER, { ids: this._roster() });
+        this._lobby();
     }
 
     _welcomeTo(client) {
@@ -534,6 +579,7 @@ export class OnlineSession {
         if (!this._ids.delete(client)) return;
         this._reconcile();
         this._publish(this._ch.host, MSG.ROSTER, { ids: this._roster() });
+        this._lobby();
     }
 
     /** The host: send a player away. Their game is told; everyone else stops hearing them. */
@@ -546,7 +592,7 @@ export class OnlineSession {
         for (const c of [...this._ids.keys()]) if (c.slice(0, -2) === p.client.slice(0, -2)) { if (c !== p.client) this._publish(this._names.to(c), MSG.KICK, {}); this._gone(c); }
     }
     /** The host: let nobody else in (or let them in again). */
-    lock(locked) { if (this.isHost) this.locked = !!locked; }
+    lock(locked) { if (this.isHost) { this.locked = !!locked; this._lobby(); } }
 
     // ── Saying ────────────────────────────────────────────────────────────────
 
@@ -600,6 +646,7 @@ export class OnlineSession {
         if (!this._ready || this._closed) return;
         this._hello = { ...this._hello, name, skin };
         this._ch.all.presence.update(this._presenceData())?.catch?.(() => {});
+        this._lobby();
     }
 
     atmos(a) {

@@ -1,7 +1,7 @@
 {
   "name": "wonder-world",
   "productName": "Wonder World",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Wonder World is a 3D voxel sandbox game where players explore a vast, procedurally generated world.",
   "author": "Alex Fischer, Interlinked Creations",
   "license": "MIT",

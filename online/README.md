@@ -61,8 +61,10 @@ npm run server
 Each prints its address. Then:
 
 1. Open the first address. Start a world, then **pause → Players → Open
-   online**. The panel shows a code like `ABCD-EFGH`.
-2. Open the second address. **Play → Join a game**, type the code, **Join**.
+   online**. *Who can join* is **Whoever has the code** (a private game: the
+   panel shows a code like `ABCD-EFGH`) or **Anyone** (a public game).
+2. Open the second address. **Play → Join a game → Online**: a public game
+   is in the list, to click; a private one is joined by typing its code.
 
 With `WW_ABLY_KEY` set, the game's own server signs tokens itself, so nothing
 needs deploying yet. Without it (and with `data/online.json` empty, as it
@@ -130,6 +132,10 @@ a host's own proxy). The game refuses an `http://` address that is not the
 player's own machine. Set `TRUST_PROXY=true` only behind a proxy that sets
 `X-Forwarded-For`, or one player's flood limits everybody.
 
+**After any change to `online/auth.js`, deploy again** (`npx wrangler deploy`
+in `online/`): the game's side and the service's side go together. The secret
+stays; only the code is replaced.
+
 ### Then
 
 - Check it: `curl https://your-address/` answers `{"ok":true,…}`.
@@ -150,7 +156,8 @@ Check them again before relying on a number.
 |---|---|---|
 | Messages a month | 6,000,000 | See below: this is the one that runs out |
 | Connections at once | 200 | 200 players online at once, in all rooms |
-| Channels at once | 200 | A room is 3 channels plus one per guest: about 33 rooms of four |
+| Channels at once | 200 | A room is 3 channels plus one per guest: about 33 rooms of four. The lobby of public games is one more, for all of them |
+| Present on one channel | 200 | The most public games listed at once |
 | Messages a second, per channel | 50 | Why a room holds 6 players at most (`HARD_MAX_PLAYERS`) |
 | Message size | 64 KiB | Chunks and long lists are sent in parts (`PART_BYTES`) |
 | A dropped connection is held for | 2 minutes | Longer than that and a guest is sent back to their menu |
@@ -195,7 +202,12 @@ And what is not:
 
 - **Anyone with the code can join.** The code is the invitation: eight
   characters, about 850 billion of them, and the token service limits how
-  often an address may ask. There is no list of games.
+  often an address may ask. A private game is in no list.
+- **A public game is open to anyone, and its list is unmoderated.** The
+  service only lists rooms it made public, advertised by the game it made
+  them for, and room and player names are cut down to plain characters — but
+  nothing filters words, and nothing reports a room or a player. The host can
+  remove a player; that is all there is.
 - **A modified game can cheat within reach**: fly, walk through walls, place
   blocks it does not have, build faster than a player could. Nothing checks
   inventories or movement. This is the same trust as playing on a home
@@ -266,7 +278,7 @@ Ably replaces the game's own server as the thing messages go through.
 
 | File | |
 |---|---|
-| `online/auth.js` | The token service: who a game is, which room, who the host is. Web Crypto only, so it runs anywhere |
+| `online/auth.js` | The token service: who a game is, which room, who the host is, and the list of public games (`GET /rooms`, read from Ably with the key). Web Crypto only, so it runs anywhere |
 | `online/worker.js`, `wrangler.toml` | … as a Cloudflare Worker |
 | `online/server.mjs` | … as a Node server (`npm run online:auth`) |
 | `server/server.js` (*Online*) | … on a developer's machine, when `WW_ABLY_KEY` is set; and `/api/online/config`, which tells the page where the service is |

@@ -15,6 +15,10 @@
  *          guest asks of the host's world (its chunks, its own saved place).
  *   to:<clientId>   the host speaks, one guest hears: the welcome, answers.
  *
+ * And one channel for all rooms: `ww:lobby`, where the host of a public room
+ * stands ("present") with a line about its room. No game reads it: the token
+ * service does, and gives out the list (online/auth.js: `rooms`).
+ *
  * PROTOCOL goes up whenever a message changes shape or meaning; a host turns
  * away a game that speaks another.
  *
@@ -27,6 +31,9 @@ export const PROTOCOL = 1;
 export function channels(code) {
     return { all: `ww:${code}:all`, host: `ww:${code}:host`, up: `ww:${code}:up`, to: (clientId) => `ww:${code}:to:${clientId}` };
 }
+
+/** Where public rooms stand to be listed. */
+export const LOBBY = 'ww:lobby';
 
 /** Message names. Short: each is sent many times. */
 export const MSG = {
@@ -61,6 +68,10 @@ export const REACH = { BLOCK: 12, FLUID: 96 };
 /** A name as it may be shown: the game's own rule for names (src/players.js), applied to what a stranger sent. */
 export function cleanName(raw) {
     return String(typeof raw === 'string' ? raw : '').replace(/[^A-Za-z0-9 ._'-]/g, '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME) || 'Player';
+}
+/** A room's name in the list of public games: plain characters, and not many. */
+export function cleanRoomName(raw) {
+    return String(typeof raw === 'string' ? raw : '').replace(/[^A-Za-z0-9 ._'!&-]/g, '').replace(/\s+/g, ' ').trim().slice(0, 32) || 'World';
 }
 /** A look: small whole numbers by short names, and nothing else. */
 export function cleanSkin(raw) {

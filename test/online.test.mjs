@@ -6,9 +6,9 @@
 // thing checked against Ably's own code is the signing: a token request made
 // here must be, byte for byte, the one Ably's SDK makes from the same key.
 import Ably from 'ably';
-import { createAuth, tokenRequest, capability, channels as serverChannels, CODE_ALPHABET } from '../online/auth.js';
+import { createAuth, tokenRequest, capability, channels as serverChannels, CODE_ALPHABET, LOBBY as SERVER_LOBBY } from '../online/auth.js';
 import { OnlineSession, OnlineAuth, OnlineWorldClient, OnlineError } from '../src/scripts/engine/net/OnlineSession.js';
-import { channels, cleanCode, ChunkStatus, HARD_MAX_PLAYERS, PROTOCOL, RATE, PART_BYTES, CODE_ALPHABET as GAME_ALPHABET } from '../src/scripts/engine/net/OnlineProtocol.js';
+import { channels, cleanCode, ChunkStatus, HARD_MAX_PLAYERS, PROTOCOL, RATE, PART_BYTES, LOBBY, CODE_ALPHABET as GAME_ALPHABET } from '../src/scripts/engine/net/OnlineProtocol.js';
 import { packEdits, unpackEdits } from '../src/scripts/engine/net/ChunkCodec.js';
 import { makeFakeAbly } from './fakeAbly.mjs';
 
@@ -144,7 +144,16 @@ const CONTENT = 'c'.repeat(28);
 
 function setup() {
     const { Ably: Fake, hub, settle } = makeFakeAbly({ key: KEY });
-    const service = createAuth({ key: KEY, ratePerMinute: 100000 });
+    // The token service asks Ably who is in the lobby: here, the stand-in answers as Ably's REST API does.
+    const ably = { asked: 0, auth: null };
+    const service = createAuth({
+        key: KEY, ratePerMinute: 100000, now: () => Date.now() + (ably.skip ?? 0),
+        fetchFn: async (url, init) => {
+            ably.asked++; ably.auth = init?.headers?.Authorization ?? null; ably.url = String(url);
+            if (ably.down) return new Response('no', { status: 503 });
+            return new Response(JSON.stringify(hub.restPresence(decodeURIComponent(String(url).split('/channels/')[1].split('/')[0]))), { status: 200 });
+        },
+    });
     const fetchFn = async (url, init) => service.handle(new Request(url, init), 'test');
     const sessions = [];
     let devices = 0;
@@ -168,7 +177,7 @@ function setup() {
     }
     const names = (g) => [...g.s.players.values()].map(p => `${p.id}:${p.name}`).sort().join(' ');
     const end = () => { for (const s of sessions) s.close(); };
-    return { hub, settle, game, names, end, Fake, service, fetchFn };
+    return { hub, settle, game, names, end, Fake, service, fetchFn, ably };
 }
 
 {
@@ -420,6 +429,99 @@ function setup() {
     await until(() => a.closed && pane.closed, 2000, 'the guests to be told');
     check('when the host vanishes, its guests are told the game is over', a.closed === 'host' && pane.closed === 'host' && host.closed === 'lost');
     await settle();
+    end();
+}
+
+// ── Public games ──────────────────────────────────────────────────────────────
+
+{
+    const { hub, settle, game, names, end, Fake, service, fetchFn, ably } = setup();
+    const fresh = () => { ably.skip = (ably.skip ?? 0) + 10000; };      // past the few seconds a list is kept for
+    const list = async (g, filter) => { fresh(); return g.s.auth.rooms(filter); };
+    const lobbyCap = (g) => JSON.parse(JSON.stringify([...hub.connections].find(c => c.clientId === g.s._client)._cap))[LOBBY];
+
+    const priv = game('Pia'), pub = game('Hana'), creative = game('Otto'), wes = game('Wes');
+    await priv.s.open(priv.hello, WORLD);
+    await pub.s.open(pub.hello, { ...WORLD, name: 'Castle <b>Build</b>' }, 3, { visibility: 'public' });
+    await creative.s.open({ ...creative.hello, content: 'd'.repeat(28) }, { ...WORLD, name: 'Sky', gameMode: 'CREATIVE', flat: { mode: 'layers' } }, 4, { visibility: 'public', roomName: 'Flat Fun' });
+    await settle();
+    check('a host chooses: a room is private unless it was opened to anyone', priv.s.visibility === 'private' && pub.s.visibility === 'public' && LOBBY === SERVER_LOBBY);
+    check('only the host of a public room may stand in the lobby — and may do nothing else there', lobbyCap(pub)?.join() === 'presence' && lobbyCap(priv) === undefined);
+
+    const rooms = await list(wes);
+    check('the list of public games: each as its host describes it, with its code, and the private one not in it',
+        JSON.stringify(rooms.sort((a, b) => a.name.localeCompare(b.name))) === JSON.stringify([
+            { code: pub.s.code, name: 'Castle bBuildb', host: 'Hana', players: 1, max: 3, mode: 'SURVIVAL', flat: false },
+            { code: creative.s.code, name: 'Flat Fun', host: 'Otto', players: 1, max: 4, mode: 'CREATIVE', flat: true },
+        ]) && !JSON.stringify(rooms).includes(priv.s.code), JSON.stringify(rooms));
+    check('… read from Ably by the service with the key, which no game sees', ably.auth === `Basic ${Buffer.from(KEY).toString('base64')}` && ably.url.includes('/channels/ww%3Alobby/presence') &&
+        !JSON.stringify(rooms).includes(SECRET));
+    check('it can be asked for one kind of game, and for the games this copy could play in',
+        (await list(wes, { mode: 'CREATIVE' })).map(r => r.name).join() === 'Flat Fun' && (await list(wes, { content: CONTENT, protocol: PROTOCOL })).map(r => r.host).join() === 'Hana' &&
+        (await list(wes, { protocol: 99 })).length === 0);
+    const before = ably.asked;
+    await Promise.all([wes.s.auth.rooms(), wes.s.auth.rooms(), wes.s.auth.rooms()]);
+    await wes.s.auth.rooms();
+    check('however many ask, Ably is asked once every few seconds', ably.asked === before);
+    const bad = [];
+    for (const q of ['mode=GOD', 'content=zz', 'protocol=x', 'protocol=-1']) if ((await service.handle(new Request(`https://o.example/rooms?${q}`), 'q')).status !== 400) bad.push(q);
+    check('what is not a question about rooms is refused', bad.length === 0 && (await service.handle(new Request('https://o.example/rooms', { method: 'POST', body: '{}' }), 'q')).status === 404, bad.join());
+
+    // Joining one: its code is in the list, and that is all it takes.
+    const ann = game('Ann'), bob = game('Bob');
+    await ann.s.enter(rooms.find(r => r.host === 'Hana').code, ann.hello);
+    await until(() => names(pub) === '2:Ann');
+    await settle();
+    check('a public game is joined with the code the list gave, and the list counts its players', (await list(wes)).find(r => r.host === 'Hana').players === 2);
+    await bob.s.enter(pub.s.code, bob.hello);
+    await until(() => pub.s.players.size === 2);
+    await settle();
+    check('a full game is no longer listed', !(await list(wes)).some(r => r.host === 'Hana'));
+    bob.s.close();
+    await until(() => pub.s.players.size === 1);
+    await settle();
+    check('… and is again when a place is free', (await list(wes)).some(r => r.host === 'Hana' && r.players === 2));
+    pub.s.lock(true);
+    await settle();
+    check('a game its host has shut is not listed', !(await list(wes)).some(r => r.host === 'Hana'));
+    pub.s.lock(false);
+    pub.s.profile('Hana the Great', {});
+    await settle();
+    check('the list follows the host\'s name', (await list(wes)).find(r => r.code === pub.s.code)?.host === 'Hana the Great');
+
+    // What cannot be put in the list.
+    const lobbyOf = (g) => [...hub.connections].find(c => c.clientId === g.s._client).channels.get(LOBBY, { modes: ['PRESENCE'] });
+    const privTry = await failure(lobbyOf(priv).presence.enter({ v: PROTOCOL, code: priv.s.code, tag: 'x'.repeat(43), name: 'Free stuff', host: 'Pia', players: 1, max: 4 }));
+    const guestTry = await failure(lobbyOf(ann).presence.enter({ v: PROTOCOL, code: pub.s.code, name: 'Mine now', host: 'Ann', players: 1, max: 4 }));
+    check("a private room's host, and a guest, cannot stand in the lobby at all", privTry?.code === 40160 && guestTry?.code === 40160);
+    // The host of one public room, advertising others it has no tag for: another's private room, a made-up one, and its own under a forged tag.
+    const mine = pub.s._tag;
+    const raw = [...hub.connections].find(c => c.clientId === creative.s._client).channels.get(LOBBY, { modes: ['PRESENCE'] });
+    for (const data of [
+        { v: PROTOCOL, code: priv.s.code, tag: creative.s._tag, name: 'Come in', host: 'Otto', players: 1, max: 4 },
+        { v: PROTOCOL, code: priv.s.code, tag: mine, name: 'Come in', host: 'Otto', players: 1, max: 4 },
+        { v: PROTOCOL, code: 'AAAAAAAA', tag: creative.s._tag, name: 'Come in', host: 'Otto', players: 1, max: 4 },
+        { v: PROTOCOL, code: creative.s.code, tag: 'x'.repeat(43), name: 'Come in', host: 'Otto', players: 1, max: 4 },
+        'not a room', null, { code: 5 }, { v: PROTOCOL, code: creative.s.code, tag: creative.s._tag, players: 99, max: 4 }, { v: PROTOCOL, code: creative.s.code, tag: creative.s._tag, players: 1, max: 4000 },
+    ]) {
+        await raw.presence.update(data);
+        const got = await list(wes);
+        if (got.some(r => r.name === 'Come in' || r.code === priv.s.code || r.code === 'AAAAAAAA' || r.players > r.max || r.max > 16)) { check('a host cannot list a room that is not its own public one', false, JSON.stringify(data)); break; }
+    }
+    check('a host cannot list a room that is not its own public one, nor nonsense', !(await list(wes)).some(r => r.code === priv.s.code));
+    check('with its tag a public host renews its token with its place in the lobby; without, or with another\'s, it has none',
+        (await (async () => { const c = [...hub.connections].find(x => x.clientId === pub.s._client); await c.renew(); return c._cap[LOBBY]?.join(); })()) === 'presence' &&
+        (await failure(pub.s.auth.token(pub.s.code, 0, 'wrong-ticket', pub.s._tag)))?.reason === 'auth' &&
+        (await service.respond({ method: 'POST', path: '/token', body: { code: pub.s.code, device: ann.store.v, slot: 0, tag: pub.s._tag }, ip: 'z' })).status === 403);
+
+    // Gone.
+    pub.s.close();
+    await until(() => ann.closed === 'host');
+    await settle();
+    check('a public game that has ended is gone from the list', !(await list(wes)).some(r => r.code === pub.s.code));
+    ably.down = true;
+    check('when Ably cannot be asked, the list says it cannot be had (and nothing else breaks)', (await failure(list(wes)))?.reason === 'unreachable');
+    ably.down = false;
     end();
 }
 

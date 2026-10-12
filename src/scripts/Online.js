@@ -16,7 +16,7 @@
  */
 import { OnlineSession, OnlineAuth, OnlineWorldClient, OnlineError } from './engine/net/OnlineSession.js';
 import * as codec from './engine/net/ChunkCodec.js';
-import { contentHash, cleanCode, showCode, HARD_MAX_PLAYERS } from './engine/net/OnlineProtocol.js';
+import { contentHash, cleanCode, showCode, HARD_MAX_PLAYERS, PROTOCOL } from './engine/net/OnlineProtocol.js';
 
 const HERE = (typeof location !== 'undefined' && location.origin && location.origin !== 'null') ? location.origin : 'http://127.0.0.1:3000';
 const SDK_SRC = '/node_modules/ably/build/ably.min.js';
@@ -126,11 +126,12 @@ export const online = {
     /**
      * Host `world` (a world.json) online. Resolves with the session; its `code` is what guests type.
      * @param {object} who  { name, skin, slot, gamepack }
+     * @param {{ visibility?: 'private'|'public' }} [o]  public: it is listed for anyone to join
      */
-    async host(world, who) {
+    async host(world, who, { visibility = 'private' } = {}) {
         this.release();
         const session = new OnlineSession(await loadSdk(), await auth());
-        await session.open(await hello(who), describe(world), HARD_MAX_PLAYERS);
+        await session.open(await hello(who), describe(world), HARD_MAX_PLAYERS, { visibility, roomName: world.name });
         this.session = session;
         this.remote = false;
         return session;
@@ -147,6 +148,14 @@ export const online = {
         this.session = session;
         this.remote = !local;
         return session;
+    },
+
+    /**
+     * The public games open now that this game could play in (the same blocks
+     * and biomes, the same protocol): `[{ code, name, host, players, max, mode, flat }]`.
+     */
+    async rooms({ mode = '', gamepack } = {}) {
+        return (await auth()).rooms({ mode, protocol: PROTOCOL, content: gamepack ? contentHash(gamepack) : '' });
     },
 
     /** The host's world, as startWorld() takes one. */

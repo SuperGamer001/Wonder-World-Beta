@@ -1269,6 +1269,28 @@ body.usingPad .padOnly { display: block; }
     background: var(--bg-2); border: var(--line) solid var(--edge-soft); border-radius: 0.35vw;
     user-select: all;
 }
+/* Join a game: first where it is (two ways, side by side), then which. */
+.joinChoose { display: flex; gap: 1vw; width: 100%; margin: 0.8vw 0; }
+.joinChoose.hidden, .joinView.hidden { display: none; }
+.joinWay {
+    flex: 1; min-width: 0; flex-direction: column; align-items: flex-start; gap: 0.4vw;
+    padding: 1.3vw 1.4vw; text-align: left; white-space: normal;
+}
+.joinWay b { font-size: 1.5vw; }
+.joinWay small { color: var(--text-soft); font-size: 0.95vw; font-weight: 400; line-height: 1.35; }
+.joinView { width: 100%; display: flex; flex-direction: column; }
+.joinView .settingsSectionTitle { align-self: stretch; }
+.roomsHead { display: flex; align-items: flex-end; justify-content: space-between; gap: 1vw; }
+.roomsHead .settingsSectionTitle { flex: 1; margin-bottom: 0; }
+#onlineRoomList { max-height: 15vw; }
+.nameList .roomItem { justify-content: space-between; gap: 1.2vw; }
+.roomName { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.roomAbout { color: var(--text-soft); font-size: 0.95vw; white-space: nowrap; }
+.codeRow { display: flex; align-items: center; gap: 1vw; margin: 0.4vw 0 0.2vw; }
+.codeRow .formLabel { flex: 1; }
+.codeRow input { width: 13vw; text-align: center; letter-spacing: 0.08em; text-transform: uppercase; }
+#PlayersScreen .settingsRow .segGroup { flex-shrink: 0; }
+#splitSection, #lanSection, #onlineSection { align-self: stretch; }
 /* A guest in someone else's world: the world's own settings are not theirs. */
 body.isGuest #tabWorld { display: none !important; }
 

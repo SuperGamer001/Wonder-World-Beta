@@ -36,6 +36,7 @@ const server = http.createServer(async (req, res) => {
         const forwarded = trustProxy ? String(req.headers['x-forwarded-for'] ?? '').split(',')[0].trim() : '';
         const r = await auth.respond({
             method: req.method, path: new URL(req.url, 'http://x').pathname, origin: req.headers.origin ?? '', body,
+            query: Object.fromEntries(new URL(req.url, 'http://x').searchParams),
             ip: forwarded || req.socket.remoteAddress || '',
         });
         res.writeHead(r.status, r.body === null ? r.headers : { ...r.headers, 'Content-Type': 'application/json' });

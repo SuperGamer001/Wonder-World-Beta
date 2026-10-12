@@ -202,8 +202,12 @@ check('… and then the world closes to the network', again.open === true && aft
 // (Online play goes through Ably; test/online.test.mjs is the test of that.)
 const conf = await (await json(`${base}/api/online/config`)).json();
 check('the page is told where the online token service is', conf.auth === 'https://online.example.com' && typeof conf.version === 'string', JSON.stringify(conf));
-check('… which, as shipped, is nowhere: the game has no online play until it is given one',
-    JSON.parse(fs.readFileSync(new URL('../data/online.json', import.meta.url), 'utf8')).auth === '');
+// As shipped: where the game's token service is, or nowhere (and then the game has no online play).
+const shipped = JSON.parse(fs.readFileSync(new URL('../data/online.json', import.meta.url), 'utf8')).auth;
+check('… which, as shipped, is an https address or nothing — and never a key',
+    (shipped === '' || /^https:\/\/[A-Za-z0-9.-]+(\/[A-Za-z0-9._~\/-]*)?$/.test(shipped)) &&
+    !/[\w-]+\.[\w-]+:[\w-]{20,}/.test(fs.readFileSync(new URL('../data/online.json', import.meta.url), 'utf8')),      // (the shape of an Ably key)
+    shipped);
 // The game's own secret is sent there: only over https, or to this machine.
 const authFor = async (value) => {
     if (value === undefined) delete process.env.WW_ONLINE_AUTH; else process.env.WW_ONLINE_AUTH = value;
@@ -220,7 +224,8 @@ check('… a developer\'s own on this machine is, and so is one at a path',
     await authFor('https://example.workers.dev/online') === 'https://example.workers.dev/online');
 
 // With no Ably key this server is no token service …
-check('without an Ably key this server signs nothing', await authFor(undefined) === '' && (await json(`${base}/api/online/auth/host`, 'POST', { device: 'd'.repeat(30), slot: 0 })).status === 404);
+check('without an Ably key this server signs nothing: the page is sent to the service that was shipped',
+    await authFor(undefined) === shipped && (await json(`${base}/api/online/auth/host`, 'POST', { device: 'd'.repeat(30), slot: 0 })).status === 404);
 // … and with one (a developer's machine) it is: the code that is deployed, at an address of its own.
 const ABLY_KEY = 'aBcDeF.GhIjKl:' + 'k'.repeat(44);
 process.env.WW_ABLY_KEY = ABLY_KEY;

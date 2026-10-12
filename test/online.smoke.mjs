@@ -22,6 +22,7 @@
 //
 // Set BROWSER=<path> to pick the browser.
 import { spawn } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,7 +78,14 @@ const { Ably: Fake, hub } = makeFakeAbly({ key: KEY });
 const b64 = (bytes) => Buffer.from(bytes).toString('base64');
 const pack = (d) => d instanceof ArrayBuffer || ArrayBuffer.isView(d) ? { $b: b64(d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer, d.byteOffset, d.byteLength)) } : d;
 const unpack = (d) => d && typeof d === 'object' && typeof d.$b === 'string' ? new Uint8Array(Buffer.from(d.$b, 'base64')) : d;
-new WebSocketServer({ port: P, host: '127.0.0.1' }).on('connection', (ws) => {
+// (The token service asks Ably's REST API who is in the lobby of public games: this answers for it.)
+const hubHttp = http.createServer((req, res) => {
+    const name = /^\/channels\/([^/]+)\/presence/.exec(req.url)?.[1];
+    if (!name) { res.writeHead(404).end(); return; }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(hub.restPresence(decodeURIComponent(name))));
+});
+await new Promise((res) => hubHttp.listen(P, '127.0.0.1', res));
+new WebSocketServer({ server: hubHttp }).on('connection', (ws) => {
     const clients = new Map(), asking = new Map();
     let asks = 0;
     const send = (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); };
@@ -167,7 +175,7 @@ function ablyShim(url) {
 function gameServer(port, dir) {
     return run(process.execPath, ['server/server.js'], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(port), WONDER_DATA_DIR: dir, WW_ABLY_KEY: KEY, WW_LAN_PORT: '0', WW_BEACON_PORT: String(port + 200) },
+        env: { ...process.env, PORT: String(port), WONDER_DATA_DIR: dir, WW_ABLY_KEY: KEY, WW_ABLY_REST: `http://127.0.0.1:${P}`, WW_LAN_PORT: '0', WW_BEACON_PORT: String(port + 200) },
     });
 }
 const hostDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-online-host-')), guestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-online-guest-'));
@@ -363,6 +371,67 @@ await guestPage.until("!document.getElementById('WorldListScreen').classList.con
 check('when the host closes the game the guest is told, and is back at their own menu',
     /host has left/i.test(await guestPage.eval("document.getElementById('padNotice').textContent")), await guestPage.eval("document.getElementById('padNotice').textContent"));
 check('the host plays on, offline', await hostPage.eval('window.__wwWorld.online() === null && window.__wwDebug().meshes > 0'));
+
+// ── Join a game: first where it is, then which ──────────────────────────────────
+const SHOTS = process.env.ONLINE_SHOTS;
+const shot = async (page, name) => {
+    if (!SHOTS) return;
+    fs.mkdirSync(SHOTS, { recursive: true });
+    fs.writeFileSync(path.join(SHOTS, `${name}.png`), Buffer.from((await page.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+};
+const shown = (id) => `!document.getElementById('${id}').classList.contains('hidden')`;
+// The host opens the world to anyone, from the Players panel as a player does.
+await hostPage.eval("openPlayers(); 1");
+await hostPage.until(shown('onlineSection'), 'the Online part of the Players panel');
+await hostPage.eval(`(() => { const b = [...document.querySelectorAll('#onlineWhoRow .segBtn')].find(x => x.dataset.value === 'public'); b.click(); return 1; })()`);
+await sleep(300);
+await shot(hostPage, 'players-panel-public');
+await hostPage.eval("document.getElementById('onlineOpenToggle').click(); 1");
+const pubNet = await hostPage.until("(() => { const n = window.__wwWorld.online(); return n?.visibility ? n : null; })()", 'the world to be open to anyone', 30000);
+check('from the Players panel, the host opens the world to anyone', pubNet.visibility === 'public' && pubNet.host === true, JSON.stringify(pubNet));
+await sleep(700);
+await shot(hostPage, 'players-panel-open');
+await hostPage.eval("closePlayers(); 1");
+
+await guestPage.eval('openLanJoin(); 1');
+await guestPage.until("!document.getElementById('joinOnlineWayBtn').classList.contains('cannot')", 'the Online choice to be there');
+check('Join a game first asks where: on the network, or online', await guestPage.eval(`${shown('joinChoose')} && !(${shown('joinLanView')}) && !(${shown('joinOnlineView')})`));
+check('nowhere is an address asked for', await guestPage.eval("!document.getElementById('lanJoinAddress') && !/address/i.test(document.getElementById('LanJoinModal').textContent)"));
+await shot(guestPage, 'join-choose');
+await guestPage.eval("document.getElementById('joinLanWayBtn').click(); 1");
+await guestPage.until("/network/i.test(document.getElementById('lanGameList').textContent)", 'the list of games on the network', 15000).catch(() => {});
+check('on the network: the games open on it, and nothing else', await guestPage.eval(`${shown('joinLanView')} && !(${shown('joinChoose')}) && !(${shown('joinOnlineView')}) && /network/i.test(document.getElementById('lanGameList').textContent)`));
+await shot(guestPage, 'join-lan');
+await guestPage.eval("document.getElementById('lanJoinCloseBtn').click(); 1");
+check('Back returns to the choice', await guestPage.eval(`${shown('joinChoose')} && ${shown('LanJoinModal')}`));
+await guestPage.eval("document.getElementById('joinOnlineWayBtn').click(); 1");
+const row = await guestPage.until("(() => { const r = document.querySelector('#onlineRoomList .roomItem'); return r ? r.textContent : null; })()", 'the public game to be listed', 30000);
+check('online: the public games, each with its name, its host and how many are in it', row.includes(world.name) && /Hana/.test(row) && /1\/\d/.test(row), row);
+check('… and a place for a private game\'s code', await guestPage.eval(`${shown('joinOnlineView')} && !!document.getElementById('onlineJoinCode') && !!document.getElementById('onlineJoinGoBtn')`));
+await shot(guestPage, 'join-online');
+await guestPage.eval("document.querySelector('#onlineRoomList .roomItem').click(); 1");
+await guestPage.until(inWorld, "the guest's world to load, joined from the list", 150000).catch(async (e) => {
+    console.log('guest note:', await guestPage.eval("document.getElementById('lanJoinNote').textContent").catch(() => '?'));
+    throw e;
+});
+await hostPage.until('window.__wwPlayers().length === 2', 'the host to see the guest who walked in', 30000);
+check('a click on a public game joins it: a guest, in the host\'s world', await players(hostPage) === 'Gus,Hana*!' && await players(guestPage) === 'Gus!,Hana*', `${await players(hostPage)} | ${await players(guestPage)}`);
+await hostPage.eval('window.__wwWorld.goOffline()', true);
+await guestPage.until("!document.getElementById('WorldListScreen').classList.contains('hidden')", 'the guest to be sent back to their menu again', 30000);
+await sleep(3500);                                                           // the list is kept a few seconds
+check('closed, the game is gone from the list', (await guestPage.eval('window.__wwOnline.rooms({ gamepack: mergedGamePackData })', true)).length === 0);
+// A private game's code, typed into the same screen.
+const code2 = await hostPage.eval('window.__wwWorld.goOnline(activeWorld)', true);
+await guestPage.eval('openLanJoin(); 1');
+await guestPage.until("!document.getElementById('joinOnlineWayBtn').classList.contains('cannot')", 'the Online choice');
+await guestPage.eval("document.getElementById('joinOnlineWayBtn').click(); 1");
+await sleep(1500);
+check('a private game is in no list', await guestPage.eval("document.querySelectorAll('#onlineRoomList .roomItem').length") === 0);
+await guestPage.eval(`(() => { document.getElementById('onlineJoinCode').value = ${JSON.stringify(code2)}; document.getElementById('onlineJoinGoBtn').click(); return 1; })()`);
+await guestPage.until(inWorld, "the guest's world to load, joined by the code typed", 150000);
+check('… and is joined by typing its code', await players(guestPage) === 'Gus!,Hana*');
+await hostPage.eval('window.__wwWorld.goOffline()', true);
+await guestPage.until("!document.getElementById('WorldListScreen').classList.contains('hidden')", 'the guest to be back at their menu', 30000);
 
 // The host leaves the world: what was built where it never went is kept with the world.
 await hostPage.eval('leaveWorld(); 1');
