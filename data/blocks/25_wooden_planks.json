@@ -8,6 +8,7 @@
     0.33
   ],
   "hardness": 1.5,
+  "tool": "axe",
   "drops": [
     {
       "itemId": "wooden_planks",

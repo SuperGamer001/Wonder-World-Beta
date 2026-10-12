@@ -69,7 +69,13 @@ function makeDef(src) {
         frontColor:   src.frontColor   ?? null,   // -Z face
         backColor:    src.backColor    ?? null,   // +Z face
         hardness:     src.hardness     ?? 1.0,    // mining time multiplier
+        // How little grip it gives a foot, 0 (ground) … 1 (none): ice.
+        slippery:     Math.max(0, Math.min(1, +(src.slippery ?? 0) || 0)),
         requiresTool: src.requiresTool ?? null,   // 'pickaxe' | 'axe' | 'shovel' — null = bare hand ok
+        // The tool that is quick at it — the only one whose mining speed
+        // counts on this block. The one it needs, unless it says another:
+        // earth is a shovel's and wood an axe's, though a hand will do.
+        tool:         src.tool ?? src.requiresTool ?? null,
         drops:        src.drops        ?? null,   // [{ item, count, chance }] on break
         interactType: src.interactType ?? null,   // 'chest' | 'crafting' | 'oven' | 'smelter' | 'anvil'
         terrainType:  resolveTerrainType({ ...src, transparent: !!(flags & BLOCK_FLAGS.TRANSPARENT) }),

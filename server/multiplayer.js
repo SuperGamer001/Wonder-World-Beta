@@ -9,8 +9,9 @@
  *
  *   • Who is here. A client joins with a name and a look; everyone is told
  *     when someone comes or goes. The **first to join is the host**: its game
- *     is the one that runs the animals, the clock and the weather, and tells
- *     the rest. When the host leaves, the session is over for everybody.
+ *     is the one that runs the clock and the weather, and tells the rest
+ *     (the animals are shared out: each client runs the ones nearest its own
+ *     player). When the host leaves, the session is over for everybody.
  *   • Where everyone is: each client's latest `state` is passed on as it is
  *     (the server never looks inside it).
  *   • What has been built. A changed block is passed on, and kept in the
@@ -18,8 +19,9 @@
  *     newcomer is handed on joining: the chunk it was in may not have been
  *     saved yet, and without the journal the newcomer would generate that
  *     land afresh, without the change.
- *   • Anything else the clients have to say to each other — the host's
- *     animals, a blow landed on one — goes through as an opaque message: to
+ *   • Anything else the clients have to say to each other — the animals
+ *     each runs, a blow landed on one, what is in a chest — goes through as
+ *     an opaque message: to
  *     everyone else (`mp:all`), to the host (`mp:host`) or to one player
  *     (`mp:to`).
  *

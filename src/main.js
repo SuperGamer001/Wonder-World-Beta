@@ -50,7 +50,8 @@ let safeToClose = true;
 const mergedGamePackData = { blocks: [], biomes: [], items: [], entities: [], recipes: [], terrain: [] };
 
 let paused = false;
-let _menuOpen = false;   // true while inventory / interactive panel is open
+let _menuOpen = false;   // true while inventory / interactive panel is open — or the death screen
+let _dead = false;       // the death screen is up: nothing closes it but Respawn, and the pause menu stays off it
 let gameStarted = false;
 let loadingTextInterval = null;
 let currentLoadingTextIndex = -1;
@@ -93,10 +94,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     applyLoadedAssets();
     applyPlayerSettings(getSettings());   // apply accessibility/HUD prefs from the start
 
-    DOM.appLoadingContainer.classList.add("hidden");
     // Who is playing, and where they go: the title screen, or — a further
     // player of a split screen, a guest from the network — straight into the
-    // world (players.js).
+    // world (players.js). It puts the loading card away when it knows.
     await enterGame();
 });
 
@@ -134,6 +134,7 @@ function cacheDOM() {
     DOM.pauseScreen      = document.querySelector("#PauseScreen");
     DOM.deathScreen      = document.querySelector("#DeathScreen");
     DOM.gameUI           = document.querySelector("#gameUI");
+    DOM.clickToPlay      = document.querySelector("#clickToPlay");
     DOM.interactivePanel = document.querySelector("#InteractivePanel");
 
     DOM.worldListContainer = document.querySelector("#worldListContainer");
@@ -188,16 +189,17 @@ function bindEvents() {
     DOM.startButton.addEventListener("click", goToWorlds);
     document.getElementById('titleCreditsBtn')?.addEventListener('click', () => document.getElementById('CreditsScreen')?.classList.remove('hidden'));
     document.getElementById('creditsBackBtn')?.addEventListener('click', () => document.getElementById('CreditsScreen')?.classList.add('hidden'));
+    document.getElementById('settingReleaseNotes')?.addEventListener('click', () => showReleaseNotes());
+    document.getElementById('releaseNotesCloseBtn')?.addEventListener('click', () => document.getElementById('ReleaseNotesScreen')?.classList.add('hidden'));
     DOM.createWorldBtn.addEventListener("click", showCreateWorldModal);
 
-    // Click the game to re-acquire the pointer if we're playing but somehow
-    // unlocked (e.g. a re-lock was momentarily blocked after closing a menu).
-    DOM.gameScreen?.addEventListener('mousedown', () => {
-        if (gameStarted && !_menuOpen && !paused &&
-            document.pointerLockElement !== DOM.gameScreen) {
-            lockPointer(DOM.gameScreen);
-        }
-    });
+    // Click the game to take the pointer if we're playing but it is not held
+    // (the browser refused it: asked for with no click behind it, as when a
+    // world took longer to load than a click counts for). On the document, not
+    // on #GameScreen: the picture is behind the page (the canvas has a negative
+    // z-index), so a click on the world lands on <body> and never passed
+    // through #GameScreen — this did nothing, and a pointer once lost stayed lost.
+    document.addEventListener('mousedown', () => { if (pointerLoose()) lockPointer(DOM.gameScreen); });
     DOM.worldListBackBtn.addEventListener("click", backToTitle);
 
     DOM.worldDetailCloseBtn.addEventListener("click", () => DOM.worldDetailModal.classList.add("hidden"));
@@ -215,6 +217,15 @@ function bindEvents() {
             showWorldList();
         } catch (e) { console.error('Duplicate failed', e); }
     });
+
+    document.getElementById('worldExportBtn')?.addEventListener('click', () => { if (activeWorld) exportWorld(activeWorld); });
+    document.getElementById('importWorldBtn')?.addEventListener('click', pickWorldToImport);
+    document.getElementById('importWorldFile')?.addEventListener('change', (e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';                       // so the same file can be chosen again
+        if (file) importWorld(file);
+    });
+    watchWorldList();
 
     DOM.worldDeleteBtn.addEventListener("click", () => {
         if (!activeWorld) return;
@@ -262,7 +273,9 @@ function bindEvents() {
         callWorldJS("respawn");
     });
 
-    DOM.interactivePanelClose?.addEventListener("click", closeInteractivePanel);
+    // (Never the function itself as the listener: it would be handed the
+    // click, and each of these takes an argument of its own.)
+    DOM.interactivePanelClose?.addEventListener("click", () => closeInteractivePanel());
 
     // Settings — every control commits + applies live.
     const settingIds = [
@@ -278,26 +291,38 @@ function bindEvents() {
     document.getElementById('settingsResetBtn')?.addEventListener('click', resetSettings);
     document.getElementById('settingCheckUpdates')?.addEventListener('click', checkForUpdatesNow);
 
-    // Poll the launcher's update status. The first automatic check is deferred
-    // by a few seconds on the launcher side, so this catches it once it lands,
-    // and again when a background download finishes.
+    // Poll the launcher's update status: a version that comes out while the
+    // game is open is found here (and asked about on the menus, not over a
+    // world). Not in someone else's game, which has no updates of its own to offer.
     fetchUpdateStatus();
-    setInterval(() => {
-        // Skip while actively playing — the banner is menu-only anyway — and in
-        // someone else's game, which has no updates of its own to offer.
-        if ((gameStarted && !paused && !_menuOpen) || isGuest()) return;
-        fetchUpdateStatus();
-    }, UPDATE_POLL_MS);
+    setInterval(() => { if (!isGuest()) fetchUpdateStatus().then(maybeAskUpdate); }, UPDATE_POLL_MS);
+    document.getElementById('updateLaterBtn')?.addEventListener('click', closeUpdatePrompt);
+    document.getElementById('updateNowBtn')?.addEventListener('click', () => {
+        if (document.getElementById('UpdatePrompt').dataset.stage === 'manual') openUpdateDownload(); else updateNow();
+    });
 
     // World events from world.js
     window.addEventListener('ww_playerDied', () => {
+        // Whatever menu was up goes away, and what was in hand falls with the rest.
+        if (_invCursor) { callWorldJS("dropItem", { itemId: _invCursor.itemId, count: _invCursor.count }); _invCursor = null; _hideCursorItem(); }
+        _chest = null;
+        DOM.inventoryScreen?.classList.add('hidden');
+        DOM.creativeInvPanel?.classList.add('hidden');
+        DOM.interactivePanel?.classList.add('hidden');
+        // The death screen is a menu as far as the pointer goes: letting it go
+        // is not a pause. (It was: the pause menu came up over "You Died", and
+        // Resume took the pointer back with Respawn still to be clicked.)
+        _dead = true;
+        _menuOpen = true;
         DOM.deathScreen?.classList.remove("hidden");
         if (document.pointerLockElement) document.exitPointerLock();
     });
 
     window.addEventListener('ww_respawned', () => {
+        _dead = false;
+        _menuOpen = false;
         DOM.deathScreen?.classList.add("hidden");
-        lockPointer(DOM.gameScreen);
+        requestGameLock();
     });
 
     window.addEventListener('ww_hotbarChange', (e) => {
@@ -314,7 +339,10 @@ function bindEvents() {
         else closeInventory();
     });
 
-    DOM.invCloseBtn?.addEventListener('click', closeInventory);
+    // closeInventory's argument says "do not take the pointer back". As the
+    // listener itself it was handed the click, which said exactly that: the
+    // Close button left the game with no menu up and the pointer loose.
+    DOM.invCloseBtn?.addEventListener('click', () => closeInventory());
 
     DOM.invCraftBtn?.addEventListener('click', () => {
         closeInventory(true);  // suppress pointer lock — the next panel takes over
@@ -322,7 +350,7 @@ function bindEvents() {
         else openHandCraft();
     });
 
-    DOM.creativeInvClose?.addEventListener('click', closeCreativeInventory);
+    DOM.creativeInvClose?.addEventListener('click', () => closeCreativeInventory());
 
     DOM.creativeInvFilter?.addEventListener('input', () => {
         _populateCreativeGrid(DOM.creativeInvFilter.value.trim().toLowerCase());
@@ -352,8 +380,13 @@ function bindEvents() {
    EVENT LISTENERS
 ========================================================= */
 
-window.addEventListener("blur", () => { if (gameStarted && !_menuOpen) paused = true; });
-window.addEventListener("keydown", (e) => { KEYS[e.code] = true; });
+window.addEventListener("blur", () => { _escLock = 0; if (gameStarted && !_menuOpen) paused = true; });
+window.addEventListener("keydown", (e) => {
+    KEYS[e.code] = true;
+    // Ctrl+W is not the game's to close the window with. (A browser tab may
+    // still close: that one is the browser's, and a page is not asked.)
+    if ((e.ctrlKey || e.metaKey) && e.code === 'KeyW') e.preventDefault();
+});
 window.addEventListener("keyup",   (e) => { KEYS[e.code] = false; });
 
 // ── Pause / menu / pointer-lock coordination ──────────────────────────────────
@@ -368,9 +401,6 @@ document.addEventListener('pointerlockchange', () => {
     else if (!_menuOpen)   paused = true;
 });
 
-// Re-acquiring pointer lock can fail if requested during the browser's brief
-// post-Esc cooldown. Retry with backoff until it sticks (or we no longer want
-// it), and also retry whenever a pointerlockerror fires.
 /**
  * Acquire pointer lock with raw, unaccelerated mouse input.
  *
@@ -384,7 +414,15 @@ document.addEventListener('pointerlockchange', () => {
  * Falls back to a plain lock where the option is unsupported (it rejects on
  * some platforms), and swallows the throw that occurs when the element is not
  * in an active document.
+ *
+ * One request at a time. A browser lets a page ask only so often ("Too many
+ * pointer lock requests in a short window of time"), and a refusal for want of
+ * a click behind it would be refused the plain way too; only a browser that
+ * cannot give raw input is asked again without it — and that is remembered,
+ * because the first request after the page let the pointer go is the one a
+ * browser grants with no click behind it, and is not to be spent finding out.
  */
+let _rawInput = true;
 function lockPointer(el) {
     // A further pane of a split screen is its controller's: the mouse is the first player's.
     if (!el || PANE > 0 || document.pointerLockElement === el) return;
@@ -402,14 +440,22 @@ function lockPointer(el) {
         }
     };
 
-    attempt({ unadjustedMovement: true }).catch(() => {
+    if (!_rawInput) { attempt(null).catch(() => { /* not lockable right now */ }); return; }
+    attempt({ unadjustedMovement: true }).catch((err) => {
+        if (err?.name !== 'NotSupportedError' || document.pointerLockElement === el) return;
         // Raw input is unsupported on this platform — fall back to an ordinary
         // lock rather than leaving the player unable to look around.
-        if (document.pointerLockElement === el) return;
-        attempt(null).catch(() => { /* not lockable right now; the retry loop handles it */ });
+        _rawInput = false;
+        attempt(null).catch(() => { /* not lockable right now; the retries handle it */ });
     });
 }
 
+// Taking the pointer can be refused: for about a second and a quarter after
+// the player let it go with Esc (so a click on Resume straight after Esc is too
+// soon), and whenever there is no click behind the request. It is asked for a
+// few more times, spaced out — not many, and not in a tight loop: a page that
+// asks too often is refused for that alone.
+const LOCK_RETRY_MS = [450, 500, 600, 700];      // the gaps after the first try: tries at 0, 0.45, 0.95, 1.55 and 2.25 s
 let _lockRetryTimer = null;
 function requestGameLock() {
     clearTimeout(_lockRetryTimer);
@@ -417,38 +463,83 @@ function requestGameLock() {
     // and a page may not take the pointer on a controller button anyway: the
     // mouse is taken hold of again when it is next clicked on the game.
     if (window.__wwPad?.active) return;
-    let attempts = 0;
+    let tries = 0;
     const tryLock = () => {
         if (!gameStarted || _menuOpen) return;                           // no longer wanted
         if (document.pointerLockElement === DOM.gameScreen) return;      // already locked
         lockPointer(DOM.gameScreen);
-        if (++attempts < 15) _lockRetryTimer = setTimeout(tryLock, 250);
+        if (tries < LOCK_RETRY_MS.length) _lockRetryTimer = setTimeout(tryLock, LOCK_RETRY_MS[tries++]);
     };
     tryLock();
 }
-document.addEventListener('pointerlockerror', () => {
-    if (gameStarted && !_menuOpen && !paused) {
-        clearTimeout(_lockRetryTimer);
-        _lockRetryTimer = setTimeout(requestGameLock, 300);
-    }
-});
+
+/**
+ * Playing, with nothing up — and the pointer not held. The browser decides
+ * whether a page gets the pointer, so this can happen (a world that took long
+ * to load, a lock asked for with no click behind it); a click on the game then
+ * takes it, and the game says so (#clickToPlay) rather than sitting there deaf.
+ */
+function pointerLoose() {
+    return gameStarted && !_loadingActive && !_menuOpen && !paused && PANE === 0 &&
+        document.pointerLockElement !== DOM.gameScreen && !document.querySelector('.scrim:not(.hidden)');
+}
 
 // Escape: close an open menu (without opening pause); otherwise toggle pause.
 // While the pointer is locked the browser swallows this keydown and exits lock
 // itself — that case is handled by the pointerlockchange listener above.
+//
+// The pointer is never taken on the way down. Esc is the browser's key for
+// letting the pointer go, and it acts on it going down and coming up: a lock
+// taken on the keydown is taken away again when the key is released — as the
+// player's own doing, which pauses the game and makes the browser refuse the
+// next request for a while. (Closing the inventory with Esc put the pause menu
+// up.) So a menu closed with Esc takes the pointer once the key is up.
+let _escLock = 0;        // Esc is down and the pointer is wanted when it comes up: 1 after a menu, 2 from the pause menu
 window.addEventListener('keydown', (e) => {
     if (e.code !== 'Escape' || !gameStarted) return;
+    // Held down it repeats, and the first has done what one press does. The
+    // death screen is not a menu to close: Respawn is the way on.
+    if (e.repeat || _dead) { e.preventDefault(); return; }
     const howTo = document.getElementById('HowToPlayScreen');
     if (howTo && !howTo.classList.contains('hidden')) { e.preventDefault(); closeHowToPlay(); return; }
     if (DOM.settingsScreen && !DOM.settingsScreen.classList.contains('hidden')) {
         e.preventDefault(); closeSettings(); return;
     }
-    if (_menuOpen)   { e.preventDefault(); closeAnyMenu(); return; }
-    if (paused)      { resumeGame(); }
+    if (_menuOpen)   { e.preventDefault(); closeAnyMenu(true); _escLock = 1; return; }
+    if (paused)      { e.preventDefault(); _escLock = 2; }
     // Playing without the lock (with a controller, gamepad.js): the browser
     // has no lock to take away, so the key has to pause by itself.
     else if (document.pointerLockElement !== DOM.gameScreen) paused = true;
 });
+window.addEventListener('keyup', (e) => {
+    if (e.code !== 'Escape' || !_escLock) return;
+    const from = _escLock;
+    _escLock = 0;
+    e.preventDefault();
+    // A moment on, when the browser has done with the key.
+    setTimeout(() => {
+        if (!gameStarted || _menuOpen) return;
+        if (from === 1) requestGameLock();
+        // From the pause menu a browser gives the pointer to a click, not to
+        // this key — so it is asked once, and the menu stays up if it says no.
+        else if (paused) lockPointer(DOM.gameScreen);
+    }, 30);
+});
+
+// E and C close the menu they open. (world.js hears those keys only while the
+// pointer is held, which with a menu up it is not: they could open, never
+// close.) Before world.js's own listener, so the press that opens a menu is
+// not also the one that closes it.
+window.addEventListener('keydown', (e) => {
+    if (!gameStarted || !_menuOpen || _dead || e.repeat || (e.code !== 'KeyE' && e.code !== 'KeyC')) return;
+    if (e.target?.closest?.('input, textarea, select')) return;          // typing: the creative search
+    const up = (el) => !!el && !el.classList.contains('hidden');
+    const craft = up(DOM.interactivePanel) || up(DOM.creativeInvPanel);
+    if ((e.code === 'KeyE' && (up(DOM.inventoryScreen) || craft)) || (e.code === 'KeyC' && craft)) {
+        e.preventDefault();
+        closeAnyMenu();
+    }
+}, true);
 
 // ── "Saving World..." indicator ───────────────────────────────────────────────
 // Ref-counted so overlapping saves (autosave + unload, etc.) keep the sign up
@@ -495,12 +586,21 @@ window.addEventListener('ww_gpuWarning', (e) => {
    no IPC channel — contextIsolation and sandbox are on with no preload), so the
    UI reads it over HTTP like everything else.
 
-   The banner only ever appears on the title and pause screens. An update is
-   never worth interrupting play for, and it installs on quit regardless.
+   When there is a newer version the player is asked, once, before the game
+   starts: update now, or not now. (There used to be a banner on every menu,
+   which was there until the update was installed and could not be put away.)
+   Not now is an answer, and the game goes on — except online: games of
+   different versions cannot share a world, so playing online waits for the
+   update (`updatePending`, asked by players.js wherever a game is opened or
+   joined online). An update that turns up while a world is being played is
+   asked about on the way out of it, never over it.
 ========================================================= */
 
 const UPDATE_POLL_MS = 10000;
 let _updateStatus = null;
+let _updateAsked = false;          // the player has been asked this session
+let _updatePromptDone = null;      // resolves the promise of the prompt that is up
+let _updateWatch = null;           // the timer that follows a download
 
 async function fetchUpdateStatus() {
     try {
@@ -508,7 +608,6 @@ async function fetchUpdateStatus() {
         if (!res.ok) return;
         _updateStatus = await res.json();
         applyVersionLabel();
-        renderUpdateBanner();
     } catch { /* server not reachable — nothing to show */ }
 }
 
@@ -519,31 +618,108 @@ function applyVersionLabel() {
     if (el && v) el.textContent = `Wonder World Beta v${v}`;
 }
 
-function renderUpdateBanner() {
-    const el = document.getElementById('updateBanner');
-    if (!el) return;
+/** There is a newer version than the one running. Until it is installed, online play is off. */
+function updatePending() { return !!_updateStatus?.supported && !!_updateStatus.available; }
+const UPDATE_FIRST = 'Update Wonder World to play online: a newer version is out. (Settings → Game → Check for Updates)';
 
-    const s = _updateStatus;
-    // Menus only — never over live gameplay.
-    const onMenu = !gameStarted || paused || _menuOpen;
-    if (!s?.available || !onMenu) { el.classList.add('hidden'); return; }
+/**
+ * At startup: what the launcher has found. It starts looking as it starts,
+ * so this waits a few seconds for its answer — no longer (a player with no
+ * network is not kept waiting), and not at all where there is no launcher.
+ */
+async function updateSettled(maxMs = 4000) {
+    await fetchUpdateStatus();
+    for (const t0 = performance.now(); _updateStatus?.supported && _updateStatus.checking && performance.now() - t0 < maxMs; ) {
+        await new Promise(r => setTimeout(r, 250));
+        await fetchUpdateStatus();
+    }
+}
 
-    const ready = s.downloaded && s.canAutoInstall;
-    el.innerHTML = '';
+/** Ask about the update, if there is one and nobody has been asked. Resolves when the player has answered. */
+function askToUpdate() {
+    if (!updatePending() || _updateAsked || PANE > 0 || isGuest()) return Promise.resolve();
+    return showUpdatePrompt();
+}
 
-    const text = document.createElement('span');
-    text.textContent = ready
-        ? `Version ${s.newVersion} is ready to install.`
-        : `Version ${s.newVersion} is available.`;
-    el.appendChild(text);
+/** … the same, for an update found later: only on the menus (the title, the list of worlds), never over a world. */
+function maybeAskUpdate() {
+    const up = (el) => !!el && !el.classList.contains('hidden');
+    if (gameStarted || !(up(DOM.titleScreen) || up(DOM.worldListScreen))) return;
+    askToUpdate();
+}
 
-    const btn = document.createElement('div');
-    btn.className = 'menuButton small primary updateBannerBtn';
-    btn.textContent = ready ? 'Restart & Install' : 'Download';
-    btn.onclick = ready ? installUpdateNow : openUpdateDownload;
-    el.appendChild(btn);
-
+function showUpdatePrompt() {
+    const el = document.getElementById('UpdatePrompt');
+    if (!el || !updatePending()) return Promise.resolve();
+    _updateAsked = true;
+    _drawUpdatePrompt('ask');
     el.classList.remove('hidden');
+    return new Promise((resolve) => { const before = _updatePromptDone; _updatePromptDone = () => { before?.(); resolve(); }; });
+}
+
+function closeUpdatePrompt() {
+    clearInterval(_updateWatch);
+    _updateWatch = null;
+    document.getElementById('UpdatePrompt')?.classList.add('hidden');
+    const done = _updatePromptDone;
+    _updatePromptDone = null;
+    done?.();
+}
+
+/** The prompt, at one of its stages: 'ask', 'downloading', 'installing', 'manual', 'failed'. */
+function _drawUpdatePrompt(stage) {
+    const s = _updateStatus ?? {}, v = s.newVersion ?? 'the new version';
+    const $ = (id) => document.getElementById(id);
+    const set = (title, message, later, now) => {
+        $('updateTitle').textContent = title;
+        $('updateMessage').textContent = message;
+        $('updateLaterBtn').textContent = later ?? '';
+        $('updateLaterBtn').classList.toggle('hidden', !later);
+        $('updateNowBtn').textContent = now ?? '';
+        $('updateNowBtn').classList.toggle('hidden', !now);
+    };
+    $('updateBar').classList.toggle('hidden', stage !== 'downloading');
+    $('UpdatePrompt').dataset.stage = stage;
+    if (stage === 'ask') {
+        set('Update available',
+            `Version ${v} of Wonder World is out (you have ${s.currentVersion ?? 'an older one'}). Update before you start?\n\n` +
+            'Playing online needs the newest version: until you update, online games are switched off.',
+            'Not Now', 'Update Now');
+    } else if (stage === 'downloading') {
+        const pct = Math.max(0, Math.min(100, Math.round(s.progress ?? 0)));
+        set('Updating', `Downloading version ${v}… ${pct}%\n\nThe game restarts by itself when it is ready.`, 'Play Meanwhile', null);
+        $('updateBarFill').style.width = `${pct}%`;
+    } else if (stage === 'installing') {
+        set('Updating', `Installing version ${v}. The game is about to restart.`, null, null);
+    } else if (stage === 'manual') {
+        set('Update', `The download page has opened in your browser. Install version ${v}, then start Wonder World again.`,
+            'Continue Without Updating', 'Open It Again');
+    } else {
+        set('Update', 'The update could not be downloaded just now. You can try again from Settings → Game → Check for Updates.', 'Continue', null);
+    }
+}
+
+/** Update Now. Where the app can install it: when it has been downloaded, which may be now. Elsewhere: the download page. */
+function updateNow() {
+    if (!_updateStatus?.canAutoInstall) {
+        openUpdateDownload();
+        _drawUpdatePrompt('manual');
+        return;
+    }
+    const step = async () => {
+        await fetchUpdateStatus();
+        const u = _updateStatus ?? {};
+        const stop = () => { clearInterval(_updateWatch); _updateWatch = null; };
+        if (u.downloaded) { stop(); _drawUpdatePrompt('installing'); installUpdateNow(); }
+        else if (!u.available) { stop(); _drawUpdatePrompt('failed'); }
+        // The app could not fetch it after all (the launcher has fallen back to the website's word): the player can.
+        else if (!u.canAutoInstall) { stop(); _drawUpdatePrompt('ask'); }
+        else _drawUpdatePrompt('downloading');
+    };
+    _drawUpdatePrompt('downloading');
+    clearInterval(_updateWatch);
+    _updateWatch = setInterval(step, 700);
+    step();
 }
 
 function openUpdateDownload() {
@@ -558,6 +734,112 @@ async function installUpdateNow() {
         await fetch(`${SERVER_URL}/api/update-install`, { method: 'POST' });
         // The app quits and relaunches into the installer from here.
     } catch { /* if it fails the update still installs on next quit */ }
+}
+
+/* =========================================================
+   RELEASE NOTES
+========================================================= */
+// What this version added and fixed, from ReleaseNotes.txt (the server hands
+// it over with the version it is running). Settings → Game → Release Notes
+// shows it; and the game keeps the last version this player played
+// (`lastVersion`, with their settings), so the first time a newer one is
+// played the notes come up by themselves, over the title.
+
+/** Is version `a` newer than `b`? Numbers, then a prerelease is older than its release ("1.0.0-beta.10" > "1.0.0-beta.9"). */
+function versionNewer(a, b) {
+    const split = (v) => { const [core, pre = ''] = String(v ?? '').trim().replace(/^v/, '').split('-'); return [core.split('.').map(n => parseInt(n) || 0), pre]; };
+    const [ca, pa] = split(a), [cb, pb] = split(b);
+    for (let i = 0; i < 3; i++) if ((ca[i] ?? 0) !== (cb[i] ?? 0)) return (ca[i] ?? 0) > (cb[i] ?? 0);
+    if (pa === pb) return false;
+    if (!pa || !pb) return !pa;                         // a release is newer than its prereleases
+    const xa = pa.split('.'), xb = pb.split('.');
+    for (let i = 0; i < Math.max(xa.length, xb.length); i++) {
+        if (xa[i] === xb[i]) continue;
+        if (xa[i] === undefined || xb[i] === undefined) return xb[i] === undefined;
+        const na = /^\d+$/.test(xa[i]), nb = /^\d+$/.test(xb[i]);
+        return na && nb ? +xa[i] > +xb[i] : na !== nb ? nb : xa[i] > xb[i];
+    }
+    return false;
+}
+
+async function fetchReleaseNotes() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/release-notes`, { cache: 'no-store' });
+        return res.ok ? await res.json() : null;
+    } catch { return null; }
+}
+
+/**
+ * The notes as a page: "### a section", "- an item" (a line that follows
+ * without a dash carries it on), **bold**; the "# title" line is the popup's
+ * own title and is left out. Built as elements, never as markup: the file's
+ * text is only ever text.
+ */
+function renderReleaseNotes(text, into) {
+    into.textContent = '';
+    const rich = (el, line) => {
+        line.split(/(\*\*[^*]+\*\*)/).forEach((part) => {
+            const bold = /^\*\*[^*]+\*\*$/.test(part);
+            const node = bold ? document.createElement('strong') : document.createTextNode(part);
+            if (bold) node.textContent = part.slice(2, -2);
+            el.appendChild(node);
+        });
+        return el;
+    };
+    let list = null, item = null;
+    for (const raw of String(text ?? '').split(/\r?\n/)) {
+        const line = raw.trim();
+        if (!line) { item = null; continue; }
+        if (/^#\s/.test(line)) continue;
+        if (/^#{2,}\s/.test(line)) { list = item = null; into.appendChild(rich(document.createElement('h3'), line.replace(/^#+\s*/, ''))); continue; }
+        if (/^[-*]\s/.test(line)) {
+            if (!list) { list = document.createElement('ul'); into.appendChild(list); }
+            item = rich(document.createElement('li'), line.replace(/^[-*]\s*/, ''));
+            list.appendChild(item);
+            continue;
+        }
+        if (item) { rich(item, ' ' + line); continue; }
+        list = null;
+        into.appendChild(rich(document.createElement('p'), line));
+    }
+}
+
+/** Show the release notes. `fresh`: they are coming up by themselves, for a version just arrived at. */
+async function showReleaseNotes(notes = null, fresh = false) {
+    const screen = document.getElementById('ReleaseNotesScreen'), body = document.getElementById('releaseNotesBody');
+    if (!screen || !body) return;
+    notes = notes ?? await fetchReleaseNotes();
+    const version = notes?.notesVersion ?? notes?.version ?? '';
+    document.getElementById('releaseNotesTitle').textContent = fresh ? "What's New" : 'Release Notes';
+    document.getElementById('releaseNotesSub').textContent = fresh
+        ? `Wonder World has been updated to version ${version}. Here is what it added and fixed.`
+        : version ? `Wonder World ${version}` : '';
+    document.getElementById('releaseNotesCloseBtn').textContent = fresh ? 'Continue' : 'Close';
+    if (notes?.text?.trim()) renderReleaseNotes(notes.text, body);
+    else body.textContent = 'There are no release notes with this copy of the game.';
+    body.scrollTop = 0;
+    screen.classList.remove('hidden');
+}
+
+/**
+ * Called once as the game starts, when it is known who is playing. Remembers
+ * the version being played, and — when that is newer than the one played
+ * last — shows what it brought. `returning`: this player was here before the
+ * game kept track (an update from a version that did not), so they are shown
+ * it too; someone starting for the first time is not.
+ * The notes are only shown when they are this version's: a file still
+ * describing the last release says nothing about this one.
+ */
+async function maybeShowWhatsNew(returning) {
+    const notes = await fetchReleaseNotes();
+    if (!notes?.version) return;
+    const s = getSettings(), last = s.lastVersion ?? null;
+    if (last === notes.version) return;
+    saveSettings({ ...s, lastVersion: notes.version });
+    const newer = last ? versionNewer(notes.version, last) : returning;
+    if (!newer || !notes.text?.trim()) return;
+    if (notes.notesVersion && notes.notesVersion !== notes.version) return;
+    showReleaseNotes(notes, true);
 }
 
 /** Settings → Check for Updates. */
@@ -580,17 +862,20 @@ async function checkForUpdatesNow() {
           :                      'Up to date';
     }
     applyVersionLabel();
-    renderUpdateBanner();
+    // Asked for by hand: the question again, whatever was said to it before.
+    if (updatePending() && PANE === 0 && !isGuest()) showUpdatePrompt();
 }
 
 // Close whichever in-game menu is currently open and return to play.
-function closeAnyMenu() {
-    if (DOM.inventoryScreen && !DOM.inventoryScreen.classList.contains('hidden'))   { closeInventory();        return; }
-    if (DOM.creativeInvPanel && !DOM.creativeInvPanel.classList.contains('hidden')) { closeCreativeInventory(); return; }
-    if (DOM.interactivePanel && !DOM.interactivePanel.classList.contains('hidden')) { closeInteractivePanel();  return; }
+// `later`: do not take the pointer yet — the Esc key is still down (see above).
+function closeAnyMenu(later = false) {
+    if (_dead) return;                 // the death screen is not one of them
+    if (DOM.inventoryScreen && !DOM.inventoryScreen.classList.contains('hidden'))   { closeInventory(later);          return; }
+    if (DOM.creativeInvPanel && !DOM.creativeInvPanel.classList.contains('hidden')) { closeCreativeInventory(!later); return; }
+    if (DOM.interactivePanel && !DOM.interactivePanel.classList.contains('hidden')) { closeInteractivePanel(!later);  return; }
     // Fallback — never leave the game stuck in a phantom "menu open" state.
     _menuOpen = false;
-    requestGameLock();
+    if (!later) requestGameLock();
 }
 
 window.addEventListener("beforeunload", (event) => {
@@ -754,9 +1039,11 @@ async function backToTitle() {
 // view, and none of what costs most. How many are playing on this screen is
 // index.js's to know; it tells every pane when it changes.
 let _splitCount = PANE > 0 ? (parseInt(PARAMS.get('of')) || 2) : 1;
+window.__wwSplitN = _splitCount;        // for world.js: how many players share this screen
 window.__wwSplitCount = (n) => {
     if (n === _splitCount) return;
     _splitCount = n;
+    window.__wwSplitN = n;
     applyPlayerSettings(getSettings());
 };
 /** The graphics a player chose, as far as a shared screen allows them. */
@@ -1064,8 +1351,8 @@ function commitSettingsFromForm(e) {
 
 function resetSettings() {
     // Who the player is — their character, their name — is not a setting to put back.
-    const { skin, playerName, clientId, profiles, onlineCredential } = getSettings();
-    saveSettings({ ...DEFAULT_SETTINGS, skin, playerName, clientId, profiles, onlineCredential });
+    const { skin, playerName, clientId, profiles, onlineCredential, lastVersion } = getSettings();
+    saveSettings({ ...DEFAULT_SETTINGS, skin, playerName, clientId, profiles, onlineCredential, lastVersion });
     populateSettingsForm();
     applyPlayerSettings(getSettings());
 }
@@ -1230,19 +1517,136 @@ async function closeWorldSettingsModal() {
    WORLD LIST
 ========================================================= */
 
+/** A line of text over the screen for a few seconds (players.js shows it). */
+function showNotice(text) { window.dispatchEvent(new CustomEvent('ww_notice', { detail: { text } })); }
+
 async function showWorldList() {
     DOM.titleScreen.classList.add("hidden");
     DOM.titleLogo?.classList.add("hidden");   // hide the big logo behind the world list
-    DOM.worldListScreen.classList.remove("hidden");
+    _worldListShown = null;                    // drawn afresh, whatever was there
     DOM.worldListContainer.innerHTML = '<div class="listNote">Looking for your worlds…</div>';
+    DOM.worldListScreen.classList.remove("hidden");
+    await refreshWorldList();
+}
 
-    let worlds = [];
+// The list is asked for again whenever the screen comes up — however it comes
+// up — and while it is up: when the window is come back to, and every few
+// seconds (a world copied into the folder, or saved by another window, turns
+// up by itself). It is only drawn again when it has changed, so nothing
+// flickers and a controller's focus ring stays where it is.
+const WORLD_LIST_EVERY = 4000;      // ms
+let _worldListShown = null;         // what the list on screen was drawn from, as text
+let _worldListAsk = 0;
+
+const worldListUp = () => !gameStarted && !DOM.worldListScreen.classList.contains('hidden');
+
+async function refreshWorldList() {
+    const ask = ++_worldListAsk;
+    let worlds = null;
     try {
-        const res = await fetch(`${SERVER_URL}/api/worlds`);
+        const res = await fetch(`${SERVER_URL}/api/worlds`, { cache: 'no-store' });
         if (res.ok) worlds = await res.json();
     } catch (e) { console.warn('Server not reachable', e); }
-
+    if (ask !== _worldListAsk) return;                 // a later asking has this in hand
+    if (!worlds) { if (_worldListShown === null) renderWorldList([]); return; }    // keep what is shown
+    const text = JSON.stringify(worlds);
+    if (text === _worldListShown) return;
+    _worldListShown = text;
     renderWorldList(worlds);
+}
+
+function watchWorldList() {
+    let was = worldListUp();
+    new MutationObserver(() => {
+        const up = worldListUp();
+        if (up && !was) refreshWorldList();
+        was = up;
+    }).observe(DOM.worldListScreen, { attributes: true, attributeFilter: ['class'] });
+    window.addEventListener('focus', () => { if (worldListUp()) refreshWorldList(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden && worldListUp()) refreshWorldList(); });
+    setInterval(() => { if (worldListUp() && !document.hidden) refreshWorldList(); }, WORLD_LIST_EVERY);
+}
+
+/* =========================================================
+   EXPORT AND IMPORT (a world as one .wwworld file)
+========================================================= */
+
+const WORLD_FILE_TYPES = [{ description: 'Wonder World world', accept: { 'application/octet-stream': ['.wwworld'] } }];
+const _megabytes = (n) => n < 1048576 ? `${Math.max(1, Math.round(n / 1024))} KB` : `${(n / 1048576).toFixed(1)} MB`;
+
+/**
+ * Export: ask where the file should go, then write the world there. The
+ * asking comes first, while the click still counts for something. Where the
+ * browser has no such window to offer, the file is handed over as a download
+ * — which the desktop app also answers with "save where?".
+ */
+async function exportWorld(world) {
+    const url = `${SERVER_URL}/api/worlds/${world.id}/export`;
+    const name = `${String(world.name ?? 'World').replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'World'}.wwworld`;
+    DOM.worldDetailModal.classList.add("hidden");
+    if (window.showSaveFilePicker) {
+        let handle = null;
+        try { handle = await window.showSaveFilePicker({ suggestedName: name, types: WORLD_FILE_TYPES }); }
+        catch (e) { if (e?.name === 'AbortError') return; }           // the player closed the window: nothing to do
+        if (handle) {
+            try {
+                showNotice(`Exporting "${world.name}"…`);
+                const res = await fetch(url);
+                if (!res.ok || !res.body) throw new Error(`the game answered ${res.status}`);
+                await res.body.pipeTo(await handle.createWritable());   // closes the file when all of it is there
+                showNotice(`"${world.name}" was exported to ${handle.name}.`);
+            } catch (e) {
+                console.error('Export failed', e);
+                showNotice(`"${world.name}" could not be exported: ${e?.message ?? e}`);
+            }
+            return;
+        }
+    }
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+}
+
+/** Import: ask where the world is. A file being chosen is what goes on (`importWorld`). */
+async function pickWorldToImport() {
+    if (window.showOpenFilePicker) {
+        try {
+            const [handle] = await window.showOpenFilePicker({ types: WORLD_FILE_TYPES, multiple: false });
+            return importWorld(await handle.getFile());
+        } catch (e) { if (e?.name === 'AbortError') return; }
+    }
+    document.getElementById('importWorldFile')?.click();
+}
+
+/** The file is looked through first, and only brought in when the player has seen what it is. */
+async function importWorld(file) {
+    const send = (path) => fetch(`${SERVER_URL}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+    const answer = async (res) => { try { return await res.json(); } catch { return { ok: false, error: `the game answered ${res.status}` }; } };
+    showNotice(`Scanning ${file.name}…`);
+    let scan;
+    try { scan = await answer(await send('/api/worlds/import/scan')); }
+    catch (e) { scan = { ok: false, error: String(e?.message ?? e) }; }
+    if (!scan.ok) return openMessage('Import World', `${file.name} cannot be imported.\n${scan.error ?? ''}`);
+    const w = scan.world;
+    openConfirm('Import World',
+        `"${w.name}"\n${_titleCaseName(w.gameMode)}  ·  ${w.worldType === 'flat' ? 'Flat  ·  ' : ''}Seed ${w.seed}\n` +
+        `${scan.chunks.toLocaleString()} saved chunks  ·  ${_megabytes(scan.bytes)}\n\nAdd this world to your worlds?`,
+        async () => {
+            showNotice(`Importing "${w.name}"…`);
+            let done;
+            try { done = await answer(await send('/api/worlds/import')); }
+            catch (e) { done = { ok: false, error: String(e?.message ?? e) }; }
+            if (!done.id) return openMessage('Import World', `The world could not be imported.\n${done.error ?? ''}`);
+            showNotice(`"${done.name}" was added to your worlds.`);
+            refreshWorldList();
+        });
+}
+
+/** The confirm popup with nothing to decide: one button. */
+function openMessage(title, message) {
+    openConfirm(title, message, () => {});
+    DOM.confirmPopup.classList.add('messageOnly');
+    DOM.confirmYes.textContent = 'OK';
 }
 
 function renderWorldList(worlds) {
@@ -1454,6 +1858,8 @@ function startWorld(world) {
     gameStarted = true;
     paused      = false;
     _menuOpen   = false;
+    _dead       = false;
+    _chest      = null;
     // Reset the frame clock so the first gameLoop() of this world starts fresh.
     // Otherwise the leftover timestamp from a previous world makes the first dt
     // compute as NaN (undefined - oldTimestamp), which corrupts player physics
@@ -1676,12 +2082,15 @@ let _activeStation = null;
 let _selectedRecipeId = null;
 
 function openInteractivePanel({ interactType, x, y, z }) {
+    // A chest is not a place to make things: it is somewhere to put them (below).
+    if (interactType === 'chest') return openChest(x, y, z);
+    if (_menuOpen) return;
     _activeStation = interactType;
     _selectedRecipeId = null;
 
     DOM.interactivePanelTitle.textContent = {
         hand: 'Hand Crafting', crafting: 'Crafting Table', oven: 'Oven',
-        smelter: 'Smelter', chest: 'Chest', anvil: 'Anvil',
+        smelter: 'Smelter', anvil: 'Anvil',
     }[interactType] ?? interactType;
 
     populateRecipeList(interactType);
@@ -1690,12 +2099,64 @@ function openInteractivePanel({ interactType, x, y, z }) {
     if (document.pointerLockElement) document.exitPointerLock();
 }
 
-function closeInteractivePanel() {
+function closeInteractivePanel(lock = true) {
     DOM.interactivePanel.classList.add("hidden");
     _activeStation = null;
     _menuOpen = false;
-    requestGameLock();
+    if (lock) requestGameLock();
 }
+
+/* =========================================================
+   CHESTS
+   A chest holds things: twenty-seven slots, kept with the world (world.js has
+   them — `window.__wwChests` — and, with other players in the world, keeps
+   them the same for everyone). It is shown as part of the inventory screen, so
+   everything a slot does there — pick up, put down, take half — it does here.
+========================================================= */
+
+let _chest = null;        // the chest that is open: { x, y, z, slots: [{ itemId, count } | null × 27] }
+let _chestAsk = 0;
+
+async function openChest(x, y, z) {
+    if (_menuOpen || !window.__wwChests) return;
+    // In someone else's world its contents are asked of the host, which takes a moment.
+    const ask = ++_chestAsk;
+    const slots = await window.__wwChests.open(x, y, z);
+    if (ask !== _chestAsk || !gameStarted || _menuOpen || paused) return;
+    if (!slots) { showNotice('The chest would not open.'); return; }
+    _chest = { x, y, z, slots };
+    openInventory();
+}
+
+/** What is in the open chest was changed here: world.js keeps it, and tells the others. */
+function _chestTouched() {
+    if (_chest) window.__wwChests?.changed(_chest.x, _chest.y, _chest.z);
+}
+
+/** Put a stack into the open chest: onto stacks of the same thing, then into empty slots. Returns what did not fit. */
+function _chestAdd(itemId, count) {
+    const max = window.me?.inventory?._maxStack?.(itemId) ?? 64;
+    for (const s of _chest.slots) {
+        if (count <= 0) break;
+        if (s?.itemId !== itemId || s.count >= max) continue;
+        const n = Math.min(max - s.count, count);
+        s.count += n; count -= n;
+    }
+    for (let i = 0; i < _chest.slots.length && count > 0; i++) {
+        if (_chest.slots[i]) continue;
+        const n = Math.min(max, count);
+        _chest.slots[i] = { itemId, count: n }; count -= n;
+    }
+    return count;
+}
+
+// The chest was changed by someone else, or is gone (broken): show it as it is now.
+window.addEventListener('ww_chestChanged', (e) => {
+    if (!_chest || e.detail?.key !== `${_chest.x},${_chest.y},${_chest.z}`) return;
+    if (!e.detail.slots) { closeInventory(); return; }
+    _chest.slots = e.detail.slots;
+    _renderInventory();
+});
 
 /* =========================================================
    INVENTORY SCREEN
@@ -1713,16 +2174,23 @@ function openInventory() {
 
 function closeInventory(suppressLock = false) {
     // Return any held cursor item to inventory before closing
-    if (_invCursor) {
-        const inv = window.me?.inventory;
-        if (inv) inv.addItem(_invCursor.itemId, _invCursor.count);
-        _invCursor = null;
-        _hideCursorItem();
-    }
+    _stowCursor();
+    _chest = null;
+    _chestAsk++;
     DOM.inventoryScreen?.classList.add('hidden');
     _menuOpen = false;
     refreshHotbarUI();
     if (!suppressLock) requestGameLock();
+}
+
+/** What is held on the cursor goes back into the inventory — or, with no room for it, onto the ground. */
+function _stowCursor() {
+    if (!_invCursor) return;
+    const inv = window.me?.inventory;
+    const left = inv ? inv.addItem(_invCursor.itemId, _invCursor.count) : _invCursor.count;
+    if (left > 0) callWorldJS("dropItem", { itemId: _invCursor.itemId, count: left });
+    _invCursor = null;
+    _hideCursorItem();
 }
 
 // ── Inventory craft button label ─────────────────────────────────────────────
@@ -1755,10 +2223,10 @@ function openCreativeInventory() {
     if (document.pointerLockElement) document.exitPointerLock();
 }
 
-function closeCreativeInventory() {
+function closeCreativeInventory(lock = true) {
     DOM.creativeInvPanel?.classList.add('hidden');
     _menuOpen = false;
-    requestGameLock();
+    if (lock) requestGameLock();
 }
 
 // Creative inventory entries: every item, plus a placeable entry for any block
@@ -1889,6 +2357,18 @@ function _renderInventory() {
         DOM.invHotbarRow.appendChild(row);
     }
 
+    // The chest that is open, if one is
+    const chestBox = document.getElementById('invChest'), chestGrid = document.getElementById('invChestSlots');
+    chestBox?.classList.toggle('hidden', !_chest);
+    document.getElementById('invCraftBtn')?.classList.toggle('hidden', !!_chest);
+    document.getElementById('invTitle').textContent = _chest ? 'Chest' : 'Inventory';
+    document.getElementById('invHint').textContent = 'Click to pick up or put down  ·  Right-click to take half, or put down one' +
+        (_chest ? '  ·  Shift-click to move a stack across' : '');
+    if (_chest && chestGrid) {
+        chestGrid.innerHTML = '';
+        for (let i = 0; i < _chest.slots.length; i++) chestGrid.appendChild(_makeSlotEl({ type: 'chest', index: i }, _chest.slots[i], ''));
+    }
+
     // General inventory grid
     if (DOM.invSlots) {
         DOM.invSlots.innerHTML = '';
@@ -1932,16 +2412,66 @@ function _makeSlotEl(slotRef, item, keybind) {
         el.appendChild(kb);
     }
 
-    el.addEventListener('click', (e) => { e.stopPropagation(); _onSlotClick(slotRef, item); });
-    el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); _onSlotRightClick(slotRef, item); });
+    el.addEventListener('click', (e) => { e.stopPropagation(); _slotAction(el, () => _onSlotClick(slotRef, item, e.shiftKey)); });
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); _slotAction(el, () => _onSlotRightClick(slotRef, item)); });
     el.addEventListener('mouseenter', () => _showInvTooltip(el, slotRef, item));
     el.addEventListener('mouseleave', _hideInvTooltip);
     return el;
 }
 
-function _onSlotClick(slotRef, item) {
+/**
+ * A click on a slot: do it, and afterwards say so if it changed what is in the
+ * open chest (world.js keeps the chest, and tells the other players). A slot
+ * that would not take what was offered (`false` back) says no.
+ */
+function _slotAction(el, act) {
+    const before = _chest ? JSON.stringify(_chest.slots) : '';
+    const refused = act() === false;
+    if (_chest && JSON.stringify(_chest.slots) !== before) _chestTouched();
+    if (refused && el.isConnected) {
+        el.classList.remove('inv-refuse');
+        void el.offsetWidth;                 // so the shake starts over on a second try
+        el.classList.add('inv-refuse');
+    }
+}
+
+/**
+ * Whether a slot takes an item. What is worn goes where it is worn — a helmet
+ * on the head and nowhere else, a quiver in the quiver's place — and nothing
+ * else is worn at all. (Any item could be put in any of them.)
+ */
+function _slotTakes(slotRef, itemId) {
+    if (slotRef.type !== 'equip') return true;
+    const def = mergedGamePackData.items?.find(it => it.id === itemId);
+    return !!def && (def.type === 'armor' || def.type === 'quiver') && def.slot === slotRef.index;
+}
+
+/**
+ * Whether the inventory can carry `itemId` as a new stack in one of its own
+ * slots, in place of `instead` (what is there now, if anything). Each stack
+ * weighs what one of its items does (Inventory.js); a chest's slots weigh
+ * nothing, so what comes out of one has to be weighed on its way in.
+ */
+function _canCarry(inv, slotRef, itemId, instead = null) {
+    if (slotRef.type === 'chest') return true;
+    return inv.availableWeight + (instead ? inv._wt(instead.itemId) : 0) >= inv._wt(itemId);
+}
+
+function _onSlotClick(slotRef, item, shift = false) {
     const inv = window.me?.inventory;
     if (!inv) return;
+
+    // Shift-click, with a chest open: the whole stack, across.
+    if (shift && _chest && !_invCursor && item) {
+        const live = _getSlot(inv, slotRef);
+        if (!live) return;
+        const left = slotRef.type === 'chest' ? inv.addItem(live.itemId, live.count) : _chestAdd(live.itemId, live.count);
+        if (left === live.count) return false;
+        _setSlot(inv, slotRef, left > 0 ? { itemId: live.itemId, count: left } : null);
+        refreshHotbarUI();
+        _renderInventory();
+        return;
+    }
 
     if (!_invCursor) {
         // Pick up: only if the slot has an item
@@ -1951,8 +2481,10 @@ function _onSlotClick(slotRef, item) {
         _renderInventory();
         _showCursorItem();
     } else {
-        // Put down into this slot
+        // Put down into this slot — if it takes such a thing, and it can be carried
         const targetItem = _getSlot(inv, slotRef);
+        if (!_slotTakes(slotRef, _invCursor.itemId)) return false;
+        if (targetItem?.itemId !== _invCursor.itemId && !_canCarry(inv, slotRef, _invCursor.itemId, targetItem)) return false;
 
         if (!targetItem) {
             // Empty target: place cursor item here
@@ -2027,6 +2559,8 @@ function _onSlotRightClick(slotRef, item) {
     if (_invCursor && !item) {
         const maxStack = inv._maxStack?.(_invCursor.itemId) ?? 64;
         const existing = _getSlot(inv, slotRef);
+        if (!_slotTakes(slotRef, _invCursor.itemId)) return false;
+        if (!existing && !_canCarry(inv, slotRef, _invCursor.itemId)) return false;
         if (!existing) {
             _setSlot(inv, slotRef, { itemId: _invCursor.itemId, count: 1 });
             _invCursor.count -= 1;
@@ -2103,6 +2637,7 @@ function _hideInvTooltip() {
 }
 
 function _getSlot(inv, ref) {
+    if (ref.type === 'chest')   return _chest?.slots[ref.index] ?? null;
     if (ref.type === 'hotbar')  return inv.hotbar[ref.index] ?? null;
     if (ref.type === 'offhand') return inv.offhand ?? null;
     if (ref.type === 'equip')   return inv.equipment[ref.index] ?? null;
@@ -2110,6 +2645,7 @@ function _getSlot(inv, ref) {
 }
 
 function _setSlot(inv, ref, item) {
+    if (ref.type === 'chest')   { if (_chest) _chest.slots[ref.index] = item; return; }
     if (ref.type === 'hotbar')  { inv.hotbar[ref.index] = item; return; }
     if (ref.type === 'offhand') { inv.offhand = item; return; }
     if (ref.type === 'equip')   { inv.equipment[ref.index] = item; return; }
@@ -2162,32 +2698,45 @@ document.addEventListener('click', (e) => {
     if (!_invCursor) return;
     if (e.target.closest('#InventoryScreen')) return;
     // Return item to first available hotbar/inventory slot
-    const inv = window.me?.inventory;
-    if (inv) inv.addItem(_invCursor.itemId, _invCursor.count);
-    _invCursor = null;
-    _hideCursorItem();
+    _stowCursor();
     refreshHotbarUI();
     _renderInventory();
 });
 
 const STATION_ALIASES = { crafting: 'crafting_table' };
+// What can be made by hand can be made at a crafting table too.
+const STATION_ALSO = { crafting_table: ['hand'] };
 
+/** The recipes a station offers (`rawStation`: a block's interactType, or 'hand'). */
+function stationRecipes(rawStation) {
+    // A block's interactType ("crafting") doesn't always equal the recipe station
+    // name ("crafting_table") — normalize so the table actually lists its recipes.
+    const station = STATION_ALIASES[rawStation] ?? rawStation;
+    const also = STATION_ALSO[station] ?? [];
+    return mergedGamePackData.recipes.filter(r => r.station === station || also.includes(r.station));
+}
+
+/**
+ * Draw the list of what the station makes. The recipe that was chosen stays
+ * chosen, with the list where it was scrolled to: this runs again after every
+ * craft, and making ten of a thing used to mean finding it in the list ten times.
+ */
 function populateRecipeList(rawStation) {
     const inv  = window.me.inventory;
+    const scrolled = DOM.recipeList.scrollTop;
     DOM.recipeList.innerHTML = '';
     DOM.recipeDetailName.textContent = '';
     DOM.recipeDetail.innerHTML = '';
     DOM.craftBtn.classList.add('cannot');
     DOM.craftBtn.onclick = null;
 
-    // A block's interactType ("crafting") doesn't always equal the recipe station
-    // name ("crafting_table") — normalize so the table actually lists its recipes.
-    const station = STATION_ALIASES[rawStation] ?? rawStation;
-    const recipes = mergedGamePackData.recipes.filter(r => r.station === station);
-    for (const recipe of recipes) {
+    let chosen = null;
+    for (const recipe of stationRecipes(rawStation)) {
         const canCraft = inv ? inv.hasIngredients(_ingredientMap(recipe)) : false;
         const itemEl = document.createElement('div');
         itemEl.className = 'recipeListItem' + (canCraft ? '' : ' locked');
+        itemEl.id = `recipe-${recipe.id}`;         // (so a controller's ring finds it again after the list is redrawn)
+        itemEl.dataset.recipe = recipe.id;
 
         const icon = document.createElement('img');
         icon.src = itemTextureSrc(recipe.result.itemId);
@@ -2199,15 +2748,16 @@ function populateRecipeList(rawStation) {
 
         itemEl.addEventListener('click', () => selectRecipe(recipe, canCraft));
         DOM.recipeList.appendChild(itemEl);
+        if (recipe.id === _selectedRecipeId) chosen = { recipe, canCraft };
     }
+    if (chosen) selectRecipe(chosen.recipe, chosen.canCraft); else _selectedRecipeId = null;
+    DOM.recipeList.scrollTop = scrolled;
 }
 
 function selectRecipe(recipe, canCraft) {
     _selectedRecipeId = recipe.id;
-    document.querySelectorAll('.recipeListItem').forEach(el => {
-        const span = el.querySelector('span');
-        el.classList.toggle('active', span?.textContent === recipe.result.itemId.replace(/_/g, ' '));
-    });
+    // By the recipe, not by what it makes: two recipes can make the same thing (a torch from coal, or from charcoal).
+    document.querySelectorAll('.recipeListItem').forEach(el => el.classList.toggle('active', el.dataset.recipe === String(recipe.id)));
 
     // Result header with icon
     const resultName = recipe.result.itemId.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -2425,7 +2975,14 @@ async function leaveWorld(over = false) {
     DOM.interactivePanel?.classList.add("hidden");
     DOM.inventoryScreen?.classList.add("hidden");
     DOM.creativeInvPanel?.classList.add("hidden");
+    DOM.clickToPlay?.classList.add("hidden");
+    _invCursor = null;
+    _hideCursorItem();
+    _chest = null;
+    _chestAsk++;
     _menuOpen = false;
+    _dead = false;
+    _escLock = 0;
     DOM.loadingContainer.classList.add("hidden");
     DOM.titleLogo.classList.remove("hidden");
     DOM.logo.classList.remove("Loading");
@@ -2443,6 +3000,8 @@ async function leaveWorld(over = false) {
     window.__wwSound?.playMusic(MENU_MUSIC);
     showWorldList();
     startMenuWorld('worlds');
+    // A newer version found while the world was being played: now is the time to say so.
+    setTimeout(maybeAskUpdate, 800);
 }
 
 /* =========================================================
@@ -2544,10 +3103,18 @@ function handleHotbarKeys() {
     }
 }
 
+let _looseSince = 0;       // when the pointer was first found not held while playing (0: it is held, or is not wanted)
+
 function updateUIVisibility() {
     const isSpectator = activeWorld?.gameMode === 'SPECTATOR';
     DOM.pauseScreen.classList.toggle("hidden", !paused || _menuOpen);
     DOM.gameUI.classList.toggle("hidden", (paused && !_menuOpen) || isSpectator);
+    // Playing, but the browser has not given the pointer: say what takes it.
+    // (Not at once — a menu closing is in this state for a moment on its way back to play.)
+    const loose = pointerLoose() && !window.__wwPad?.active && !_escLock;
+    if (!loose) _looseSince = 0;
+    else if (!_looseSince) _looseSince = performance.now();
+    DOM.clickToPlay?.classList.toggle("hidden", !(loose && performance.now() - _looseSince > 700));
 }
 
 // A button says so when it is pressed (the mouse, or a controller's A).
@@ -2564,6 +3131,9 @@ document.addEventListener('click', (e) => {
 function openConfirm(title, message, task) {
     DOM.confirmMessage.textContent = message;
     DOM.confirmTitle.textContent = title;
+    DOM.confirmPopup.classList.remove('messageOnly');
+    DOM.confirmYes.textContent = 'Yes';
+    document.getElementById('confirmNo')?.classList.remove('hidden');
     DOM.confirmYes.onclick = () => { task(); DOM.confirmPopup.classList.add("hidden"); };
     DOM.confirmPopup.classList.remove("hidden");
 }

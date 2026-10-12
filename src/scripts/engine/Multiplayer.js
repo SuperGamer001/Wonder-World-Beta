@@ -8,8 +8,9 @@
  * does, and listens; with nobody else there, nothing is sent.
  *
  * The first to join is the **host**. All the games hold the whole world and
- * each runs its own player; the host's also runs what there must be only one
- * of — the animals, the clock, the weather — and tells the rest.
+ * each runs its own player, and the animals nearest that player; the host's
+ * also runs what there must be only one of — the clock, the weather — and
+ * tells the rest.
  *
  * This class is the socket and nothing else: it knows who is here and passes
  * messages. What they mean is world.js's business (the `on…` callbacks).

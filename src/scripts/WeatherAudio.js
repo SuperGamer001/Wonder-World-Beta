@@ -1,18 +1,21 @@
 /**
- * WeatherAudio — rain, wind and thunder. Rain and wind are made here as they
- * are needed — filtered noise, which is what they are — so they never repeat
- * audibly. Thunder is played from data/sounds/ambiant/thunder_*.ogg (a stroke
- * worked out a pulse at a time by tools/gen_sounds.mjs; a clap of raw noise,
- * as it used to be, sounded like a game console), with a made rumble as the
- * fallback where a pack has no such files.
+ * WeatherAudio — rain, wind and thunder.
  *
- *   rain    pink noise, band-limited; louder and lower as it gets heavier, and
- *           muffled under a roof or in a cave
- *   hail    the rain loop, brighter, rattling
+ *   rain    two loops of drops falling (data/sounds/ambiant/rain_light and
+ *           rain_heavy, made a drop at a time by tools/gen_sounds.mjs), moved
+ *           between as it gets heavier, with a low roar under a downpour;
+ *           muffled under a roof or in a cave. It was filtered noise made
+ *           here, which has rain's colour and none of its texture — it hissed.
+ *           A pack without the files still gets that.
+ *   hail    the same, brighter, rattling
  *   wind    brown noise through a band-pass that sweeps with the gusts
- *   thunder a near, a middling or a far-off take by the distance; it arrives
- *           after distance / 343 seconds (one block = one metre) and the
- *           farther the strike, the quieter and more muffled it is
+ *   thunder made for each strike: a crack for a close one, then rolls of low
+ *           noise, each dying away, no two strikes alike. It arrives after
+ *           distance / 343 seconds (one block = one metre), and the farther
+ *           the strike the quieter and more muffled it is. (For a while it
+ *           was files worked out pulse by pulse from a model of the channel;
+ *           they sounded like a machine, and this is what was there before.)
+ *           A pack may still supply thunder_close / _mid / _far and be played.
  *
  * It plays through the game's one mixer (Sound.js: its context and its weather
  * bus), which exists once the player has clicked into the game, and its volume
@@ -81,11 +84,19 @@ export class WeatherAudio {
             return s;
         };
 
-        // Rain: high-passed pink noise, low-passed by how exposed the player is.
-        this.rainHp = ctx.createBiquadFilter(); this.rainHp.type = 'highpass'; this.rainHp.frequency.value = 350;
-        this.rainLp = ctx.createBiquadFilter(); this.rainLp.type = 'lowpass'; this.rainLp.frequency.value = 7000;
+        // Rain: the two loops of drops (started when they have been decoded:
+        // _rainLoops), low-passed by how exposed the player is.
+        this.rainHp = ctx.createBiquadFilter(); this.rainHp.type = 'highpass'; this.rainHp.frequency.value = 120;
+        this.rainLp = ctx.createBiquadFilter(); this.rainLp.type = 'lowpass'; this.rainLp.frequency.value = 12000;
         this.rainGain = ctx.createGain(); this.rainGain.gain.value = 0;
-        loop(pink).connect(this.rainHp).connect(this.rainLp).connect(this.rainGain).connect(this.master);
+        this.rainHp.connect(this.rainLp).connect(this.rainGain).connect(this.master);
+        this.lightGain = ctx.createGain(); this.lightGain.gain.value = 0;
+        this.heavyGain = ctx.createGain(); this.heavyGain.gain.value = 0;
+        this.lightGain.connect(this.rainHp);
+        this.heavyGain.connect(this.rainHp);
+        this._loop = loop;
+        this._pink = pink;
+        this._rain = null;         // 'drops' | 'noise' once its sources run
 
         // Heavy-rain body: the low roar under a downpour.
         this.roarLp = ctx.createBiquadFilter(); this.roarLp.type = 'lowpass'; this.roarLp.frequency.value = 420;
@@ -97,6 +108,28 @@ export class WeatherAudio {
         this.windGain = ctx.createGain(); this.windGain.gain.value = 0;
         loop(brown).connect(this.windBp).connect(this.windGain).connect(this.master);
         return true;
+    }
+
+    /**
+     * Start what rain is played from, once: the loops of drops when both are
+     * decoded, or — where a pack has no such files — the old filtered noise.
+     */
+    _rainLoops() {
+        if (this._rain) return;
+        if (sound.has('rain_light') && sound.has('rain_heavy')) {
+            const light = sound.buffer('rain_light'), heavy = sound.buffer('rain_heavy');
+            if (!light || !heavy) return;                  // on their way
+            this._loop(light).connect(this.lightGain);
+            this._loop(heavy).connect(this.heavyGain);
+            this._rain = 'drops';
+        } else if (sound.loaded) {
+            const hp = this.ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 350;
+            const lp = this.ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 4200;
+            const g = this.ctx.createGain(); g.gain.value = 0.6;
+            this._loop(this._pink).connect(hp).connect(lp).connect(g);
+            g.connect(this.lightGain); g.connect(this.heavyGain);
+            this._rain = 'noise';
+        }
     }
 
     /**
@@ -129,12 +162,18 @@ export class WeatherAudio {
         this.exposure = s.exposure;
 
         const ex = Math.max(0, Math.min(1, s.exposure));
-        const r = s.rain;
+        const r = Math.max(0, Math.min(1, s.rain));
         const muffle = s.covered ? 0.55 : 1;
-        this.rainGain.gain.setTargetAtTime((0.32 * r + 0.3 * r * r) * ex * muffle, t, 0.4);
-        this.rainLp.frequency.setTargetAtTime(s.covered ? 1100 : 4200 + 5000 * s.pellet - 1500 * r, t, 0.4);
-        this.rainHp.frequency.setTargetAtTime(350 + 1400 * s.pellet, t, 0.4);
-        this.roarGain.gain.setTargetAtTime(Math.max(0, r - 0.4) * 0.5 * ex, t, 0.6);
+        if (r > 0.01) this._rainLoops();
+        // A shower is the light loop; as it gets heavier the dense one comes
+        // up under it and the single drops are lost in it.
+        const up = Math.max(0, Math.min(1, (r - 0.2) / 0.6)), heavy = up * up * (3 - 2 * up);
+        this.lightGain.gain.setTargetAtTime(Math.sqrt(Math.min(1, r / 0.3)) * (1 - 0.7 * heavy), t, 0.5);
+        this.heavyGain.gain.setTargetAtTime(heavy, t, 0.5);
+        this.rainGain.gain.setTargetAtTime((0.42 + 0.28 * r) * ex * muffle, t, 0.6);
+        this.rainLp.frequency.setTargetAtTime(s.covered ? 1100 : 9000, t, 0.4);
+        this.rainHp.frequency.setTargetAtTime(120 + 1600 * s.pellet, t, 0.4);
+        this.roarGain.gain.setTargetAtTime(Math.max(0, r - 0.4) * 0.35 * ex, t, 0.6);
 
         const w = Math.max(0, Math.min(1, (s.wind - 2) / 18));
         this.windGain.gain.setTargetAtTime(Math.pow(w, 1.4) * 0.55 * (0.3 + 0.7 * ex), t, 0.5);
@@ -145,8 +184,9 @@ export class WeatherAudio {
     thunder(dist) {
         if (this.volume <= 0 || !this._init()) return;
         const ctx = this.ctx;
-        // A recorded stroke: near ones crack, far ones only roll. Underground
-        // it comes through the rock, quieter and with the top off.
+        // A pack's own thunder, if it has any (the game ships none): near ones
+        // crack, far ones only roll. Underground it comes through the rock,
+        // quieter and with the top off.
         const take = dist < 260 ? 'thunder_close' : dist < 900 ? 'thunder_mid' : 'thunder_far';
         if (sound.has(take)) {
             const ex = Math.max(0, Math.min(1, this.exposure ?? 1));
@@ -156,7 +196,7 @@ export class WeatherAudio {
             });
             return;
         }
-        const close = false;
+        const close = dist < 130;
         const dur = 3.5 + Math.min(4, dist / 90);
         const n = Math.floor(ctx.sampleRate * dur);
         const buf = ctx.createBuffer(1, n, ctx.sampleRate);

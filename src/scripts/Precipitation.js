@@ -171,11 +171,15 @@ void main() {
     vec3 lo = cameraPosition - uBox * 0.5;
     vec3 wp;
     if (uKind == 5) {
-        // Splash: each instance reappears at a new random spot every cycle.
+        // Splash: each instance reappears at a new random spot every cycle —
+        // a spot on the ground, not in the view: the box is tiled over the
+        // world and the splash is at its place in the tile the camera is in.
+        // (It was placed from the box's corner, which is the camera's: every
+        // ring slid along the ground with the player.)
         float cyc = uTime * 1.7 + aSeed.w * 17.0;
         float k = floor(cyc), life = fract(cyc);
         vec2 r = vec2(hash11(k * 13.1 + aSeed.x * 97.0), hash11(k * 7.7 + aSeed.y * 131.0));
-        vec3 p = vec3(lo.x + r.x * uBox.x, 0.0, lo.z + r.y * uBox.z);
+        vec3 p = vec3(lo.x + mod(r.x * uBox.x - lo.x, uBox.x), 0.0, lo.z + mod(r.y * uBox.z - lo.z, uBox.z));
         p.y = groundAt(p.xz);
         float I = uAmount * rainMask(cloudNoise(p.xz));
         if (p.y < -1000.0 || abs(p.y - cameraPosition.y) > 30.0 || hash11(k * 3.3 + aSeed.z * 71.0) >= I) {
@@ -256,7 +260,7 @@ void main() {
 // count: instances at Particles "high". box: the volume around the camera.
 // speed: fall speed (blocks/s). wind: share of the wind a particle drifts with.
 const LAYERS = {
-    rain:   { count: 14000, box: [56, 36, 56], speed: 11,  wind: 0.45, size: 0.035, len: 0.95, mask: 1, color: [0.78, 0.84, 0.92], opacity: 0.55 },
+    rain:   { count: 14000, box: [56, 36, 56], speed: 19,  wind: 0.45, size: 0.035, len: 1.3,  mask: 1, color: [0.78, 0.84, 0.92], opacity: 0.55 },
     snow:   { count: 12000, box: [44, 30, 44], speed: 1.6, wind: 0.8,  size: 0.12,  len: 0,    mask: 1, color: [1.0, 1.0, 1.0],   opacity: 0.9 },
     pellet: { count: 6000,  box: [44, 30, 44], speed: 8,   wind: 0.35, size: 0.055, len: 0,    mask: 1, color: [0.92, 0.95, 1.0], opacity: 0.9 },
     splash: { count: 2600,  box: [36, 1, 36],  speed: 0,   wind: 0,    size: 0.34,  len: 0,    mask: 1, color: [0.78, 0.82, 0.88], opacity: 0.45 },

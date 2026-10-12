@@ -15,6 +15,7 @@
   "interactable": true,
   "interactType": "oven",
   "hardness": 3.5,
+  "tool": "pickaxe",
   "drops": [
     {
       "itemId": "oven",

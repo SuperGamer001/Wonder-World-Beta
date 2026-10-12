@@ -136,6 +136,15 @@ player's own machine. Set `TRUST_PROXY=true` only behind a proxy that sets
 in `online/`): the game's side and the service's side go together. The secret
 stays; only the code is replaced.
 
+A service left behind shows up as exactly one thing: **public games are never
+listed.** A copy from before there were public games gives a host no tag to
+be listed with, and answers `GET /rooms` with the line about itself
+(`{"ok":true,"service":"wonder-world-online"}`) instead of a list — which is
+how to tell, from any browser: open `<the service's address>/rooms`. A
+current one answers `{"rooms":[…]}`. The game says so too ("the online
+service has not been updated for public games yet") rather than opening a
+private game its host believes anyone can find.
+
 ### Then
 
 - Check it: `curl https://your-address/` answers `{"ok":true,…}`.
@@ -166,10 +175,15 @@ Check them again before relying on a number.
 receives it.** One player moving in a room of four is four messages, each
 time. So the game says things as seldom as it can (`RATE` in
 `OnlineProtocol.js`): where a player is, five times a second while moving and
-once every two seconds standing still; the host's mobs three times a second;
-nothing at all while a host is alone in the room.
+once every two seconds standing still; the mobs a game runs three times a
+second, and only while another player is near enough to see them; nothing at
+all while a host is alone in the room.
 
-Measured in the test, everyone moving the whole time, with mobs about:
+Measured in the test, everyone moving the whole time, with the host telling
+of mobs. (Each game now runs the mobs nearest its own player and tells the
+others of them, so with players standing together the others' mobs are on top
+of this: about 3 messages a second for each player who has any, times
+everyone who hears. Players apart say nothing of their mobs at all.)
 
 | Players | Messages a second | Hours of that in 6,000,000 |
 |---|---|---|
@@ -273,7 +287,8 @@ host's game ──┐                          ┌── guest's game
 ```
 
 The host's game still runs the world, as on a home network: it holds the
-world, runs the mobs and the clock, and answers a guest's requests for chunks.
+world, runs the clock, keeps the chests, and answers a guest's requests for
+chunks. (The mobs are shared out: each game runs the ones nearest its player.)
 Ably replaces the game's own server as the thing messages go through.
 
 | File | |

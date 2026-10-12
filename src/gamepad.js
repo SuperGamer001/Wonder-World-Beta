@@ -200,12 +200,14 @@
     // The screens, topmost first, and what "back" does on each.
     const click = (sel) => () => document.querySelector(sel)?.click();
     const SCOPES = [
+        ['#UpdatePrompt',           click('#updateLaterBtn')],
         ['#confirmPopup',           click('#confirmNo')],
         ['#GuestOverScreen',        null],
         ['#NameScreen',             () => window.__wwName?.cancel()],
         ['#PlayersScreen',          click('#playersBackBtn')],
         ['#LanJoinModal',           click('#lanJoinCloseBtn')],
         ['#HowToPlayScreen',        click('#howToBackBtn')],
+        ['#ReleaseNotesScreen',     click('#releaseNotesCloseBtn')],
         ['#CreditsScreen',          click('#creditsBackBtn')],
         ['#CharacterScreen',        click('#characterDoneBtn')],
         ['#SettingsScreen',         click('#settingsBackBtn')],

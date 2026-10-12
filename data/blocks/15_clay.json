@@ -8,6 +8,7 @@
     0.55
   ],
   "hardness": 0.6,
+  "tool": "shovel",
   "drops": [
     {
       "itemId": "clay_ball",

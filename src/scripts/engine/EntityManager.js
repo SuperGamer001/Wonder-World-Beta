@@ -21,13 +21,23 @@ import { MobModels } from '../MobModels.js';
 import { randomVariant } from './MobShapes.js';
 import { GAITS } from './MobAnim.js';
 
-const SPAWN_RADIUS  = 32;   // chunks from player to attempt spawn
-const DESPAWN_RADIUS= 80;   // blocks from player to despawn
+const FOOTSTEP_REACH = 20;      // blocks: a mob's footfalls are not made, let alone heard, beyond this
+
+const SPAWN_RADIUS  = 32;   // blocks from the player to attempt spawn
+const DESPAWN_RADIUS= 80;   // blocks from the player to despawn
 const PICKUP_RADIUS = 1.5;  // blocks from player to auto-pickup
 const SPAWN_INTERVAL= 8;    // seconds between spawn attempts
-const MAX_MOBS      = 24;   // hard cap per world
+const MAX_MOBS      = 24;   // the most within DESPAWN_RADIUS of a player
 const ITEM_LIFETIME = 300;  // seconds before dropped items expire
 const DEATH_TIME    = 0.9;  // seconds a mob lies where it fell before it is gone
+
+// With other players in the world (see "With other players", below).
+const SHARE_RADIUS   = 2 * SPAWN_RADIUS;    // players this near each other fill one neighbourhood between them
+const WORD_RADIUS    = DESPAWN_RADIUS + 16; // a mob is told of to a player this near it (a little past where theirs end)
+const HANDOFF_EVERY  = 0.5;   // seconds between looks at whose each mob should be
+const HANDOFF_MARGIN = 6;     // blocks nearer another player than this one before a mob is theirs to run
+const REPLICA_TTL    = 1.5;   // seconds another game's mob is kept with no word of it
+const ID_SPAN        = 1_000_000;   // a mob's id is its first game's number × this, plus a count
 
 let _nextId = 0;
 
@@ -75,19 +85,29 @@ export class EntityManager {
         // each a function (data, offset) that writes its sphere there.
         this.extraCasters = [];
 
-        // ── With other players (see *Multiplayer* in CLAUDE.md) ──────────────
-        // The host's game runs the mobs. A guest's is a `replica`: it spawns
-        // nothing and decides nothing, and shows what the host's snapshots
-        // say (snapshot / applySnapshot). The callbacks carry what has to
-        // cross: a guest's blow to the host, and from the host a mob's blow
-        // or a dead mob's drops to the player they are for.
-        this.replica = false;
+        // ── With other players (see *Playing together* in CLAUDE.md) ─────────
+        // A mob is run by one game — the game of the player nearest it — and
+        // shown by the rest. Every game spawns round its own player, as it
+        // does alone, and tells the others of the mobs it runs (snapshot);
+        // theirs it shows as they say (applySnapshot: such a mob has `net`).
+        // A mob that ends up nearer another player is handed to that
+        // player's game (onGive / adopt), so whoever is beside a mob is the
+        // one whose game — with that land loaded — is moving it. (The host's
+        // game used to run them all, round the host: a guest who walked off
+        // met none.) The callbacks carry what has to cross: a blow on a mob
+        // to the game that runs it, and from there a mob's blow, or a dead
+        // mob's drops, to the player they are for.
+        this.owner = 0;                // this game's number in the session (world.js); 0 alone
         this.others = [];              // the other players: [{ id, x, y, z }], set by world.js each frame
-        this.onRemoteHit = null;       // (mobId, damage, from) — a guest struck a mob
+        this.onRemoteHit = null;       // (ownerId, mobId, damage) — this player struck a mob another game runs
         this.onRemoteAttack = null;    // (playerId, damage) — a mob struck another player
         this.onRemoteDrops = null;     // (playerId, pos, [[itemId, count], …]) — another player's kill
-        this._netInfo = new Map();     // replica: mob id → the look it was announced with
-        this._seen = new Set();
+        this.onGive = null;            // (playerId, [id, type, x, y, z, yaw, health, look]) — a mob is theirs to run now
+        this._netInfo = new Map();     // mob id → the look it was announced with
+        this._heard = new Map();       // player id → when their last word of their mobs came
+        this._count = 0;               // mobs this game has made (for their ids)
+        this._clock = 0;               // seconds this manager has run
+        this._handT = 0;
 
         this._player = { x: 0, y: 0, z: 0 };
         this._target = null;           // the player a mob's blow would land on: null = this one
@@ -165,26 +185,41 @@ export class EntityManager {
     // ── Main update ───────────────────────────────────────────────────────────
 
     update(dt, playerPos, inventory, gameMode) {
-        if (this.replica) {
-            this._player.x = playerPos.x; this._player.y = playerPos.y; this._player.z = playerPos.z;
-            this._updateReplicas(dt);
-            this._updateDrops(dt, playerPos, inventory, gameMode);
-            return;
-        }
+        this._clock += dt;
         this._spawnT += dt;
         if (this._spawnT >= SPAWN_INTERVAL) {
             this._spawnT = 0;
             if (gameMode !== 'SPECTATOR') this._trySpawn(playerPos);
         }
+        // Now and then, with others about: whose is each mob?
+        this._handT += dt;
+        const hand = this._handT >= HANDOFF_EVERY;
+        if (hand) this._handT = 0;
 
-        this._updateMobs(dt, playerPos, gameMode);
+        this._updateMobs(dt, playerPos, gameMode, hand);
         this._updateDrops(dt, playerPos, inventory, gameMode);
     }
 
     // ── Mob spawning ──────────────────────────────────────────────────────────
 
+    /**
+     * Mobs appear round this game's player. Every game does this for its own
+     * player, so wherever a player is there are mobs — and where players are
+     * together they fill the place between them, no faster and no fuller than
+     * one would: the mobs already there count whoever's game runs them, and
+     * each game takes only its share of the turns.
+     */
     _trySpawn(playerPos) {
-        if (this._mobs.size >= MAX_MOBS) return;
+        let near = 0;
+        for (const mob of this._mobs.values()) {
+            if ((mob.pos.x - playerPos.x) ** 2 + (mob.pos.z - playerPos.z) ** 2 < DESPAWN_RADIUS * DESPAWN_RADIUS) near++;
+        }
+        if (near >= MAX_MOBS) return;
+        let sharing = 1;
+        for (const o of this.others) {
+            if ((o.x - playerPos.x) ** 2 + (o.z - playerPos.z) ** 2 < SHARE_RADIUS * SHARE_RADIUS) sharing++;
+        }
+        if (sharing > 1 && Math.random() * sharing >= 1) return;
 
         for (const [typeId, def] of this._types) {
             if (Math.random() > 0.25) continue;
@@ -226,7 +261,7 @@ export class EntityManager {
 
             const count = 1 + Math.floor(Math.random() * ((rules.maxGroupSize ?? 1) - (rules.minGroupSize ?? 1) + 1));
             for (let i = 0; i < count; i++) {
-                if (this._mobs.size >= MAX_MOBS) break;
+                if (near >= MAX_MOBS) break;
                 // The others of a group stand nearby — each on its own ground, or in its own water.
                 let gx = sx + 0.5, gy = sy, gz = sz + 0.5;
                 if (i > 0) {
@@ -239,11 +274,15 @@ export class EntityManager {
                     }
                 }
                 this._spawnMob(typeId, { x: gx, y: gy, z: gz });
+                near++;
             }
         }
     }
 
-    _spawnMob(typeId, pos, id = uid(), variant = null) {
+    /** An id no other game's mob has: this game's number in the session, and a count. */
+    _newId() { return this.owner * ID_SPAN + (++this._count); }
+
+    _spawnMob(typeId, pos, id = this._newId(), variant = null) {
         const def = this._types.get(typeId);
         if (!def) return;
 
@@ -282,19 +321,31 @@ export class EntityManager {
 
     // ── Mob update ────────────────────────────────────────────────────────────
 
-    _updateMobs(dt, playerPos, gameMode) {
+    _updateMobs(dt, playerPos, gameMode, hand = false) {
         const ai = this.ai, ctx = this._ctx;
         this._player.x = playerPos.x; this._player.y = playerPos.y; this._player.z = playerPos.z;
         ctx.playerVisible = gameMode !== 'SPECTATOR';
         ai.beginFrame();
         this.posed = 0;
+        const far2 = DESPAWN_RADIUS * DESPAWN_RADIUS;
 
         for (const [id, mob] of this._mobs) {
+            // Another game's: shown as that game says.
+            if (mob.net) { this._updateReplica(mob, dt); continue; }
+
             const dx = mob.pos.x - playerPos.x;
             const dz = mob.pos.z - playerPos.z;
+            const d2 = dx * dx + dz * dz;
+
+            // Nearer another player now (or this one has gone off and left it
+            // beside them): it is that player's game's to run.
+            if (mob.dying === 0 && this.others.length && (hand || d2 > far2)) {
+                const to = this._nearerPlayer(mob, ctx.playerVisible ? Math.sqrt(d2) : Infinity);
+                if (to) { this._give(mob, to); continue; }
+            }
 
             // Despawn if too far, or fallen out of the world.
-            if (dx * dx + dz * dz > DESPAWN_RADIUS * DESPAWN_RADIUS || mob.pos.y < WORLD_MIN_Y - 16) {
+            if (d2 > far2 || mob.pos.y < WORLD_MIN_Y - 16) {
                 this._removeMob(id);
                 continue;
             }
@@ -349,7 +400,12 @@ export class EntityManager {
         const gait = GAITS[mob.inst.name];
         const stride = (gait ? gait.walk + (gait.run - gait.walk) * a.run : Math.max(0.4, (def.height ?? 1.4) * 0.8)) * mob.inst.scale;
         if (def.aquatic) a.phase += dt * (3.5 + 7 * Math.min(1, speed / walk));
-        else a.phase += speed * dt * (Math.PI * 2) / stride;
+        else {
+            // Two footfalls to a stride are heard (a walking cow's four come in two pairs).
+            const beat = Math.floor(a.phase / Math.PI);
+            a.phase += speed * dt * (Math.PI * 2) / stride;
+            if (Math.floor(a.phase / Math.PI) !== beat && alive && mob.onGround && !mob.inWater && speed > 0.4) this._footstep(mob, a.run);
+        }
         a.air   = ease(a.air, alive && !mob.onGround && !mob.inWater ? 1 : 0, 12);
         a.swim  = ease(a.swim, mob.inWater ? 1 : 0, 6);
         a.graze = ease(a.graze, alive && mob.grazing ? 1 : 0, 4);
@@ -430,26 +486,107 @@ export class EntityManager {
         return tmin >= 0 ? tmin : tmax;
     }
 
-    /** The mob says something: `<type>_idle` or `<type>_hurt`, from where its head is. */
+    /**
+     * The mob says something: `<type>_idle` or `<type>_hurt`, from where its
+     * head is. Each take of those is a different call; on top of that every
+     * one is a little higher or lower each time (`vary`), and by the animal's size.
+     */
     _voice(mob, kind, volume, pitch = 1) {
         if (!this.onSound) return;
         const size = mob.inst?.scale ?? 1;
         this.onSound(`${mob.typeId}_${kind}`, { x: mob.pos.x, y: mob.pos.y + (mob.def.height ?? 1) * 0.8, z: mob.pos.z },
-            { volume, pitch: pitch / size ** 0.6, reach: 30 });
+            { volume, pitch: pitch / size ** 0.6, vary: 0.09, reach: 30 });
+    }
+
+    /**
+     * A foot comes down: `step`, with what the listener needs to pick the sound —
+     * the mob's own kind of foot (`footstep` in its JSON: hoof, trotter, chicken;
+     * none: a shoe, which sounds of the ground alone) and the block under it.
+     */
+    _footstep(mob, run) {
+        if (!this.onSound) return;
+        const p = mob.pos, dx = p.x - this._player.x, dz = p.z - this._player.z;
+        if (dx * dx + dz * dz > FOOTSTEP_REACH * FOOTSTEP_REACH) return;
+        const x = Math.floor(p.x), z = Math.floor(p.z);
+        const ground = this.world.getBlock(x, Math.floor(p.y - 0.2), z) || this.world.getBlock(x, Math.floor(p.y - 1.2), z);
+        // A heavy animal is heard further than a hen.
+        const weight = Math.sqrt(Math.min(1, Math.max(0.25, (mob.def.width ?? 0.8) * (mob.def.height ?? 1.4))));
+        this.onSound('step', { x: p.x, y: p.y, z: p.z }, { footstep: mob.def.footstep ?? null, ground, volume: (0.3 + 0.2 * run) * weight, reach: FOOTSTEP_REACH });
     }
 
     // ── With other players ────────────────────────────────────────────────────
 
+    /** The mobs this game runs (the rest are other games', shown here). */
+    get ownCount() {
+        let n = 0;
+        for (const mob of this._mobs.values()) if (!mob.net) n++;
+        return n;
+    }
+
     /**
-     * The host's mobs as they are now, for the guests: eleven numbers a mob in
-     * `list` (id, type, x, y, z, yaw, flags, where the head is turned, how
-     * far through a blow, how lately hurt) and, in `info`, the look of each
-     * mob not announced yet — or of all of them, when someone has just joined
-     * (`full`).
+     * Whether there is anything to tell and anyone near enough to be told: a
+     * mob this game runs, with another player near enough to it to see it.
+     * (Players far apart say nothing of their mobs to each other: every word
+     * of an online game is counted.)
+     */
+    get hasWord() {
+        for (const mob of this._mobs.values()) {
+            if (mob.net) continue;
+            for (const o of this.others) if ((o.x - mob.pos.x) ** 2 + (o.z - mob.pos.z) ** 2 < WORD_RADIUS * WORD_RADIUS) return true;
+        }
+        return false;
+    }
+
+    /** The other player this mob is nearer to than to this game's own (`dMe` blocks off), by enough to be theirs; or null. */
+    _nearerPlayer(mob, dMe) {
+        let best = null, bestD = Math.min(DESPAWN_RADIUS, dMe - HANDOFF_MARGIN);
+        for (const o of this.others) {
+            const d = Math.hypot(mob.pos.x - o.x, mob.pos.z - o.z);
+            if (d < bestD) { bestD = d; best = o; }
+        }
+        return best;
+    }
+
+    /** Hand a mob to another player's game. Here it becomes one of theirs: shown where it is until their word of it comes. */
+    _give(mob, to) {
+        const r = (v) => Math.round(v * 100) / 100, look = mob.inst?.variant ?? null;
+        this.onGive?.(to.id, [mob.id, mob.typeId, r(mob.pos.x), r(mob.pos.y), r(mob.pos.z), r(mob.yaw), mob.health, look]);
+        this._netInfo.set(mob.id, look);
+        mob.net = { x: mob.pos.x, y: mob.pos.y, z: mob.pos.z, yaw: mob.yaw, lookYaw: mob.lookYaw, lookPitch: mob.lookPitch, owner: to.id, seen: this._clock };
+    }
+
+    /** A mob handed to this game by another (`m`: what _give sent): it is run here from now on. */
+    adopt(m) {
+        if (!Array.isArray(m) || m.length < 8) return;
+        const [id, typeId, x, y, z, yaw, health, look] = m;
+        if (!Number.isSafeInteger(id) || !this._types.has(typeId) || ![x, y, z].every(Number.isFinite)) return;
+        const old = this._mobs.get(id);
+        if (old && !old.net) return;                    // this game's already
+        if (old) this._removeMob(id);
+        this._spawnMob(typeId, { x, y, z }, id, look ?? this._netInfo.get(id) ?? null);
+        const mob = this._mobs.get(id);
+        if (!mob) return;
+        if (Number.isFinite(yaw)) { mob.yaw = yaw; mob.mesh.rotation.y = yaw; }
+        if (health > 0) mob.health = Math.min(mob.maxHealth, health);
+    }
+
+    /** A player has left: the mobs their game ran went with it. */
+    dropOwner(playerId) {
+        this._heard.delete(playerId);
+        for (const [id, mob] of [...this._mobs]) if (mob.net?.owner === playerId) { this._removeMob(id); this._netInfo.delete(id); }
+    }
+
+    /**
+     * The mobs this game runs as they are now, for the other games: eleven
+     * numbers a mob in `list` (id, type, x, y, z, yaw, flags, where the head
+     * is turned, how far through a blow, how lately hurt) and, in `info`, the
+     * look of each mob not announced yet — or of all of them (`full`: someone
+     * has just joined, or it is a while since they were last all told).
      */
     snapshot(full = false) {
         const list = [], info = {}, r = (v) => Math.round(v * 100) / 100;
         for (const mob of this._mobs.values()) {
+            if (mob.net) continue;
             const flags = (mob.onGround ? 1 : 0) | (mob.inWater ? 2 : 0) | (mob.grazing ? 4 : 0) | (mob.panic ? 8 : 0) | (mob.dying > 0 ? 16 : 0);
             list.push(mob.id, mob.typeId, r(mob.pos.x), r(mob.pos.y), r(mob.pos.z), r(mob.yaw), flags,
                 r(mob.lookYaw), r(mob.lookPitch), r(mob.swing ?? 0), r(mob.hurt));
@@ -458,66 +595,76 @@ export class EntityManager {
         return { list, info };
     }
 
-    /** A guest: make the mobs what the host's snapshot says (they are moved there smoothly by update). */
-    applySnapshot(snap, interval = 0.1) {
-        const list = snap.list ?? [], seen = this._seen;
-        seen.clear();
-        for (const id in snap.info ?? {}) this._netInfo.set(Number(id), snap.info[id]);
+    /** Another game's word of the mobs it runs (`from`: its player): they are made so here, and moved there smoothly by update. */
+    applySnapshot(from, snap) {
+        const list = Array.isArray(snap?.list) ? snap.list : [], now = this._clock;
+        // How long since their last word: it is what says how fast each mob is going.
+        const last = this._heard.get(from);
+        const interval = Math.min(1, Math.max(0.05, last === undefined ? 0.1 : now - last));
+        this._heard.set(from, now);
+        if (snap?.info && typeof snap.info === 'object') for (const id in snap.info) this._netInfo.set(Number(id), snap.info[id]);
         for (let i = 0; i + 10 < list.length; i += 11) {
             const id = list[i], x = list[i + 2], y = list[i + 3], z = list[i + 4], flags = list[i + 6];
+            if (!Number.isSafeInteger(id) || ![x, y, z, list[i + 5]].every(Number.isFinite)) continue;
             let mob = this._mobs.get(id);
+            if (mob && !mob.net) continue;              // this game's own: a word from before it was handed over
             if (!mob) {
                 if (!this._netInfo.has(id) || !this._types.has(list[i + 1])) continue;       // not announced yet
                 this._spawnMob(list[i + 1], { x, y, z }, id, this._netInfo.get(id));
                 mob = this._mobs.get(id);
                 if (!mob) continue;
-                mob.net = { x, y, z, yaw: list[i + 5], lookYaw: 0, lookPitch: 0 };
+                mob.net = { x, y, z, yaw: list[i + 5], lookYaw: 0, lookPitch: 0, owner: from, seen: now };
                 mob.yaw = list[i + 5];
             }
-            seen.add(id);
             const n = mob.net;
             mob.vel.x = (x - n.x) / interval; mob.vel.z = (z - n.z) / interval;
-            n.x = x; n.y = y; n.z = z; n.yaw = list[i + 5]; n.lookYaw = list[i + 7]; n.lookPitch = list[i + 8];
+            n.x = x; n.y = y; n.z = z; n.yaw = list[i + 5]; n.lookYaw = +list[i + 7] || 0; n.lookPitch = +list[i + 8] || 0;
+            n.owner = from; n.seen = now;
             mob.onGround = !!(flags & 1); mob.inWater = !!(flags & 2); mob.grazing = !!(flags & 4); mob.panic = !!(flags & 8);
-            mob.swing = list[i + 9];
-            mob.hurt = Math.max(mob.hurt, list[i + 10]);
+            mob.swing = +list[i + 9] || 0;
+            mob.hurt = Math.max(mob.hurt, +list[i + 10] || 0);
             if ((flags & 16) && mob.dying === 0) mob.dying = 0.0001;
         }
-        for (const id of [...this._mobs.keys()]) if (!seen.has(id)) { this._removeMob(id); this._netInfo.delete(id); }
     }
 
-    /** A guest's mobs: eased to where the host last said they were, and animated. */
-    _updateReplicas(dt) {
-        const k = 1 - Math.exp(-dt * 14);
-        this.posed = 0;
-        for (const mob of this._mobs.values()) {
-            const n = mob.net;
-            if (!n) continue;
-            mob.pos.x += (n.x - mob.pos.x) * k; mob.pos.y += (n.y - mob.pos.y) * k; mob.pos.z += (n.z - mob.pos.z) * k;
-            let turn = n.yaw - mob.yaw;
-            turn -= Math.round(turn / (Math.PI * 2)) * Math.PI * 2;
-            mob.yaw += turn * k;
-            if (mob.dying > 0) mob.dying += dt;
-            else {
-                // Its voice is this game's own to play: what is heard depends on where the listener is.
-                mob.voiceT = (mob.voiceT ?? 4 + Math.random() * 20) - dt;
-                if (mob.voiceT <= 0) {
-                    mob.voiceT = 9 + Math.random() * 22;
-                    if ((mob.pos.x - this._player.x) ** 2 + (mob.pos.z - this._player.z) ** 2 < 28 * 28) this._voice(mob, 'idle', 0.55);
-                }
-            }
-            mob.hurt = Math.max(0, mob.hurt - dt * 3);
-            mob.mesh.position.set(mob.pos.x, mob.pos.y, mob.pos.z);
-            mob.mesh.rotation.y = mob.yaw;
-            if (mob.inst) this._animate(mob, dt);
-            else this._applyLight(mob);
+    /**
+     * Another game's mob: eased to where that game last said it was, and
+     * animated. It is gone when it has lain dead its moment — or when nothing
+     * has been said of it for a while: its game has left, or let it go, or
+     * the two players are too far apart to be telling each other.
+     */
+    _updateReplica(mob, dt) {
+        const n = mob.net;
+        if (this._clock - n.seen > REPLICA_TTL || mob.dying > DEATH_TIME) {
+            this._netInfo.delete(mob.id);
+            this._removeMob(mob.id);
+            return;
         }
+        const k = 1 - Math.exp(-dt * 14);
+        mob.pos.x += (n.x - mob.pos.x) * k; mob.pos.y += (n.y - mob.pos.y) * k; mob.pos.z += (n.z - mob.pos.z) * k;
+        let turn = n.yaw - mob.yaw;
+        turn -= Math.round(turn / (Math.PI * 2)) * Math.PI * 2;
+        mob.yaw += turn * k;
+        if (mob.dying > 0) mob.dying += dt;
+        else {
+            // Its voice is this game's own to play: what is heard depends on where the listener is.
+            mob.voiceT = (mob.voiceT ?? 4 + Math.random() * 20) - dt;
+            if (mob.voiceT <= 0) {
+                mob.voiceT = 9 + Math.random() * 22;
+                if ((mob.pos.x - this._player.x) ** 2 + (mob.pos.z - this._player.z) ** 2 < 28 * 28) this._voice(mob, 'idle', 0.55);
+            }
+        }
+        mob.hurt = Math.max(0, mob.hurt - dt * 3);
+        mob.mesh.position.set(mob.pos.x, mob.pos.y, mob.pos.z);
+        mob.mesh.rotation.y = mob.yaw;
+        if (mob.inst) this._animate(mob, dt);
+        else this._applyLight(mob);
     }
 
-    /** The host: a guest (`from`: their player id and where they stand) struck the mob `id`. */
+    /** Another player (`from`: their id and where they stand) struck the mob `id`, which this game runs. */
     hitById(id, damage, from) {
         const mob = this._mobs.get(id);
-        if (!mob || mob.dying > 0 || !(damage > 0)) return;
+        if (!mob || mob.net || mob.dying > 0 || !(damage > 0)) return;
         mob.health -= damage;
         mob.hurt = 1;
         this._voice(mob, 'hurt', 0.9, mob.health <= 0 ? 0.82 : 1);
@@ -526,8 +673,33 @@ export class EntityManager {
         else this.ai.hurt(mob, from);
     }
 
-    /** Damage the mob nearest to `hitPos` within `radius`. Returns damage dealt. */
-    hitNearest(hitPos, damage, radius = 3) {
+    /**
+     * A blow lands on this mob. `by`: where it came from (whoever is hit runs
+     * from there — or, if it is the kind that fights back, comes for it:
+     * MobAI.hurt). Returns the damage dealt.
+     */
+    hitMob(mob, damage, by = null) {
+        if (!mob || mob.dying > 0 || !(damage > 0) || this._mobs.get(mob.id) !== mob) return 0;
+        mob.hurt = 1;
+        if (mob.net) {
+            // Not this game's to hurt: the game that runs it is told, and its next word of the mob shows what came of it.
+            this._voice(mob, 'hurt', 0.9);
+            this.onRemoteHit?.(mob.net.owner, mob.id, damage);
+            return damage;
+        }
+        mob.health -= damage;
+        this._voice(mob, 'hurt', 0.9, mob.health <= 0 ? 0.82 : 1);
+        mob.voiceT = 6 + Math.random() * 10;
+        if (mob.health <= 0) this._killMob(mob);
+        else this.ai.hurt(mob, by ?? this._player);
+        return damage;
+    }
+
+    /**
+     * Damage the mob nearest to `hitPos` within `radius` — of those `ok(mob)`
+     * allows, if given (the ones the striker can see). Returns damage dealt.
+     */
+    hitNearest(hitPos, damage, radius = 3, ok = null) {
         let closest = null, bestDist = radius * radius;
         for (const mob of this._mobs.values()) {
             if (mob.dying > 0) continue;
@@ -535,31 +707,25 @@ export class EntityManager {
             const dy = mob.pos.y - hitPos.y;
             const dz = mob.pos.z - hitPos.z;
             const d2 = dx*dx + dy*dy + dz*dz;
-            if (d2 < bestDist) { bestDist = d2; closest = mob; }
+            if (d2 < bestDist && (!ok || ok(mob))) { bestDist = d2; closest = mob; }
         }
         if (!closest) return 0;
-        if (this.replica) {
-            // Not ours to hurt: the host is told, and its next snapshot shows what came of it.
-            closest.hurt = 1;
-            this._voice(closest, 'hurt', 0.9);
-            this.onRemoteHit?.(closest.id, damage, hitPos);
-            return damage;
-        }
+        // The player's doing, if they are near where it landed. Lightning is its own threat.
+        const p = this._player;
+        const byPlayer = Math.hypot(p.x - hitPos.x, p.y - hitPos.y, p.z - hitPos.z) < 12;
+        return this.hitMob(closest, damage, byPlayer ? p : hitPos);
+    }
 
-        closest.health -= damage;
-        closest.hurt = 1;
-        this._voice(closest, 'hurt', 0.9, closest.health <= 0 ? 0.82 : 1);
-        closest.voiceT = 6 + Math.random() * 10;
-        if (closest.health <= 0) {
-            this._killMob(closest);
-        } else {
-            // Whoever is hit runs from the player — or, if it is the kind that
-            // fights back, comes for them (MobAI.hurt). Lightning is its own threat.
-            const p = this._player;
-            const byPlayer = Math.hypot(p.x - hitPos.x, p.y - hitPos.y, p.z - hitPos.z) < 12;
-            this.ai.hurt(closest, byPlayer ? p : hitPos);
+    /** Is a living mob standing where `inside(x, y, z, halfWidth, height)` says its box would be in the way? */
+    mobIn(inside) {
+        for (const mob of this._mobs.values()) {
+            if (mob.dying > 0) continue;
+            // Its body, not only the box it collides with: an animal is longer
+            // than it is wide (`length` in its JSON, nose to tail), the way it faces.
+            const w = mob.def.width ?? 0.8, scale = mob.inst?.scale ?? 1;
+            if (inside(mob.pos.x, mob.pos.y, mob.pos.z, w / 2 * scale, (mob.def.height ?? 1.4) * scale, Math.max(w, mob.def.length ?? w) / 2 * scale, mob.yaw)) return true;
         }
-        return damage;
+        return false;
     }
 
     _killMob(mob, by = null) {
@@ -709,15 +875,22 @@ export class EntityManager {
             const pdy = d.pos.y - playerPos.y - 0.9;
             const pdz = d.pos.z - playerPos.z;
             if (pdx*pdx + pdy*pdy + pdz*pdz < PICKUP_RADIUS * PICKUP_RADIUS) {
-                const overflow = inventory.addItem(d.itemId, d.count);
-                if (overflow === 0) {
-                    this.scene.remove(d.mesh);
-                    // Sprite geometry is a Three.js singleton and the material is cached per
-                    // item id, so removing it from the scene is the whole cleanup.
-                    this._drops.splice(i, 1);
+                const left = inventory.addItem(d.itemId, d.count);
+                if (left < d.count || d.count === 0) {
+                    // What was taken is the player's; what there was no room for
+                    // stays on the ground. (All of it stayed, with what had been
+                    // taken: a stack topped up from a drop was made from nothing.)
+                    const taken = d.count - left;
+                    d.count = left;
+                    if (left === 0) {
+                        this.scene.remove(d.mesh);
+                        // Sprite geometry is a Three.js singleton and the material is cached per
+                        // item id, so removing it from the scene is the whole cleanup.
+                        this._drops.splice(i, 1);
+                    }
                     this.onSound?.('pickup', null, { volume: 0.5 });
                     window.dispatchEvent(new CustomEvent('ww_itemPickup', {
-                        detail: { itemId: d.itemId, count: d.count }
+                        detail: { itemId: d.itemId, count: taken }
                     }));
                 }
             }

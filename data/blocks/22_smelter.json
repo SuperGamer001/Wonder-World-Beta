@@ -15,6 +15,7 @@
   "interactable": true,
   "interactType": "smelter",
   "hardness": 4,
+  "tool": "pickaxe",
   "drops": [
     {
       "itemId": "smelter",

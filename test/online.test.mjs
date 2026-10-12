@@ -276,6 +276,24 @@ function setup() {
     check('a blow on a mob goes to the host alone, and says who struck', host.msgs.some(m => m[0] === 2 && m[1].t === 'hit' && m[1].id === 7) && !ivy.msgs.some(m => m[1].t === 'hit'));
     check("a mob's blow goes to the one player it landed on", ivy.msgs.some(m => m[0] === 1 && m[1].t === 'attack') && !gus.msgs.some(m => m[1].t === 'attack'));
 
+    // A guest's word: every game runs the mobs nearest its own player, and tells the rest — as seldom as the host does.
+    host.msgs.length = ivy.msgs.length = gus.msgs.length = 0;
+    await sleep(RATE.MOBS + 30);
+    gus.s.all({ t: 'mobs', list: [2000001, 1, 2, 3], info: { 2000001: { coat: 1 } } });
+    gus.s.all({ t: 'mobs', list: [2000001, 1, 2, 4] });                                  // within the same third of a second
+    await sleep(RATE.MOBS + 30);
+    gus.s.all({ t: 'mobs', list: [2000001, 1, 2, 5] });
+    await settle();
+    const theirs = (g) => g.msgs.filter(m => m[1].t === 'mobs');
+    check("a guest's mobs reach the host and the other guests, a few times a second, as that guest's",
+        theirs(host).length === 2 && theirs(ivy).length === 2 && [...theirs(host), ...theirs(ivy)].every(m => m[0] === 2) && theirs(gus).length === 0 &&
+        theirs(host)[0][1].info?.[2000001]?.coat === 1, JSON.stringify([theirs(host), theirs(ivy)]));
+    // There is no line from one guest to another: what one has for one other goes to all, marked for whom (world.js lets the rest pass).
+    gus.s.all({ t: 'mobgive', m: [2000001, 'cow', 1, 2, 3, 0, 8, null], to: 3 });
+    await settle();
+    check('what one guest has for another reaches them, marked as theirs', ivy.msgs.some(m => m[0] === 2 && m[1].t === 'mobgive' && m[1].to === 3) &&
+        host.msgs.some(m => m[1].t === 'mobgive' && m[1].to === 3));
+
     // What a guest's token will not do, whatever its game is changed to try.
     const n = channels(host.s.code);
     hub.refused.length = 0;
@@ -463,6 +481,26 @@ function setup() {
     await Promise.all([wes.s.auth.rooms(), wes.s.auth.rooms(), wes.s.auth.rooms()]);
     await wes.s.auth.rooms();
     check('however many ask, Ably is asked once every few seconds', ably.asked === before);
+    // A token service from before there were public games (one deployed and never updated) answers /host with no tag,
+    // and any GET with a line about itself. Neither is "all is well": the game says the service is out of date.
+    {
+        const old = async (url, init) => {
+            if ((init?.method ?? 'GET') === 'GET') return new Response(JSON.stringify({ ok: true, service: 'wonder-world-online' }), { status: 200 });
+            const r = await service.handle(new Request(url, init), 'old'), body = await r.json();
+            delete body.tag;
+            return new Response(JSON.stringify(body), { status: r.status });
+        };
+        const store = { v: DEVICE(900), get() { return this.v; }, set(v) { this.v = v; } };
+        const behind = new OnlineSession(Fake, new OnlineAuth({ url: 'https://old.example.com', fetchFn: old, storage: store }));
+        const listed = await failure(behind.auth.rooms({}));
+        const opened = await failure(behind.open({ ...pub.hello, name: 'Old' }, WORLD, 4, { visibility: 'public' }));
+        check('an online service too old for public games is said to be so — not an empty list, nor a game nobody can find',
+            listed?.reason === 'outdated' && opened?.reason === 'outdated', `${listed?.reason} ${opened?.reason}`);
+        const quiet = await behind.open({ ...pub.hello, name: 'Old' }, WORLD, 4).then(() => behind.visibility, (e) => e?.reason);
+        check('… while a game for whoever has the code still opens on it', quiet === 'private', String(quiet));
+        behind.close();
+    }
+
     const bad = [];
     for (const q of ['mode=GOD', 'content=zz', 'protocol=x', 'protocol=-1']) if ((await service.handle(new Request(`https://o.example/rooms?${q}`), 'q')).status !== 400) bad.push(q);
     check('what is not a question about rooms is refused', bad.length === 0 && (await service.handle(new Request('https://o.example/rooms', { method: 'POST', body: '{}' }), 'q')).status === 404, bad.join());

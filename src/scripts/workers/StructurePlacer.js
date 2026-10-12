@@ -252,14 +252,17 @@ const BUILDERS = {
                 s.set(ox + dx, dy, oz + dz, window ? b.GLASS : corner ? b.STONE : b.WOODEN_PLANKS, OVER_GROUND);
             }
         }
+        // A gabled roof: up from the eaves on the two long walls to a ridge
+        // along the middle. (It was built the other way up — highest over the
+        // walls and lowest at the middle, a trough.)
         const mid = Math.floor(W / 2);
         for (let dz = 0; dz < D; dz++) {
             for (let layer = 0; layer <= mid; layer++) {
                 const roofY = H - 1 + layer;
-                s.set(ox + mid - layer, roofY, oz + dz, b.WOOD, OVER_GROUND);
-                s.set(ox + mid + layer, roofY, oz + dz, b.WOOD, OVER_GROUND);
-                // Gable ends
-                if (dz === 0 || dz === D - 1) for (let k = mid - layer + 1; k < mid + layer; k++) s.set(ox + k, roofY, oz + dz, b.WOODEN_PLANKS, OVER_GROUND);
+                s.set(ox + layer, roofY, oz + dz, b.WOOD, OVER_GROUND);
+                s.set(ox + W - 1 - layer, roofY, oz + dz, b.WOOD, OVER_GROUND);
+                // Gable ends: the end walls carried up under the slopes.
+                if (dz === 0 || dz === D - 1) for (let k = layer + 1; k < W - 1 - layer; k++) s.set(ox + k, roofY, oz + dz, b.WOODEN_PLANKS, OVER_GROUND);
             }
         }
         return s;

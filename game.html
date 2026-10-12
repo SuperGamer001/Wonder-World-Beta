@@ -93,11 +93,14 @@
                 <span id="worldListTitle" class="panelTitle">Your Worlds</span>
                 <div class="worldListHeaderBtns">
                     <div class="menuButton small" id="joinLanBtn">Join a game</div>
+                    <div class="menuButton small" id="importWorldBtn">Import World</div>
                     <div class="menuButton small primary" id="createWorldBtn">+ New World</div>
                     <div class="menuButton small" id="worldListBackBtn">Back</div>
                 </div>
             </div>
             <div id="worldListContainer"></div>
+            <!-- Import World: the browser's own "where is it?" window is opened on this. -->
+            <input class="hidden" id="importWorldFile" type="file" accept=".wwworld">
         </div>
     </div>
 
@@ -110,6 +113,7 @@
             <div class="popupRow">
                 <div class="menuButton small" id="worldSettingsBtn">Settings</div>
                 <div class="menuButton small" id="worldDuplicateBtn">Duplicate</div>
+                <div class="menuButton small" id="worldExportBtn">Export</div>
                 <div class="menuButton small danger" id="worldDeleteBtn">Delete</div>
             </div>
             <div class="menuButton small quiet" id="worldDetailCloseBtn">Close</div>
@@ -393,7 +397,7 @@
                             <span>Look around</span><span><kbd>Mouse</kbd></span><span><kbd class="pad">Right stick</kbd></span>
                             <span>Jump, swim up</span><span><kbd>Space</kbd></span><span><kbd class="pad">A</kbd></span>
                             <span>Sprint</span><span><kbd>Shift</kbd></span><span>click <kbd class="pad">Left stick</kbd></span>
-                            <span>Sneak, go down</span><span><kbd>Ctrl</kbd> or <kbd>Q</kbd></span><span><kbd class="pad">B</kbd></span>
+                            <span>Crouch, fly down</span><span><kbd>Right Shift</kbd> or <kbd>Q</kbd></span><span><kbd class="pad">B</kbd></span>
                             <span>Mine, attack</span><span><kbd>Left-click</kbd></span><span><kbd class="pad">RT</kbd></span>
                             <span>Place, use, eat</span><span><kbd>Right-click</kbd></span><span><kbd class="pad">LT</kbd></span>
                             <span>Hotbar slot</span><span><kbd>1</kbd> – <kbd>0</kbd></span><span><kbd class="pad">LB</kbd> <kbd class="pad">RB</kbd></span>
@@ -480,6 +484,10 @@
                         <div class="settingsRow">
                             <span class="settingsLabel">Game Version<small id="updateCheckStatus"></small></span>
                             <div class="menuButton small" id="settingCheckUpdates">Check for Updates</div>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">Release Notes<small>what this version added and fixed</small></span>
+                            <div class="menuButton small" id="settingReleaseNotes">View</div>
                         </div>
                         <div class="settingsRow">
                             <span class="settingsLabel">All Settings<small>put every setting back as it came</small></span>
@@ -587,6 +595,19 @@
             </div>
             <div class="formNote">Wonder World &nbsp;·&nbsp; Interlinked Creations</div>
             <div class="menuButton primary" id="creditsBackBtn">Back</div>
+        </div>
+    </div>
+
+    <!-- ── Release notes ──────────────────────────────────────────────────── -->
+    <!-- What this version added and fixed (ReleaseNotes.txt). Settings → Game
+         opens it, and it comes up by itself the first time a newer version
+         is played (main.js: RELEASE NOTES). -->
+    <div class="scrim top hidden" id="ReleaseNotesScreen">
+        <div class="panel popup wide releaseNotesPanel">
+            <div class="popupTitle" id="releaseNotesTitle">Release Notes</div>
+            <div class="formNote" id="releaseNotesSub"></div>
+            <div class="releaseNotesBody" id="releaseNotesBody"></div>
+            <div class="menuButton primary" id="releaseNotesCloseBtn">Close</div>
         </div>
     </div>
 
@@ -833,8 +854,8 @@
                             <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</li>
                             <li><kbd>Mouse</kbd> look around</li>
                             <li><kbd>Space</kbd> jump, swim up</li>
-                            <li><kbd>Shift</kbd> sprint</li>
-                            <li><kbd>Ctrl</kbd> or <kbd>Q</kbd> sneak, go down</li>
+                            <li><kbd>Left Shift</kbd> sprint</li>
+                            <li><kbd>Right Shift</kbd> or <kbd>Q</kbd> crouch (slow, quiet, and you will not step off an edge); fly down</li>
                             <li><kbd>V</kbd> see yourself from behind, from in front, or through your own eyes</li>
                         </ul>
 
@@ -962,6 +983,9 @@
             </div>
         </div>
 
+        <!-- Playing, but the browser has not given the game the pointer: a click takes it (main.js: pointerLoose) -->
+        <div id="clickToPlay" class="chip hidden">Click to play</div>
+
         <!-- Death screen -->
         <div id="DeathScreen" class="hidden">
             <div class="deathTitle">You Died</div>
@@ -973,7 +997,7 @@
         <div id="InventoryScreen" class="scrim hidden">
             <div class="panel invPanel">
                 <div class="invHeader panelHeader">
-                    <span class="panelTitle">Inventory <span id="invWeightLabel"></span></span>
+                    <span class="panelTitle"><span id="invTitle">Inventory</span> <span id="invWeightLabel"></span></span>
                     <div class="headerBtns">
                         <div class="menuButton small" id="invCraftBtn">Crafting</div>
                         <div class="menuButton small primary" id="invCloseBtn">Close</div>
@@ -985,12 +1009,17 @@
                         <div id="invEquip"></div>
                     </div>
                     <div class="invItemsCol">
+                        <!-- The chest that was opened (main.js: openChest); hidden for the plain inventory -->
+                        <div id="invChest" class="hidden">
+                            <div class="invSectionTitle">In the chest</div>
+                            <div id="invChestSlots" class="invSlotsGrid"></div>
+                        </div>
                         <div class="invSectionTitle">Carrying</div>
                         <div id="invSlots" class="invSlotsGrid"></div>
                         <div id="invHotbarRow" class="invHotbarSection"></div>
                     </div>
                 </div>
-                <div class="formNote">Click to pick up or put down &nbsp;·&nbsp; Right-click to take half, or put down one</div>
+                <div class="formNote" id="invHint">Click to pick up or put down &nbsp;·&nbsp; Right-click to take half, or put down one</div>
             </div>
         </div>
 
@@ -1047,9 +1076,18 @@
     <!-- Shown when the renderer comes up on a software rasteriser. -->
     <div id="gpuWarning" class="hidden"></div>
 
-    <!-- Update notice. Populated by renderUpdateBanner(); only ever visible on
-         the title and pause screens, never during play. -->
-    <div id="updateBanner" class="hidden"></div>
+    <!-- A newer version is out: asked once, before the game starts (main.js: UPDATES). -->
+    <div id="UpdatePrompt" class="scrim top hidden">
+        <div class="panel popup">
+            <div id="updateTitle" class="popupTitle">Update available</div>
+            <div id="updateMessage" class="popupMessage"></div>
+            <div id="updateBar" class="hidden"><div id="updateBarFill"></div></div>
+            <div class="popupButtons">
+                <div class="menuButton" id="updateLaterBtn">Not Now</div>
+                <div class="menuButton primary" id="updateNowBtn">Update Now</div>
+            </div>
+        </div>
+    </div>
 
 </body>
 </html>

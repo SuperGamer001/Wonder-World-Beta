@@ -8,6 +8,7 @@
     0.12
   ],
   "hardness": 0.2,
+  "tool": "axe",
   "drops": [],
   "texture": "Red_Mushroom_Block.png"
 }

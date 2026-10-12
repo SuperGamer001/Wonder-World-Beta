@@ -1,0 +1,33 @@
+# **Wonder World 0.1.2** Release Notes:
+
+### Bug fixes
+- Fixed a bug where the house structure generated with an upside-down roof
+- The Simple Sun and moon in the simple graphics are now the same size as the Pro Graphics sun and moon. 
+- The You died screen no longer locks the mouse. Previously, when you tried to unlock the mouse, the pause screen would get in the way, making it impossible to click the respawn button. 
+- Players can no longer attack mobs through transparent blocks.
+- When you craft an item, the selected item in the crafting menu no longer gets unselected.
+- Fixed a bug where certain tools could mine the wrong type of material.
+- Hand Crafting Recipes now appear in Crafting Table Recipes
+- Chests now have a a storage UI instead of a crafting UI.
+- Closing a menu screen no longer makes it difficult to lock the mouse. 
+- You can no longer place un-equipable items in the armor slots
+- You can no longer place armor in the wrong slots.
+- You can no longer place blocks inside mobs and other players.
+- When a player kills a mob, the player will no longer break which ever block they have in range. There is now a brief cooldown.
+- Mobs now spawn around all players during Multiplayer, not just the host.
+- Fixed a bug where the particles you see when rain hits the ground would move with the player.
+- Fixed a bug where players could get stuck in tight spaces.
+
+### Sounds
+- Ambient sounds no longer sound harsh. They now sound realistic and more distant.
+- Mobs now have more unique sounds.
+- Blocks have more realistic sounds now.
+- You can now hear the footsteps of mobs and other players.
+- Adjusted the rain and thunder sounds.
+
+### Other Features
+- Added the Bug Fix Release screen (viewable in the options screen).
+- Added a Import/Export feature to the World Screen.
+- Added Crouching
+- Ice is slippery
+- Rain falls faster

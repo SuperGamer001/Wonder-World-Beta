@@ -54,6 +54,12 @@ uniform vec3  uSkyFlash;         // lightning
 in vec3 vDir;
 out vec4 fragColor;
 
+// How big the sun and moon are, as the tangent of the angle from their middle
+// to their rim — one size for the simple sky and the pretty one. The sun's is
+// where the pretty disc's edge falls (cos 0.99957).
+const float SUN_RADIUS  = 0.0293;
+const float MOON_RADIUS = 0.026;
+
 float hash13(vec3 p) {
     p = fract(p * 0.1031);
     p += dot(p, p.zyx + 31.32);
@@ -120,12 +126,14 @@ void main() {
             float halo = pow(mu, 1400.0) * 0.8 + pow(mu, 90.0) * 0.18 + pow(mu, 12.0) * 0.05;
             col += uSunColor * (disc * 2.5 + halo) * uSunVis * clearSky;
         } else {
-            // A flat disc (the same area the old square had) with a one-pixel
-            // soft rim, and a faint glow so it does not look cut out.
+            // A flat disc the size of the pretty sun's, with a one-pixel soft
+            // rim, and a faint glow so it does not look cut out. (It was the
+            // area of the old square: nearly three times as wide as the
+            // pretty one, so the sun shrank when the sky was turned up.)
             float r = length(discCoords(d, uSkySunDir));
-            float disc = 1.0 - smoothstep(0.079 - px, 0.079 + px, r);
+            float disc = 1.0 - smoothstep(SUN_RADIUS - px, SUN_RADIUS + px, r);
             col = mix(col, uSunColor * 1.15, disc * uSunVis * clearSky);
-            col += uSunColor * (pow(mu, 220.0) * 0.25 * (1.0 - disc) * uSunVis * clearSky);
+            col += uSunColor * (pow(mu, 900.0) * 0.25 * (1.0 - disc) * uSunVis * clearSky);
         }
     }
 
@@ -133,7 +141,7 @@ void main() {
     vec3 md = uMoonDir;
     float mm = dot(d, md);
     if (mm > 0.0 && uMoonVis > 0.001) {
-        float size = pretty ? 0.026 : 0.055;
+        float size = MOON_RADIUS;                 // the same in both skies
         vec2 q = discCoords(d, md) / size;
         float r2 = dot(q, q);
         float rim = px / size;                    // one pixel, in moon radii

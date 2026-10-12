@@ -199,6 +199,8 @@ if (TERRAIN) {
 }
 console.log(`world ${world.id.slice(0, 8)} worldGen ${world.worldGen} terrain ${world.terrainStyle}`);
 await evalJs(`startWorld(${JSON.stringify(world)}); 1`);
+// (Nothing holds the pointer here; the game's note that a click would take it is not part of the picture.)
+await evalJs(`document.getElementById('clickToPlay').style.display = 'none'; 1`).catch(() => {});
 await sleep(3000);
 const presets = {
     normal: { renderDistance: 10, farTerrain: 16, fogStart: 0.86, shadows: 'medium', clouds: 'fancy', sky: 'pretty', eyeAdaptation: 'on' },

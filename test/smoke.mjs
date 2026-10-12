@@ -245,6 +245,8 @@ const world = await (await fetch(`${base}/api/worlds`, {
 console.log('world created:', world.id.slice(0, 8), 'seed', world.seed, 'terrain', world.terrainStyle);
 
 await evalJs(`startWorld(${JSON.stringify({ ...world, playerPos: { x: 0, y: 100, z: 0 } })}); 'started'`);
+// (Nothing holds the pointer here; the game's note that a click would take it is not part of the screenshots.)
+await evalJs(`document.getElementById('clickToPlay').style.display = 'none'; 1`).catch(() => {});
 
 // Let terrain generate + mesh. Software rasterisation is slow, so be generous.
 for (let i = 0; i < 12; i++) {

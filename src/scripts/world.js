@@ -44,7 +44,7 @@ import { FarTerrain, MASK as FAR_MASK }      from './FarTerrain.js';
 import { SectionVisibility, sectionOf, SECTIONS, SECTION_SIZE } from './engine/Visibility.js';
 import { EDIT_EMPTY }                        from './workers/FarTiles.js';
 import { BLOCK_TEX_LAYERS, BLOCK_FACE_MAP, blockTextureLayers } from './engine/BlockTextures.js';
-import { sound }                             from './Sound.js';
+import { sound, blockSoundFamily }           from './Sound.js';
 import { GameSounds }                        from './GameSounds.js';
 import { PlayerModel, DEFAULT_SKIN }         from './PlayerModel.js';
 import { Multiplayer }                       from './engine/Multiplayer.js';
@@ -1012,7 +1012,8 @@ let _creativeMineCD = 0;  // seconds remaining before next creative break
 let _spawnPending = false;
 let _spawnXZ      = { x: 0, z: 0 };
 let _spawnStart   = 0;
-let _worldSpawn   = null;  // { x, z } — locked the first time a ground spawn resolves
+let _spawnHome    = true;  // the ground spawn under way is at the world's spawn (not beside another player)
+let _worldSpawn   = null;  // { x, z } — where this player first landed at the world's spawn; kept with their state
 
 const EAT_TIME = 1.5;       // seconds to hold right-click to consume food
 const CREATIVE_MINE_CD = 0.3; // seconds between creative mining breaks
@@ -1138,6 +1139,13 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     _remote = !!viaOnline && !!online.session && online.remote;
     _gamepack = gamepackData;
     _pendingSig = '';
+    _chests = new Map();
+    _chestsDirty = false;
+    _otherPos.length = 0;
+    // Where this world's players start, and come back to (see _worldHome).
+    _homeFlat = flat;
+    _home = null;
+    _worldSpawn = null;      // (the saved state, read below, says where it is if it was ever found)
 
     _gameMode = gameMode;
     _terrainStyle = terrainStyle === 'smooth' ? 'smooth' : 'blocky';
@@ -1170,7 +1178,7 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     // Mobs are lit by the sky light where they stand and by the time of day.
     _entities.lightAt = _lightAt;
     _entities.seen = _mobSeen;      // and only posed where they, or their shadows, can be seen
-    _entities.onSound = (name, at, o) => sound.play(name, { at, ...o });
+    _entities.onSound = (name, at, o) => (name === 'step' ? _mobStep(at, o) : sound.play(name, { at, ...o }));
     _sounds = new GameSounds();
     _particles = new Particles(scene, (x, y, z) => {
         const id = worldState?.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) ?? 0;
@@ -1257,6 +1265,8 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
         } catch { /* server offline */ }
         // What other players changed in chunks this game never had loaded, last time.
         if (!_guest) await _loadPendingEdits(worldId);
+        // What is in the world's chests (its owner's game keeps them).
+        if (!_guest) await _loadChests(worldId);
     }
 
     if (stale() || !_physics) return; // guard if quitWorld raced
@@ -1300,25 +1310,25 @@ document.addEventListener('WorldJS_startWorldLoad', async (e) => {
     _warmShaders();
     _post?.resetAdaptation();
 
-    // Someone new to a game under way starts beside whoever is hosting it.
-    const spawnPos = hostAt ?? playerPos ?? { x: 0, y: 80, z: 0 };
-    _worldSpawn   = null;
     _spawnPending = false;
     _loadGateDone = false;   // re-gate the loading screen for this world
     if (me.position && me.position.fromSave) {
         // Returning player — keep their saved position.
         me.position = { x: me.position.x, y: me.position.y, z: me.position.z };
+    } else if (hostAt) {
+        // Someone new to a game under way starts beside whoever is hosting it
+        // (which is not where they come back to if they die: that is the world's).
+        _beginGroundSpawn(hostAt.x, hostAt.z, false);
+    } else if (_guest && (playerPos?.x || playerPos?.z)) {
+        // … or, with no word yet of where the host is, on good land near
+        // where the world's owner last was (`playerPos`: the world's record of it).
+        const near = _goodLandNear(playerPos.x, playerPos.z);
+        _beginGroundSpawn(near.x, near.z, false);
     } else {
-        // Fresh spawn — drop onto the ground once terrain loads. The current
-        // generator has real oceans, so start from the nearest good land
-        // rather than wherever (0, 0) happens to be (the ground search after
-        // loading only looks a couple of dozen blocks around).
-        let { x, z } = spawnPos;
-        if (_worldGen >= 2 && !hostAt) {
-            ({ x, z } = new Geography(worldState.seed, new BiomeSet(gamepackData.biomes ?? []), normaliseFlat(flat))
-                .findSpawn(Math.floor(x), Math.floor(z)));
-        }
-        _beginGroundSpawn(x, z);
+        // Fresh spawn — drop onto the ground once terrain loads, at the
+        // world's spawn (_worldHome).
+        const home = _worldHome();
+        _beginGroundSpawn(home.x, home.z);
     }
     camera.position.set(me.position.x, me.position.y + CAMERA_HEIGHT, me.position.z);
     camera.rotation.set(0, 0, 0);
@@ -1421,6 +1431,10 @@ function _applyPlayerState(state) {
     if (state.hunger   != null) me.hunger   = state.hunger;
     if (state.energy   != null) me.energy   = state.energy;
     if (state.inventory && _inventory) _inventory.fromJSON(state.inventory);
+    // Where they first stood in this world, which is where dying brings them back to.
+    if (Number.isFinite(state.spawn?.x) && Number.isFinite(state.spawn?.z)) {
+        _worldSpawn = { x: Math.floor(state.spawn.x), z: Math.floor(state.spawn.z) };
+    }
 }
 
 // ── Quit event ────────────────────────────────────────────────────────────────
@@ -1433,6 +1447,9 @@ document.addEventListener('WorldJS_quitWorld', () => {
     const client = worldClient;   // capture before nulling so we can flush + close it
     _saveAll();                   // queues the final chunk save onto the socket
     _savePlayerState();
+    _saveChests();
+    for (const done of [..._chestWaits.values()]) done(null);
+    _otherPos.length = 0;
     // Release mob geometries, sprite materials and item textures before the
     // scene is torn down; these are GPU-side and are not reclaimed by GC alone.
     _mp?.close();
@@ -1498,7 +1515,15 @@ document.addEventListener('WorldJS_tick', (e) => {
     if (_wasLocked && !isLocked) { _saveAll(); _savePlayerState(); }
     _wasLocked = isLocked;
 
-    if (_isDead) { _updatePlayerModel(dt); _mpTick(dt); _render(); return; }
+    if (_isDead) {
+        // The mobs go on (the ones this game runs are other players' to meet
+        // too): as for a spectator — nobody for them to mind here, nothing
+        // spawned, nothing picked up, and those beside another player handed over.
+        if (_atmos) _entities.lightDir = _atmos.state.lightDir;
+        _entities.update(dt, me.position, _inventory, 'SPECTATOR');
+        _updatePlayerModel(dt); _mpTick(dt); _render();
+        return;
+    }
 
     // Waiting for a ground spawn: keep loading terrain around the spawn column and
     // hold the player frozen above it until a surface is found.
@@ -1537,7 +1562,9 @@ document.addEventListener('WorldJS_tick', (e) => {
         left:     controlsActive && !!KEYS['KeyA'],
         right:    controlsActive && !!KEYS['KeyD'],
         jump:     controlsActive && (!!KEYS['Space'] || (padPlay && pad.jump)),
-        sneak:    controlsActive && (!!KEYS['ControlLeft'] || !!KEYS['KeyQ'] || (padPlay && pad.sneak)),
+        // Right Shift: crouch, and go down when flying. (It was Ctrl, and Ctrl
+        // with W held — walking forward — is what closes a window.)
+        sneak:    controlsActive && (!!KEYS['ShiftRight'] || !!KEYS['KeyQ'] || (padPlay && pad.sneak)),
         sprint:   controlsActive && (!!KEYS['ShiftLeft'] || (padPlay && pad.sprint)),
         moveF:    padPlay ? pad.moveF : 0,
         moveR:    padPlay ? pad.moveR : 0,
@@ -1550,9 +1577,15 @@ document.addEventListener('WorldJS_tick', (e) => {
         hunger: me.hunger, energy: me.energy,
     });
 
+    // The feet go up a slope's edge, or down onto one, in no time; the eyes
+    // follow over a tenth of a second or so.
+    _crouch += ((_physics.crouching ? 1 : 0) - _crouch) * (1 - Math.exp(-dt * 14));
+    _eyeEase = Math.max(-0.7, Math.min(0.7, _eyeEase - _physics.stepped)) * Math.exp(-dt * EYE_EASE);
+    if (Math.abs(_eyeEase) < 0.002) _eyeEase = 0;
+
     if (result.fallDamage > 0) _applyDamage(result.fallDamage);
     if (result.fellIntoVoid)   _applyDamage(20);
-    _tickSounds(dt, result, input.sneak);
+    _tickSounds(dt, result, _physics.crouching);
 
     if (_gameMode === 'SURVIVAL') _survivalTick(dt);
 
@@ -1565,11 +1598,15 @@ document.addEventListener('WorldJS_tick', (e) => {
 
     // Raycast for block targeting
     _camFwd.set(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).normalize();
-    const origin = { x: me.position.x, y: me.position.y + CAMERA_HEIGHT, z: me.position.z };
+    const origin = { x: me.position.x, y: _eyeY(), z: me.position.z };
     const hit    = raycast(worldState, _blockReg, origin, { x: _camFwd.x, y: _camFwd.y, z: _camFwd.z }, INTERACT_REACH);
 
-    // Mob targeting — check before block so mobs in front of walls are hit correctly
-    const mobHit = _entities?.getClosestMobInRay(origin, _camFwd, INTERACT_REACH) ?? null;
+    // Mob targeting — check before block so mobs in front of walls are hit correctly.
+    // One behind a wall is not in reach at all: the wall is. (The ray to the
+    // mob took no notice of blocks, so a mob could be struck through them.)
+    let mobHit = _entities?.getClosestMobInRay(origin, _camFwd, INTERACT_REACH) ?? null;
+    if (mobHit && !_clearSight(origin.x, origin.y, origin.z, _camFwd.x, _camFwd.y, _camFwd.z, mobHit.t)) mobHit = null;
+    if (_strikeHold > 0) _strikeHold = Math.max(0, _strikeHold - dt);
 
     // Bow draw start / zoom — must run before placement so the bow has first
     // priority on _rightJust (placement would otherwise always consume it).
@@ -1579,10 +1616,13 @@ document.addEventListener('WorldJS_tick', (e) => {
     if (_bowDrawing) _handleBowDraw(dt);
     _bowZoom = _bowDrawing;
 
-    // Block breaking only when no mob is targeted. If the head is buried inside a
-    // mineable block, dig that block out first (lets you escape being stuck).
+    // Block breaking only when no mob is targeted — nor for a moment after a
+    // blow has landed on one: with the button still down, the block behind a
+    // mob that had just fallen was being mined before the player had let go.
+    // If the head is buried inside a mineable block, dig that block out first
+    // (lets you escape being stuck).
     const headHit = _mineableHeadBlock();
-    _handleBreaking(dt, mobHit ? null : (headHit ?? hit));
+    _handleBreaking(dt, mobHit || _strikeHold > 0 ? null : (headHit ?? hit));
     _handlePlacement(hit);
     _handleEating(dt);
     _handleAttackCharge(dt, mobHit, mobHit ? null : hit);
@@ -1874,7 +1914,11 @@ function _handleBreaking(dt, hit) {
         ? (heldDef?.subtype === needsTool)
         : true;   // no tool required — bare hand is fine
 
-    let miningSpeed = heldDef?.miningSpeed ?? 1.0;
+    // A tool is quick at what it is for and no better than a hand at the
+    // rest: a pickaxe at stone, an axe at wood, a shovel at earth (the block's
+    // `tool`). Its speed used to count on every block, so a gold pickaxe went
+    // through logs and dirt twelve times as fast as a hand.
+    let miningSpeed = block.tool && heldDef?.subtype === block.tool ? (heldDef.miningSpeed ?? 1.0) : 1.0;
     if (needsTool && !hasCorrectTool) miningSpeed = 0.3;  // penalty for wrong/no tool
 
     _breakProgress += dt * miningSpeed / Math.max(hardness, 0.05);
@@ -1906,6 +1950,8 @@ function _breakBlock(hit, hasCorrectTool = true) {
     worldState.setBlock(hit.x, hit.y, hit.z, 0);
     chunkManager.markEdited(hit.x, hit.z);
     _breakUnsupported(hit.x, hit.y, hit.z);
+    // What was in a chest spills out, whoever breaks it and however.
+    if (block.interactType === 'chest') _chestBroken(hit.x, hit.y, hit.z);
 
     // Creative players don't collect broken blocks.
     if (_gameMode === 'CREATIVE') return;
@@ -2006,13 +2052,15 @@ function _handlePlacement(hit) {
     // A torch or lantern cannot go into water (or lava, one day).
     if (blockDef.model && _blockReg.isLiquid(worldState.getBlock(px, py, pz))) return;
 
-    // Don't place inside player
-    const pw = 0.3;
-    if (Math.abs(px + 0.5 - me.position.x) < pw &&
-        py + 1 > me.position.y && py < me.position.y + 1.8 &&
-        Math.abs(pz + 0.5 - me.position.z) < pw) return;
+    // Not where somebody is standing: this player, another, or a mob. (Only
+    // this player was looked for, and only their middle: a block could be
+    // put down round a mob or another player, shutting them in it.) A torch,
+    // a lantern or water fills no space, and may go anywhere.
+    if (!_blockReg.isNoCollision(blockDef.id) && _someoneIn(px, py, pz)) return;
 
     worldState.setBlock(px, py, pz, blockDef.id);
+    // A chest put down is an empty one, whatever stood here before.
+    if (blockDef.interactType === 'chest') _chestPlaced(px, py, pz);
     chunkManager?.markEdited(px, pz);
     _sounds?.blockPlaced(blockDef, { x: px + 0.5, y: py + 0.5, z: pz + 0.5 });
     _swingArm();
@@ -2075,22 +2123,22 @@ function _handleAttackCharge(dt, mobHit, hit) {
     const speed = def?.attackChargeSpeed ?? 1.5;
 
     if (MOUSE.left && mobHit) {
-        // Directly targeting a mob — attack it
+        // Directly targeting a mob — attack it (that one, not whichever stands nearest it)
         if (_attackCharge >= 0.1) {
             const dmg = 1 + (def?.damage ?? 1) * (0.3 + _attackCharge * 0.7);
             const at = { x: mobHit.mob.pos.x, y: mobHit.mob.pos.y + 0.7, z: mobHit.mob.pos.z };
             _sounds?.swing();
             _swingArm();
-            if (_hitMob(at, dmg, 2) > 0) _sounds?.struck(at);
+            if ((_entities?.hitMob(mobHit.mob, dmg, me.position) ?? 0) > 0) { _sounds?.struck(at); _strikeHold = STRIKE_HOLD; }
         }
         _attackCharge = 0;
     } else if (MOUSE.left && !hit) {
-        // Swinging at air — try nearby mobs with wider radius
+        // Swinging at air — try nearby mobs with wider radius (those in plain sight)
         if (_attackCharge >= 0.1) {
             const dmg = 1 + (def?.damage ?? 1) * (0.3 + _attackCharge * 0.7);
             const at = { x: me.position.x + _camFwd.x * 2.5, y: me.position.y + 1, z: me.position.z + _camFwd.z * 2.5 };
             if (_attackCharge >= 0.5) _sounds?.swing();
-            if (_hitMob(at, dmg, 3) > 0) _sounds?.struck(at);
+            if (_hitMob(at, dmg, 3) > 0) { _sounds?.struck(at); _strikeHold = STRIKE_HOLD; }
         }
         _attackCharge = 0;
     } else {
@@ -2147,13 +2195,93 @@ function _fireBow() {
     const speed    = 20 + _bowCharge * 30;
     const dmg      = 3 + _bowCharge * 9;
     const shootPos = { x: me.position.x + _camFwd.x * 0.5, y: me.position.y + 1.2, z: me.position.z + _camFwd.z * 0.5 };
-    // For now: immediate raycast hit (no projectile physics yet)
+    // For now: immediate raycast hit (no projectile physics yet). The arrow
+    // stops in the first mob on its way, if nothing stands between; else in
+    // the first block, where it still catches a mob right beside the spot —
+    // one the archer can see, not one on the far side of the wall it struck.
+    const flying = _entities.getClosestMobInRay(shootPos, _camFwd, 40);
+    if (flying && _clearSight(shootPos.x, shootPos.y, shootPos.z, _camFwd.x, _camFwd.y, _camFwd.z, flying.t)) {
+        const at = { x: flying.mob.pos.x, y: flying.mob.pos.y + 0.7, z: flying.mob.pos.z };
+        _sounds?.arrowHit(at);
+        _entities.hitMob(flying.mob, dmg, me.position);
+        return;
+    }
     const arrowHit = raycast(worldState, _blockReg, shootPos, { x: _camFwd.x, y: _camFwd.y, z: _camFwd.z }, 40);
     if (arrowHit) {
         _sounds?.arrowHit({ x: arrowHit.x + 0.5, y: arrowHit.y + 0.5, z: arrowHit.z + 0.5 });
-        _hitMob({ x: arrowHit.x, y: arrowHit.y, z: arrowHit.z }, dmg, 2);
+        _hitMob({ x: arrowHit.x + 0.5, y: arrowHit.y + 0.5, z: arrowHit.z + 0.5 }, dmg, 2);
     }
 }
+
+// ── Sight, and standing room ──────────────────────────────────────────────────
+
+/** Is the point inside something that stops a blow or an arrow: any block one cannot walk through? */
+function _pointBlocked(x, y, z) {
+    const id = worldState.getBlock(Math.floor(x), Math.floor(y), Math.floor(z));
+    if (id === 0 || _blockReg.isNoCollision(id)) return false;      // air, water, a torch
+    return _smooth?.isMesh(id) ? _smooth.pointInMesh(x, y, z) : true;
+}
+
+/**
+ * Whether the line from (x, y, z) along the unit vector (dx, dy, dz) is clear
+ * of blocks for `dist` blocks. Against the ground as it is drawn, so a mob on
+ * a smooth slope is not hidden by the voxel of the slope in front of it.
+ */
+function _clearSight(x, y, z, dx, dy, dz, dist) {
+    for (let t = 0.1; t < dist - 0.05; t += 0.12) {
+        if (_pointBlocked(x + dx * t, y + dy * t, z + dz * t)) return false;
+    }
+    return true;
+}
+
+/** Can the player see this mob: its middle, or else its head, from their eyes? */
+function _seesMob(mob) {
+    const ex = me.position.x, ey = _eyeY(), ez = me.position.z;
+    const h = mob.def.height ?? 1.4;
+    for (const f of [0.5, 0.9]) {
+        const dx = mob.pos.x - ex, dy = mob.pos.y + h * f - ey, dz = mob.pos.z - ez;
+        const d = Math.hypot(dx, dy, dz);
+        if (d < 0.3 || _clearSight(ex, ey, ez, dx / d, dy / d, dz / d, d - (mob.def.width ?? 0.8) / 2)) return true;
+    }
+    return false;
+}
+
+/** Does the voxel (px, py, pz) cut into a body `half` wide each way and `h` tall, standing at (x, y, z)? */
+function _boxInVoxel(px, py, pz, x, y, z, half, h) {
+    const e = 0.02;      // touching is not inside
+    return x + half > px + e && x - half < px + 1 - e && y + h > py + e && y < py + 1 - e &&
+           z + half > pz + e && z - half < pz + 1 - e;
+}
+
+/** Is somebody standing where the voxel (px, py, pz) is: this player, another, or a mob? */
+function _someoneIn(px, py, pz) {
+    const p = me.position;
+    if (_gameMode !== 'SPECTATOR' && _boxInVoxel(px, py, pz, p.x, p.y, p.z, PLAYER_HALF, PLAYER_TALL)) return true;
+    for (const o of _otherPos) if (_boxInVoxel(px, py, pz, o.x, o.y, o.z, PLAYER_HALF, PLAYER_TALL)) return true;
+    return _entities?.mobIn((x, y, z, half, h, along, yaw) => _bodyInVoxel(px, py, pz, x, y, z, half, h, along, yaw)) ?? false;
+}
+
+/**
+ * The same for a body that is longer than it is wide — a cow, nose to tail:
+ * `half` each side and `along` fore and aft of (x, z), facing `yaw` (+Z turned
+ * about Y). Two rectangles overlap unless one of their four edge directions
+ * separates them.
+ */
+function _bodyInVoxel(px, py, pz, x, y, z, half, h, along, yaw) {
+    const e = 0.02;
+    if (!(y + h > py + e && y < py + 1 - e)) return false;
+    if (along <= half + 1e-6) return _boxInVoxel(px, py, pz, x, y, z, half, h);
+    const s = Math.sin(yaw), c = Math.cos(yaw), as = Math.abs(s), ac = Math.abs(c);
+    const dx = px + 0.5 - x, dz = pz + 0.5 - z, v = 0.5 - e;
+    // The world's axes: the body's reach along each.
+    if (Math.abs(dx) >= v + along * as + half * ac || Math.abs(dz) >= v + along * ac + half * as) return false;
+    // The body's own: the voxel's reach along each.
+    const reach = v * (as + ac);
+    return Math.abs(dx * s + dz * c) < along + reach && Math.abs(dx * c - dz * s) < half + reach;
+}
+const PLAYER_HALF = 0.3, PLAYER_TALL = 1.8;     // the player's box (PlayerPhysics.js)
+const STRIKE_HOLD = 0.4;                        // seconds after a blow on a mob before a block can be mined
+let _strikeHold = 0;
 
 // ── Survival tick ─────────────────────────────────────────────────────────────
 
@@ -2289,11 +2417,38 @@ function _reportLoadGate() {
 
 // ── Ground spawn ────────────────────────────────────────────────────────────
 
+/**
+ * The world's spawn: where its players start, and where dying brings them
+ * back to. The nearest good land to where the world begins — the current
+ * generator has real oceans, and the search for open ground that follows
+ * (_tryGroundSpawn) only looks a couple of dozen blocks around. From the seed
+ * alone, so it is the same place in every session and for every player.
+ *
+ * (It used to be known only in the session that had set a new player down
+ * there: `_worldSpawn` was filled in by that first landing and not kept. In a
+ * world loaded from a save nobody lands, so it was empty — and dying sent the
+ * player to (0, 0), wherever that is: often the sea.)
+ */
+function _worldHome() {
+    return _home ??= _goodLandNear(0, 0);
+}
+/** The nearest land fit to stand a new player on near (x, z), as the seed has it (worlds of the old generator: the place itself). */
+function _goodLandNear(x, z) {
+    x = Math.floor(x) || 0; z = Math.floor(z) || 0;
+    if (_worldGen < 2 || !worldState) return { x, z };
+    return new Geography(worldState.seed, new BiomeSet(_gamepack?.biomes ?? []), normaliseFlat(_homeFlat)).findSpawn(x, z);
+}
+let _homeFlat = null;             // the world's Flat settings, which the search needs
+let _home = null;                 // the world's spawn, once it has been asked for
+
 // Park the player above the spawn column and resolve a ground position once the
 // terrain there has generated. Used on first spawn and on respawn so the player
 // never appears in the air, in water, or buried in a hill.
-function _beginGroundSpawn(x, z) {
+// `home`: this is the world's spawn (not a place beside another player), so
+// where the player lands is theirs to come back to.
+function _beginGroundSpawn(x, z, home = true) {
     _spawnXZ      = { x, z };
+    _spawnHome    = home;
     _spawnPending = true;
     _spawnStart   = performance.now();
     me.position   = { x: x + 0.5, y: SEA_LEVEL + 96, z: z + 0.5 };
@@ -2345,7 +2500,9 @@ function _finishGroundSpawn(x, y, z) {
     _post?.resetAdaptation();
     me.position = { x, y, z };
     if (_physics?.vel) _physics.vel = { x: 0, y: 0, z: 0 };
-    if (!_worldSpawn) _worldSpawn = { x: Math.floor(x), z: Math.floor(z) };  // lock world spawn
+    // The first landing at the world's spawn is the spot this player comes back
+    // to (kept with their state: _savePlayerState).
+    if (_spawnHome && !_worldSpawn) _worldSpawn = { x: Math.floor(x), z: Math.floor(z) };
     _spawnPending = false;
 }
 
@@ -2378,8 +2535,11 @@ document.addEventListener('WorldJS_respawn', () => {
     me.hunger    = 80;
     me.energy    = 80;
     _physics.vel = { x: 0, y: 0, z: 0 };
-    // Respawn on the ground at the world spawn point.
-    _beginGroundSpawn(_worldSpawn?.x ?? 0, _worldSpawn?.z ?? 0);
+    // Respawn on the ground at the world spawn point: the spot this player
+    // first landed on there, or — never having landed there in a session that
+    // kept it — the world's spawn itself.
+    const home = _worldSpawn ?? _worldHome();
+    _beginGroundSpawn(home.x, home.z);
     if (_inventory) {
         _inventory.slots    = [];
         _inventory.hotbar   = new Array(10).fill(null);
@@ -2560,8 +2720,15 @@ function _updatePlayerModel(dt) {
     });
 }
 
+const CROUCH_EYES = 0.3;    // blocks the eyes come down when crouching
+let _crouch = 0;            // 0 standing … 1 crouched, eased
+/** How high the player's eyes are: what is looked from, aimed from and drawn from. */
+const _eyeY = () => me.position.y + CAMERA_HEIGHT - CROUCH_EYES * _crouch;
+const EYE_EASE = 16;        // 1/s: how fast the eyes catch up with feet that stepped (PlayerPhysics.stepped)
+let _eyeEase = 0;           // how far the camera is still off where the feet put it, blocks
+
 function _updateCamera() {
-    const ex = me.position.x, ey = me.position.y + CAMERA_HEIGHT, ez = me.position.z;
+    const ex = me.position.x, ey = _eyeY() + _eyeEase, ez = me.position.z;
     const third = _camMode !== 0 && _gameMode !== 'SPECTATOR';
     if (!third) {
         _camDist = 0;
@@ -3232,6 +3399,7 @@ function _saveAll() {
 
     chunkManager.saveAll();   // queues the batch onto the WebSocket send buffer
     if (!_guest) _savePendingEdits();
+    _saveChests();
     for (const key of [...worldState.edited]) _summariseEdited(key);
     _saveFarEdits();
     if (!_guest) _saveScreenshot(chunkManager.worldId);
@@ -3385,7 +3553,12 @@ window.__wwSetBlock = (x, y, z, name) => {
  * Put a mob (an entity id: 'cow', 'quiddle', …) at a world position — for
  * tests and the console. Returns its id, or null.
  */
-window.__wwSpawnMob = (type, x, y, z) => _entities?._spawnMob(type, { x, y, z }) ?? null;
+window.__wwSpawnMob = (type, x, y, z, still = false) => {
+    const id = _entities?._spawnMob(type, { x, y, z }) ?? null;
+    // `still`: it stays where it is put, whatever it decides to do (a test that needs it there).
+    if (still && id != null) { const mob = _entities._mobs.get(id); mob.def = { ...mob.def, speed: 1e-4 }; }
+    return id;
+};
 /** Strike the mob nearest a point, as a blow from the player would — for tests. */
 window.__wwHitMob = (x, y, z, damage) => _entities?.hitNearest({ x, y, z }, damage, 2) ?? 0;
 /** What the mobs are doing (diagnostics): [{ id, type, state, x, y, z, health, onGround }]. */
@@ -3395,6 +3568,15 @@ window.__wwMobs = () => [...(_entities?._mobs.values() ?? [])].map(m => ({
 }));
 /** The block id at a world position (0 = air or no world). */
 window.__wwBlockAt = (x, y, z) => worldState?.getBlock(Math.floor(x), Math.floor(y), Math.floor(z)) ?? 0;
+/** Break the block at a world position as the player would, with what that brings (drops, a chest's contents) — for tests. */
+window.__wwBreak = (x, y, z) => {
+    const p = { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z) }, blockId = worldState?.getBlock(p.x, p.y, p.z) ?? 0;
+    if (!blockId) return false;
+    _breakBlock({ ...p, blockId, face: { x: 0, y: 1, z: 0 } });
+    return true;
+};
+/** What is lying on the ground (diagnostics): [{ itemId, count }]. */
+window.__wwDrops = () => (_entities?._drops ?? []).map(d => ({ itemId: d.itemId, count: d.count }));
 /** Sky and block light levels (0..15) at a world position, as the CPU sees them. */
 window.__wwLightAt = (x, y, z) => ({
     sky: +(Math.log(Math.max(_skyBrightnessAt(x, y, z), SKY_MIN)) / Math.log(SKY_FALLOFF)).toFixed(2),
@@ -3543,6 +3725,8 @@ async function _savePlayerState() {
         hunger:   me.hunger,
         energy:   me.energy,
         inventory: _inventory?.toJSON() ?? null,
+        // Where dying brings this player back to (null: not found yet — the world's spawn, worked out when wanted).
+        spawn: _worldSpawn,
         // The clock and the weather are the world's, kept with its owner.
         atmosphere: !_guest && _atmos?.active ? _atmos.toJSON() : null,
     };
@@ -3567,9 +3751,12 @@ async function _savePlayerState() {
 function _applyWeatherToPlayer() {
     const ext = _physics.external, pu = _atmos?.push;
     ext.x = pu?.x ?? 0; ext.y = pu?.y ?? 0; ext.z = pu?.z ?? 0;
-    _physics.slip = 0;
+    // Ice underfoot is slippery whatever the weather (a block's `slippery`).
+    const p = me.position, fx = Math.floor(p.x), fz = Math.floor(p.z);
+    const under = worldState.getBlock(fx, Math.floor(p.y - 0.2), fz) || worldState.getBlock(fx, Math.floor(p.y - 1.2), fz);
+    const icy = under > 0 ? _blockReg.get(under).slippery ?? 0 : 0;
+    _physics.slip = icy;
     if (!_atmos || _gameMode === 'SPECTATOR') return;
-    const p = me.position;
     const open = _skyBrightnessAt(p.x, p.y + 1, p.z) >= 0.99;
     if (!open) return;
     const w = _atmos.wind, ws = Math.hypot(w[0], w[1]);
@@ -3577,7 +3764,7 @@ function _applyWeatherToPlayer() {
         const k = (ws - 12) / ws * 0.35;
         ext.x += w[0] * k; ext.z += w[1] * k;
     }
-    _physics.slip = _atmos.ice;
+    _physics.slip = Math.max(icy, _atmos.ice);
 }
 
 /** A lightning strike landed at (x, y, z): hurt what is standing next to it. */
@@ -3599,8 +3786,8 @@ function _onLightningStrike(x, y, z) {
 // (Players.js), their blocks, the host's mobs. Alone, nothing is sent but the
 // blocks, which the session keeps for whoever joins later.
 
-const STATE_HZ = 15, MOB_SEND = 0.1, ATMOS_SEND = 2;
-let _mpStateT = 0, _mpMobT = 0, _mpAtmosT = 0;
+const STATE_HZ = 15, MOB_SEND = 0.1, MOB_LOOKS = 2, ATMOS_SEND = 2;
+let _mpStateT = 0, _mpMobT = 0, _mpLookT = 0, _mpAtmosT = 0;
 let _mobFull = false;          // someone has just joined: the next mob snapshot says what every mob looks like
 let _mpApplying = false;       // a block is being put down because another game said so: do not say it back
 let _swings = 0;               // blows begun, for the others to see each one
@@ -3655,6 +3842,7 @@ async function _joinSession(worldId, session = null) {
     mp.onLeft = (id) => {
         const name = _others?.map.get(id)?.name;
         _others?.remove(id);
+        _entities?.dropOwner(id);                          // the mobs their game was running went with it
         _playerCasters();
         if (name) _notice(`${name} left`);
     };
@@ -3666,12 +3854,16 @@ async function _joinSession(worldId, session = null) {
     mp.onDown = (down) => _notice(down ? 'Connection lost — reconnecting…' : 'Reconnected');
     mp.onAtmos = (a) => { if (!mp.isHost) _atmos?.sync(a); };
     mp.onMsg = (from, d) => {
+        // Said to one player, on a line everyone hears (OnlineSession: a guest to another guest).
+        if (d?.to !== undefined && d.to !== mp.id) return;
         switch (d?.t) {
-            case 'mobs':                                   // the host's mobs, to a guest
-                if (_entities?.replica) _entities.applySnapshot(d, MOB_SEND);
+            case 'mobs':                                   // the mobs another game runs
+                _entities?.applySnapshot(from, d);
                 break;
-            case 'hit': {                                  // a guest's blow, to the host
-                if (!mp.isHost) break;
+            case 'mobgive':                                // a mob that is nearer this player now: this game's to run
+                _entities?.adopt(d.m);
+                break;
+            case 'hit': {                                  // another player's blow on a mob this game runs
                 const o = _others?.map.get(from);
                 if (o) _entities?.hitById(d.id, d.dmg, { id: from, x: o.x, y: o.y, z: o.z });
                 break;
@@ -3680,7 +3872,14 @@ async function _joinSession(worldId, session = null) {
                 window.dispatchEvent(new CustomEvent('ww_mobAttack', { detail: { damage: d.dmg } }));
                 break;
             case 'drops':                                  // what a mob this player killed left behind
-                for (const [itemId, n] of d.items ?? []) _entities?.dropItem(d.pos, itemId, n);
+                if (d.pos && [d.pos.x, d.pos.y, d.pos.z].every(Number.isFinite)) {
+                    for (const [itemId, n] of Array.isArray(d.items) ? d.items.slice(0, 16) : []) {
+                        if (_itemReg?.hasItem(itemId) && n > 0 && n <= 64) _entities?.dropItem(d.pos, itemId, n | 0);
+                    }
+                }
+                break;
+            case 'chest': case 'chest?': case 'chestTake': case 'chestTaken':
+                _chestMsg(mp, from, d);
                 break;
         }
     };
@@ -3706,15 +3905,30 @@ async function _joinSession(worldId, session = null) {
     for (let i = 0, e = welcome.edits ?? []; i + 3 < e.length; i += 4) _applyRemoteBlock(e[i], e[i + 1], e[i + 2], e[i + 3], true);
     _others?.dispose();
     _others = new RemotePlayers(scene, _entities.models);
+    _others.onStep = _otherStep;
     for (const p of welcome.players ?? []) _others.add(p);
     _playerCasters();
-    // The host's game runs the mobs; a guest's shows them.
-    _entities.replica = !mp.isHost;
-    _entities.onRemoteHit = (id, dmg) => mp.host({ t: 'hit', id, dmg });
-    _entities.onRemoteAttack = (pid, dmg) => mp.to(pid, { t: 'attack', dmg });
-    _entities.onRemoteDrops = (pid, pos, items) => mp.to(pid, { t: 'drops', pos, items });
+    // Each game runs the mobs nearest its own player and shows the rest
+    // (EntityManager: *With other players*). What crosses goes to one player.
+    _entities.owner = mp.id;
+    _entities.onRemoteHit = (pid, id, dmg) => _sayTo(mp, pid, { t: 'hit', id, dmg });
+    _entities.onRemoteAttack = (pid, dmg) => _sayTo(mp, pid, { t: 'attack', dmg });
+    _entities.onRemoteDrops = (pid, pos, items) => _sayTo(mp, pid, { t: 'drops', pos, items });
+    _entities.onGive = (pid, m) => _sayTo(mp, pid, { t: 'mobgive', m });
     if (mp.online && mp.isHost) _serveGuests(mp);
     return welcome;
+}
+
+/**
+ * Say something to one player. The game's own server carries it between any
+ * two (Multiplayer.to); an online room has a line from each guest to the host
+ * and from the host to each guest, and none between two guests — that goes on
+ * the line everyone hears, marked for whom (`to`), and the rest let it pass.
+ */
+function _sayTo(mp, pid, d) {
+    if (!mp.online || mp.isHost) mp.to(pid, d);
+    else if (pid === mp.hostId) mp.host(d);
+    else mp.all({ ...d, to: pid });
 }
 
 /** Once a frame: show the others, and tell them what is new here. */
@@ -3734,13 +3948,19 @@ function _mpTick(dt) {
             hidden: _gameMode === 'SPECTATOR' || _spawnPending, swings: _swings, hurt: Math.min(1, _damageFade * 1.5),
         }));
     }
-    if (mp.alone || !mp.isHost || !_entities) return;
+    if (mp.alone || !_entities) return;
+    // The mobs this game runs, to the games near enough to see them. What
+    // each looks like goes with the first word of it, and with all of them
+    // every so often: a player who has only just come near has not been told.
     _mpMobT -= dt;
-    if (_mpMobT <= 0) {
+    _mpLookT -= dt;
+    if (_mpMobT <= 0 && _entities.hasWord) {
         _mpMobT = MOB_SEND;
+        if (_mpLookT <= 0) { _mobFull = true; _mpLookT = MOB_LOOKS; }
         mp.all({ t: 'mobs', ..._entities.snapshot(_mobFull) });
         _mobFull = false;
     }
+    if (!mp.isHost) return;
     _mpAtmosT -= dt;
     if (_mpAtmosT <= 0 && _atmos?.active) {
         _mpAtmosT = ATMOS_SEND;
@@ -3895,6 +4115,7 @@ async function goOffline() {
     online.release();
     _others?.dispose();
     _others = null;
+    _otherPos.length = 0;
     _playerCasters();
     if (worldId && worldState && !_remote) await _joinSession(worldId);
 }
@@ -3907,27 +4128,248 @@ window.__wwWorld = {
     lock: (locked) => _mp?.online && _mp.lock(locked),
 };
 
+// ── Chests ────────────────────────────────────────────────────────────────────
+//
+// What is in each chest: twenty-seven slots, by where the chest stands. The
+// world's owner keeps them, with the world (containers.json on the server);
+// anyone else in the world asks the owner's game, and holds only the chests
+// they have opened, as last heard of. A chest that is changed is said whole to
+// everyone — it is small — so whoever has it open sees it change. (Two players
+// moving things in one chest in the same instant can still cross: the later
+// word stands.) main.js shows a chest and changes its slots in place
+// (`window.__wwChests`); broken, a chest spills what was in it.
+
+const CHEST_SLOTS = 27;
+let _chests = new Map();              // "x,y,z" → [{ itemId, count } | null × 27]
+let _chestsDirty = false, _chestSaveTimer = null;
+const _chestWaits = new Map();        // "x,y,z" → what a guest's open() is waiting on (the owner's answer)
+const CHEST_KEY = /^-?\d{1,8},-?\d{1,4},-?\d{1,8}$/;
+const chestKey = (x, y, z) => `${x},${y},${z}`;
+
+/** Slots as they may be kept: the right number of them, plain item names, sane counts. */
+function _cleanSlots(s) {
+    if (!Array.isArray(s)) return null;
+    const out = new Array(CHEST_SLOTS).fill(null);
+    for (let i = 0; i < CHEST_SLOTS; i++) {
+        const e = s[i];
+        if (!e || typeof e.itemId !== 'string' || !/^[A-Za-z0-9_]{1,48}$/.test(e.itemId)) continue;
+        const n = e.count | 0, max = _itemReg?.getItem(e.itemId)?.maxStack ?? 64;
+        if (n > 0) out[i] = { itemId: e.itemId, count: Math.min(n, max) };
+    }
+    return out;
+}
+
+/** A chest is now this (null: there is none any more). Whoever has it open is shown; the owner's game keeps it. */
+function _setChest(key, slots) {
+    if (slots) _chests.set(key, slots); else _chests.delete(key);
+    if (!_guest) _chestsChanged();
+    window.dispatchEvent(new CustomEvent('ww_chestChanged', { detail: { key, slots } }));
+}
+
+function _chestsChanged() {
+    _chestsDirty = true;
+    clearTimeout(_chestSaveTimer);
+    _chestSaveTimer = setTimeout(_saveChests, 1500);
+}
+
+/** The owner's game: every chest with something in it, to the server — when any has changed. */
+function _saveChests() {
+    clearTimeout(_chestSaveTimer);
+    _chestSaveTimer = null;
+    const worldId = chunkManager?.worldId;
+    if (!_chestsDirty || !worldId || _guest) return;
+    _chestsDirty = false;
+    const body = {};
+    for (const [key, s] of _chests) if (s.some(Boolean)) body[key] = s;
+    const text = JSON.stringify(body);
+    fetch(`${SERVER_URL}/api/worlds/${worldId}/containers`, {
+        method: 'PUT', keepalive: text.length < 60000, headers: { 'Content-Type': 'application/json' }, body: text,
+    }).catch(() => { _chestsDirty = true; });
+}
+
+async function _loadChests(worldId) {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/worlds/${worldId}/containers`);
+        if (!res.ok) return;
+        for (const [key, s] of Object.entries(await res.json())) {
+            const slots = CHEST_KEY.test(key) ? _cleanSlots(s) : null;
+            if (slots) _chests.set(key, slots);
+        }
+    } catch { /* offline, or a world from before chests held anything */ }
+}
+
+/** In someone else's world, with its owner's game to ask. */
+const _chestsElsewhere = () => _guest && !!_mp && _mp.id !== 0;
+
+window.__wwChests = {
+    /** The slots of the chest at (x, y, z) — an array to show and to change in place — or null if they cannot be had. */
+    open(x, y, z) {
+        const key = chestKey(x, y, z);
+        if (!_chestsElsewhere()) {
+            let s = _chests.get(key);
+            if (!s) _chests.set(key, s = new Array(CHEST_SLOTS).fill(null));
+            return Promise.resolve(s);
+        }
+        // As the owner's game has it now: nothing is shown until it has answered,
+        // or a thing put into a chest not yet heard of would be put into an empty one.
+        _chestWaits.get(key)?.(null);
+        return new Promise((resolve) => {
+            const done = (s) => { clearTimeout(timer); if (_chestWaits.get(key) === done) _chestWaits.delete(key); resolve(s); };
+            const timer = setTimeout(() => done(null), 4000);
+            _chestWaits.set(key, done);
+            _mp.host({ t: 'chest?', k: key });
+        });
+    },
+    /** main.js has changed what is in it. */
+    changed(x, y, z) {
+        const key = chestKey(x, y, z), s = _chests.get(key);
+        if (!s) return;
+        if (!_guest) _chestsChanged();
+        if (_mp && _mp.id !== 0 && !_mp.alone) _mp.all({ t: 'chest', k: key, s });
+    },
+};
+
+/** What other games say about chests. */
+function _chestMsg(mp, from, d) {
+    const key = typeof d.k === 'string' && CHEST_KEY.test(d.k) ? d.k : null;
+    if (!key) return;
+    switch (d.t) {
+        case 'chest?':                // someone wants to open one: the owner's game says what is in it
+            if (!_guest) _sayTo(mp, from, { t: 'chest', k: key, s: _chests.get(key) ?? [] });
+            break;
+        case 'chest': {               // a chest as it is now (null: gone)
+            const slots = d.s === null ? null : _cleanSlots(d.s);
+            if (d.s !== null && !slots) break;
+            _setChest(key, slots);
+            _chestWaits.get(key)?.(slots);
+            break;
+        }
+        case 'chestTake':             // a guest broke one: the owner's game hands over what was in it, and forgets it
+            if (_guest) break;
+            _sayTo(mp, from, { t: 'chestTaken', k: key, s: _chests.get(key) ?? [] });
+            _setChest(key, null);
+            mp.all({ t: 'chest', k: key, s: null });
+            break;
+        case 'chestTaken':            // … which spills out here, where the chest stood
+            _spillChest(key, _cleanSlots(d.s));
+            break;
+    }
+}
+
+function _spillChest(key, slots) {
+    if (!slots || !_entities) return;
+    const [x, y, z] = key.split(',').map(Number);
+    for (const s of slots) if (s) _entities.dropItem({ x: x + 0.5, y: y + 0.2, z: z + 0.5 }, s.itemId, s.count);
+}
+
+/** The chest at (x, y, z) was broken by this player. */
+function _chestBroken(x, y, z) {
+    const key = chestKey(x, y, z);
+    if (_chestsElsewhere()) {
+        // Its owner's game knows what was in it: that is asked for, and spills here when it comes.
+        _chests.delete(key);
+        _mp.host({ t: 'chestTake', k: key });
+        return;
+    }
+    _spillChest(key, _chests.get(key) ?? null);
+    _setChest(key, null);
+    if (_mp && _mp.id !== 0 && !_mp.alone) _mp.all({ t: 'chest', k: key, s: null });
+}
+
+/** A chest was put down at (x, y, z) by this player: an empty one, whatever was kept for that place. */
+function _chestPlaced(x, y, z) {
+    const key = chestKey(x, y, z);
+    if (!_guest && _chests.has(key)) _setChest(key, null);
+}
+
+// Something the player could not keep — no room for what was made, or for what
+// was in hand when a menu closed — falls at their feet. (main.js has always
+// asked for this; nothing was listening, and the things were simply gone.)
+document.addEventListener('WorldJS_dropItem', (e) => {
+    const { itemId, count } = e.data ?? {};
+    if (!_entities || !me?.position || typeof itemId !== 'string' || !(count > 0)) return;
+    _entities.dropItem({ x: me.position.x, y: me.position.y + 0.6, z: me.position.z }, itemId, count);
+});
+
 // ── Sounds ────────────────────────────────────────────────────────────────────
 
-/** A blow of the player lands on the mob nearest `at`. Returns the damage done. */
+/** A blow of the player lands on the mob nearest `at` that they can see. Returns the damage done. */
 function _hitMob(at, damage, radius) {
-    return _entities?.hitNearest(at, damage, radius) ?? 0;
+    return _entities?.hitNearest(at, damage, radius, _seesMob) ?? 0;
 }
 
 let _nearWater = 0, _nearWaterT = 0;
 
-/** How much open water is within a few blocks, 0 … 1 — for the sound of it. */
+// Waves are heard from a long way off, and only from a large body of water.
+// Rings of sixteen places round the player are looked at, out to WAVE_REACH.
+const WAVE_RINGS = [8, 16, 26, 38, 52, 68];
+const WAVE_REACH = WAVE_RINGS[WAVE_RINGS.length - 1];
+const WAVE_DIRS = 16;
+const WAVE_AREA = [1400, 3400];     // open water in sight, blocks²: none of the sound below, all of it above
+
+/** Is the first thing under the open air at (x, z), looking down from y, water? */
+function _openWaterAt(x, y, z) {
+    for (let dy = 0; dy < 64; dy++) {
+        const id = worldState.getBlock(x, y - dy, z);
+        if (id === 0) continue;
+        if (_blockReg.isLiquid(id)) return true;
+        if (!_blockReg.isTransparent(id)) return false;      // ground; leaves and glass are looked through
+    }
+    return false;
+}
+
+/**
+ * How much of the sound of waves there should be, 0 … 1. It is there when a
+ * lot of open water lies within WAVE_REACH blocks — the sea, a lake; a pond or
+ * a stream across the path does not add up to enough (WAVE_AREA: each place
+ * looked at stands for the piece of ground round it) — and it is only a little
+ * quieter for being far: at the very edge of that reach, still more than half.
+ * (It used to be heard within six blocks of any water at all, a puddle included.)
+ */
 function _waterNearby(p) {
-    let wet = 0;
-    const y = Math.floor(p.y);
-    for (let i = 0; i < 12; i++) {
-        const a = i * Math.PI / 6, r = i & 1 ? 3 : 6;
-        const x = Math.floor(p.x + Math.cos(a) * r), z = Math.floor(p.z + Math.sin(a) * r);
-        for (let dy = 0; dy >= -2; dy--) {
-            if (_blockReg.isLiquid(worldState.getBlock(x, y + dy, z))) { wet += worldState.getBlock(x, y + dy + 1, z) === 0 ? 1 : 0; break; }
+    const y = Math.floor(p.y) + 6;
+    let area = 0, nearest = Infinity;
+    for (let k = 0; k < WAVE_RINGS.length; k++) {
+        const r = WAVE_RINGS[k];
+        const inner = k ? (WAVE_RINGS[k - 1] + r) / 2 : 0, outer = k + 1 < WAVE_RINGS.length ? (r + WAVE_RINGS[k + 1]) / 2 : r + 8;
+        const piece = Math.PI * (outer * outer - inner * inner) / WAVE_DIRS;
+        for (let i = 0; i < WAVE_DIRS; i++) {
+            const a = (i + (k & 1) * 0.5) * 2 * Math.PI / WAVE_DIRS;
+            if (!_openWaterAt(Math.floor(p.x + Math.cos(a) * r), y, Math.floor(p.z + Math.sin(a) * r))) continue;
+            area += piece;
+            if (r < nearest) nearest = r;
         }
     }
-    return Math.min(1, wet / 5);
+    if (area <= WAVE_AREA[0]) return 0;
+    const big = Math.min(1, (area - WAVE_AREA[0]) / (WAVE_AREA[1] - WAVE_AREA[0]));
+    return big * (1 - 0.4 * Math.max(0, nearest - WAVE_RINGS[0]) / (WAVE_REACH - WAVE_RINGS[0]));
+}
+
+/**
+ * A mob's foot comes down. An animal with feet of its own kind (`footstep`
+ * in its JSON) makes their sound — a hoof, a trotter, a hen's claws — with a
+ * little of the ground under it; anything else, a Quiddle in boots, sounds of
+ * the ground alone, as the player does.
+ */
+function _mobStep(at, o) {
+    const family = blockSoundFamily(o.ground > 0 ? _blockReg.get(o.ground) : null);
+    const own = o.footstep ? `${o.footstep}_step` : null;
+    if (own && sound.has(own)) {
+        sound.play(own, { at, volume: o.volume, reach: o.reach, vary: 0.1 });
+        sound.play(`${family}_step`, { at, volume: o.volume * 0.35, reach: o.reach });
+    } else sound.play(`${family}_step`, { at, volume: o.volume, reach: o.reach });
+}
+
+/**
+ * Another player's foot comes down (Players.js). Not for players on this
+ * same screen: their own pane plays their footsteps, through the same speakers.
+ */
+function _otherStep(e, run, landing) {
+    if ((window.__wwSplitN ?? 1) > 1 || !worldState) return;
+    const x = Math.floor(e.x), z = Math.floor(e.z);
+    const ground = worldState.getBlock(x, Math.floor(e.y - 0.2), z) || worldState.getBlock(x, Math.floor(e.y - 1.2), z);
+    const family = blockSoundFamily(ground > 0 ? _blockReg.get(ground) : null);
+    sound.play(`${family}_step`, { at: { x: e.x, y: e.y, z: e.z }, volume: (landing ? 0.6 : 0.42) + 0.22 * run, reach: 24 });
 }
 
 /** What the player is doing, for GameSounds: footsteps, splashes and the ambience. */
@@ -3936,7 +4378,7 @@ function _tickSounds(dt, result, sneaking) {
     const p = me.position, eye = p.y + CAMERA_HEIGHT;
     const fx = Math.floor(p.x), fz = Math.floor(p.z);
     _nearWaterT -= dt;
-    if (_nearWaterT <= 0) { _nearWaterT = 0.5; _nearWater = _waterNearby(p); }
+    if (_nearWaterT <= 0) { _nearWaterT = 0.75; _nearWater = _waterNearby(p); }
     let ground = 0;
     if (result.onGround) {
         ground = worldState.getBlock(fx, Math.floor(p.y - 0.2), fz) || worldState.getBlock(fx, Math.floor(p.y - 1.2), fz);

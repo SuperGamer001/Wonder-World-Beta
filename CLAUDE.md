@@ -23,7 +23,7 @@ src/
     Precipitation.js             Rain, snow, sleet, hail, splashes, dust, ash
     Lightning.js                 Bolts and flashes
     Tornado.js                   Funnel + debris
-    WeatherAudio.js              Rain and wind, made as they fall; thunder from files
+    WeatherAudio.js              Rain from loops of drops; wind and thunder made as they happen
     Sound.js                     The one mixer: sound files by name, loops, the music (see *Sound*)
     GameSounds.js                When the world makes which sound: footsteps, mining, ambience
     PlayerModel.js               A player's body: the Quiddle in their look, moved by what they do
@@ -117,11 +117,16 @@ test/
   terrain.test.mjs               World generation: legacy hash, determinism, seams, water, balance
   chunkmanager.test.mjs          Chunk scheduling through WorkerPool with fake workers
   mobai.test.mjs                 Mob paths and behaviour in hand-made worlds; model geometry and gaits
+  mobshare.test.mjs              Mobs with several players: round each of them, shared between those together, handed from game to game
   multiplayer.test.mjs           Sessions, each player's own state, and what a guest from the network may reach
+  worldfile.test.mjs             A world exported to one file and imported again; every kind of bad file refused
+  worldfile-ui.test.mjs          … and in the real page: the list keeping itself up to date, Export, Import World
+  releasenotes-ui.test.mjs       The release notes: shown once for a newer version, and from Settings
   mobshots.mjs                   Screenshots of the mob models on a stage (mob_viewer.html)
   pipelinebench.mjs              Stage timings + output hashes for the worker pipeline
   renderbench.mjs                Frame times of the real game on the real GPU, per preset
   smoke.mjs                      Headless end-to-end run of the real game
+  play.test.mjs                  … and played with a mouse and keys, the pointer really held (playHarness.mjs): menus, dying, slots, crafting, chests, mobs
   online.test.mjs                The token service, and rooms of several games through a stand-in for Ably (fakeAbly.mjs)
   online.live.mjs                … and through Ably itself, with a key (not part of npm test)
   online.smoke.mjs               … and two real games in a browser, playing one world through it
@@ -225,6 +230,22 @@ Light sources and small shapes (all optional, `BlockRegistry.makeDef`):
 | `support` | `[dx, dy, dz]` of the block it rests or hangs on. Breaking that block breaks this one too, and drops it (`_breakUnsupported` in `world.js`) |
 | `render` | How a see-through block is drawn: `"cutout"` (with the opaque blocks, each texel there or not, writing depth — leaves, glass) or `"translucent"` (blended over the scene — water, ice). Without it liquids are translucent, leaves and `GLASS` cutout (by flag or name), anything else translucent. See *Two Output Meshes* |
 | `blend` | Natural ground only: how readily it spreads over the edge of the ground next to it in a smooth world, 1–255 (0 or absent: takes no part). Higher creeps onto lower — snow 90, grass 62, dirt 40, sand 30, stone 9, ores 4. See *Ground blending* |
+
+Mining (all optional):
+
+| Field | Meaning |
+|---|---|
+| `hardness` | Seconds to mine by hand |
+| `slippery` | 0 … 1: how little grip it gives a foot (ice 0.9). See *Player physics* |
+| `requiresTool` | `pickaxe` / `axe` / `shovel`: without one in hand it is mined at 0.3 of a hand's speed and drops nothing (stone, ores, bricks) |
+| `tool` | The tool that is quick at it — the only one whose `miningSpeed` counts on this block. Defaults to `requiresTool`; earth says `shovel` and wood `axe`, though a hand will do for both |
+
+A tool item has a `subtype` (`pickaxe`, `axe`, `shovel`) and a `miningSpeed`
+(wood 2, stone 4, iron 6, gold 12): mining takes `hardness / miningSpeed`
+seconds on a block whose `tool` it is, and `hardness` on any other — a tool is
+no better than a hand at what it is not for. (Its speed used to count on
+every block, and only pickaxes had one: a gold pickaxe went through logs and
+dirt twelve times as fast as a hand, and an axe was no help with a tree.)
 
 Textures (optional; `BlockRegistry.resolveTextures`):
 
@@ -1389,7 +1410,7 @@ gets two blocks of dirt put back so the trunk does not hang.
 | `cactus` | 1–3 tall, on sand |
 | `huge_mushroom` | Red dome or brown flat cap |
 | `boulder` | Mossy stone or andesite, half sunk |
-| `house` | Stone-framed plank house with glass windows and a gabled roof, 7×9 |
+| `house` | Stone-framed plank house with glass windows and a gabled roof (up from the eaves on the long walls to a ridge along the middle — it was built the other way up, a trough), 7×9 |
 
 Biome JSON written for the old placer says `tree`; it means `oak_tree`.
 
@@ -1577,13 +1598,14 @@ This ensures CCW front-face winding consistent with Three.js defaults.
 |---|---|
 | W/A/S/D | Move horizontally relative to look direction |
 | Space | Jump (or ascend while flying) |
-| Ctrl / Q | Sneak (or descend while flying) |
-| Shift | Sprint |
+| Right Shift / Q | Crouch (or descend while flying) |
+| Left Shift | Sprint |
 | Mouse | Look (requires pointer lock) |
 | LMB / RMB | Break / place block, attack, use item |
 | 1–0 | Select hotbar slot |
-| E | Inventory |
-| C | Craft menu / creative inventory |
+| E | Inventory (and, with a menu up, close it) |
+| C | Craft menu / creative inventory (and close it) |
+| Esc | Close the menu that is up; else the pause menu |
 | V or F5 | The view: your own eyes, over your shoulder, from in front (see *The player's body and the view*) |
 | F11 | Toggle fullscreen (desktop app) |
 
@@ -1664,6 +1686,50 @@ response curve, which does give better fine control at low settings, but adding
 one would change what every already-saved sensitivity value means — and would
 make a raised setting faster rather than calmer.
 
+### Who has the pointer (`main.js`: *Pause / menu / pointer-lock coordination*)
+
+The game plays while the pointer is locked to it. Pause is driven by the lock,
+not polled: losing it with no menu up is a pause, getting it is a resume, and
+a menu (or the death screen: `_menuOpen`) lets it go without pausing. The
+browser decides whether a page gets the pointer, and its rules are the reason
+for most of what is here — `test/play.test.mjs` holds each of them, with the
+pointer really locked:
+
+- **Esc is the browser's key before it is the page's**, and it acts on the key
+  going down *and* coming up. A lock taken on the keydown is taken away again
+  when the key is released — as the player's own doing, which pauses the game
+  and makes the browser refuse the next request for about a second and a
+  quarter. So a menu closed with Esc takes the pointer once the key is up
+  (`_escLock`, the `keyup` listener), never on the way down. (Closing the
+  inventory with Esc used to put the pause menu up.)
+- **A request needs a click behind it** — or to be the first since the page
+  itself let the pointer go (`exitPointerLock`), which a browser grants
+  silently. So `lockPointer` makes one request, not two: it used to ask for
+  raw input and then, on any refusal, ask again plainly, which spent the
+  silent one finding out. Only a browser that cannot give raw input is asked
+  twice, once, and remembered (`_rawInput`).
+- **A page that asks too often is refused for that alone** ("Too many pointer
+  lock requests"): `requestGameLock` tries five times over two seconds and a
+  quarter (`LOCK_RETRY_MS` — enough to outlast the wait after Esc), where it
+  used to try thirty times in under four, twice each.
+- **Playing with the pointer not held is a state the game owns up to**
+  (`pointerLoose`): a world that took longer to load than a click counts for
+  (five seconds), or any request refused. A note says *Click to play*
+  (`#clickToPlay`) and a click anywhere takes the pointer. The listener is on
+  the document: the canvas has a negative `z-index`, so a click on the world
+  lands on `<body>` and never passes through `#GameScreen`, where the
+  listener used to be — it did nothing, and a pointer once lost stayed lost.
+- **Never hand a `close…` function to `addEventListener` as it is.**
+  `closeInventory(suppressLock)` given the click as its argument read it as
+  "do not take the pointer back": the inventory's Close button left the game
+  with no menu up and the pointer loose. They are wrapped in arrow functions.
+- **E and C close what they open** (a capture-phase listener in `main.js`,
+  before `world.js`'s, which hears those keys only while the pointer is held).
+- **Dying is not a pause.** The death screen sets `_dead` and `_menuOpen`
+  before the pointer is let go, so no pause menu comes up over it (it did, and
+  Resume took the pointer back with Respawn still to be clicked); Esc does
+  nothing there, and Respawn takes the pointer.
+
 ### Player physics (`PlayerPhysics.js`)
 
 Everything is tuned through named constants at the top of the file, and the
@@ -1674,6 +1740,29 @@ derived ones exist so retuning one value cannot silently change something else.
   cut back to length 1, not stretched to it: keys alone are 0, 1 or √2 long,
   so for them nothing changed, and a stick pushed half way walks at half
   speed.
+- **A blocked move goes as far as it can** (`_moveAxis`). A move that would
+  end inside something used to be refused whole, so the player stopped
+  wherever the frame before had left them: a frame's travel short of a wall,
+  which they then crept up on as their speed was zeroed and built up again
+  over the gap; and, falling, up to a third of a block above the ground,
+  where they "landed", hung, and fell the rest. Now the last clear place
+  along the axis is found by halving (`CONTACT_ITERS` 12), and the player
+  comes to rest touching what stopped them — walls, floors and ceilings.
+- **Two allowances for a jump**, a tenth of a second each: the ground still
+  counts just after it is walked off (`COYOTE`), and a jump asked for just
+  before landing is made on landing (`JUMP_BUFFER`).
+- **Crouching** (`input.sneak` with feet on the ground; `crouching`): 1.8
+  blocks a second whatever else is held, and a step that would leave nothing
+  under the feet within `CROUCH_DROP_*` is not taken, so the player can stand
+  out over an edge to build. `world.js` brings the eyes down 0.3 (`_eyeY`,
+  which is what is looked, aimed and drawn from) and footsteps go quiet. The
+  box is as tall as ever, and the body does not bend yet.
+- **Ice** (`slip`, 0 … 1): a block's `slippery` (ICE and PACKED_ICE 0.9)
+  under the feet, or freezing rain in the open — whichever is more — takes
+  that much of the grip away (`world.js`: `_applyWeatherToPlayer`).
+- **The eyes ease over a step** (`stepped`, `_eyeEase` in `world.js`): in a
+  smooth world the feet go up a slope's edge, or snap down onto one, in no
+  time; the camera follows at 16/s instead of jumping with them.
 - **Horizontal motion is velocity-based**, eased toward the input target with
   `approach(rate, dt)` — a frame-rate independent exponential, so 30 fps and
   144 fps feel identical. Position used to be written directly from the input
@@ -2360,9 +2449,9 @@ space conversion, so sky, fog and terrain must agree in that space
 
 | Module | Draw calls | Notes |
 |---|---|---|
-| `Sky` | 1 | Camera sphere at the far plane, drawn after the terrain and depth-tested, so only the pixels no land covers are shaded (it used to be drawn first, over the whole screen); everything blended — clouds, water, rain — still comes after it. Simple: flat colour, square sun/moon/stars. Pretty: gradient, glow toward the sun, halo, sphere-lit moon with the real phase terminator, twinkling stars rotating with the sky. Horizon is always `fogColorFor(dir)`, so terrain never seams against the sky. |
+| `Sky` | 1 | Camera sphere at the far plane, drawn after the terrain and depth-tested, so only the pixels no land covers are shaded (it used to be drawn first, over the whole screen); everything blended — clouds, water, rain — still comes after it. Simple: flat colour, square sun/moon/stars. Pretty: gradient, glow toward the sun, halo, sphere-lit moon with the real phase terminator, twinkling stars rotating with the sky. Horizon is always `fogColorFor(dir)`, so terrain never seams against the sky. The sun and the moon are one size in both skies (`SUN_RADIUS`, `MOON_RADIUS` in the shader): the simple ones were the area of the old squares, nearly three times as wide, so they shrank when the sky was turned up. |
 | `Clouds` | 0–2 | A slab of air from `CLOUD_BASE` to `CLOUD_TOP` with cloud in it, drawn once a frame off screen by following every line of sight through it (fast: 6 steps, shaded by thickness; fancy: 14, lit through the cloud above each point), at half resolution into a premultiplied target. See *Clouds* below. Nothing when the sky is clear. |
-| `Precipitation` | 0–6 | Instanced quads positioned entirely in the vertex shader from fixed seeds + wrapped fall/drift offsets. A particle shows when its rank is below the rain intensity at its column. `RainHeightmap` (highest block per column around the player, 9×9 chunks, from each mesh job's `geo.rain`) hides particles under roofs, trees and in caves and seats splashes. |
+| `Precipitation` | 0–6 | Instanced quads positioned entirely in the vertex shader from fixed seeds + wrapped fall/drift offsets. Rain falls at 19 blocks a second. A splash is at a place on the ground (the box tiled over the world), not in the view — placed from the box's corner, as it was, every ring slid along with the player. A particle shows when its rank is below the rain intensity at its column. `RainHeightmap` (highest block per column around the player, 9×9 chunks, from each mesh job's `geo.rain`) hides particles under roofs, trees and in caves and seats splashes. |
 | `Lightning` | 0–1 | Midpoint-displaced channel + branches, 1–4 return strokes. Pool of 3 bolts. Flashes light sky, clouds and open ground. |
 | `Tornado` | 0–2 | Rope-bending funnel + orbiting debris. Pulls and lifts the player within 45 blocks. |
 
@@ -2414,11 +2503,13 @@ gales lean on an exposed player and tornadoes pull (`PlayerPhysics.external`),
 lightning hurts within 4 blocks. Leaves sway with the wind in `CHUNK_VERT`
 (position-only displacement, so merged quads never crack).
 
-**Audio** (`WeatherAudio`): rain and wind are filtered noise, made as they
-fall; thunder is a file (`thunder_close` / `_mid` / `_far` by distance — see
-*Sound*; a made rumble where a pack has none). It plays through the game's
-mixer, updates at 10 Hz, muffles under a roof, and thunder arrives
-`distance / 343` seconds after the flash.
+**Audio** (`WeatherAudio`): rain is two loops of drops (`rain_light`,
+`rain_heavy` — see *Sound*), moved between as it gets heavier, with a low roar
+under a downpour; wind is filtered noise. Thunder is made for each strike — a
+crack for one within 130 blocks, then rolls of low noise dying away, no two
+alike — unless a pack supplies `thunder_close` / `_mid` / `_far`. It plays
+through the game's mixer, updates at 10 Hz, muffles under a roof, and thunder
+arrives `distance / 343` seconds after the flash.
 
 ### Persistence and settings
 
@@ -2450,6 +2541,8 @@ hitbox `width` / `height`, drops, spawn rules) and:
 | `grazes` | Puts its head down to eat when idle (pecks, for a chicken) |
 | `maxDrop` | The deepest drop it will take on purpose, in blocks (default 3) |
 | `aquatic` | A fish: swims, spawns in water |
+| `footstep` | Its own kind of foot, heard as it walks: `hoof` (cow), `trotter` (pig, sheep), `chicken`. None: it sounds of the ground alone (a Quiddle in boots) |
+| `length` | Nose to tail, in blocks, where that is more than `width`: what a block may not be put down in (below) |
 
 ### Models (`engine/MobShapes.js`, `MobModelDefs.js`, `MobAnim.js`, `MobModels.js`)
 
@@ -2675,6 +2768,28 @@ a walk something is always on it.
 Test hooks: `__wwSpawnMob(type, x, y, z)`, `__wwMobs()` (what each is doing),
 `__wwHitMob(x, y, z, damage)`.
 
+### Mobs and the player's hand (`world.js`)
+
+- **A mob is struck only in plain sight.** The mob under the crosshair is
+  the first the look meets (`getClosestMobInRay`) — if nothing stands between
+  (`_clearSight`: the line from the eyes, against the ground as it is drawn,
+  so a mob on a smooth slope is not hidden by the voxel in front of it). A
+  swing at the air catches the nearest mob the player can see (`_seesMob`).
+  An arrow stops in the first mob on its way, or in the first block. (The ray
+  to a mob used to take no notice of blocks: they were struck through walls.)
+  The blow lands on that mob (`EntityManager.hitMob`), not on whichever
+  stands nearest it.
+- **Then a moment's pause** (`STRIKE_HOLD`, 0.4 s) before a block can be
+  mined: with the button still down, the block behind a mob that had just
+  fallen was being broken before the player had let go.
+- **A block is not put down where somebody stands** (`_someoneIn`): this
+  player, another, or a mob, by their boxes — and for a mob by its body, which
+  is longer than the box it collides with (`length`, the way it faces:
+  `_bodyInVoxel`; a cow's box is 0.9 square and a block could be put through
+  its shoulders). (Only this player was looked
+  for, and only their middle.) Torches, lanterns and water fill no space and
+  may go anywhere.
+
 ---
 
 ## The player's body and the view (`src/scripts/PlayerModel.js`, `world.js`)
@@ -2730,25 +2845,66 @@ by a recording of the same name.
 |---|---|
 | A block's, by its family | `<family>_step`, `_hit` (a knock while mining), `_break`, `_place` — families `grass dirt stone sand gravel wood snow leaves glass`, from the block's `"sound"` or guessed from its name (`blockSoundFamily`) |
 | Water | `water_splash` (falling in), `water_swim` |
-| Mobs | `<type>_idle`, `<type>_hurt` (cow, pig, sheep, chicken, quiddle) |
+| Mobs | `<type>_idle`, `<type>_hurt` (cow, pig, sheep, chicken, quiddle); their feet: `hoof_step`, `trotter_step`, `chicken_step` |
 | The player | `player_hurt`, `fall`, `eat`, `pickup`, `swing`, `punch`, `bow_draw`, `bow_shoot`, `arrow_hit` |
-| Ambience (loops) | `birds` (day, in the open, dry), `crickets` (night), `cave` (no sky light), `water` (open water near), `underwater` |
-| Thunder | `thunder_close`, `thunder_mid`, `thunder_far` — picked by distance (see *Day Cycle and Weather*) |
+| Ambience (loops) | `birds` (day, in the open, dry), `crickets` (night), `cave` (no sky light), `water` (waves: a large body of water within 68 blocks — below), `underwater` |
+| Rain (loops, played by `WeatherAudio`) | `rain_light`, `rain_heavy` |
+| Thunder | None shipped: it is made per strike. A pack's `thunder_close`, `thunder_mid`, `thunder_far` are played instead, picked by distance |
 | Menus | `click` |
 
 **They are made, not recorded** (`npm run sounds`): each is built the way the
-thing itself makes it, at 44.1 kHz, which is what stops them sounding like a
-game console (the clap of raw noise that lightning used to make did). A
-footstep is a heel and then the ball of the foot, each the dull knock of a
-weight plus what that ground does — blades brushing, grit turning, a board
-ringing in its few modes, snow squeaking. A voice is a larynx (a pulse train
-with a real one's jitter and roughness) through resonances that move as a
-mouth does. Thunder is a lightning channel some kilometres long, every few
-metres of which goes off at once; what arrives is each of those bangs, later
-and duller the further up the channel it was — a crack from the nearest part,
-then the roll from the rest — heard from two ears apart. Deterministic (a
-seed per name); Ogg Vorbis when `ffmpeg` is on the PATH, else WAV. The
-spectrogram of a take is the quick way to see what a change did.
+thing itself makes it, at 44.1 kHz. A footstep is a heel and then the ball of
+the foot, each the dull knock of a weight plus what that ground does — blades
+brushing, grit turning, a board knocking, snow creaking. A voice is a larynx
+(a pulse train with a real one's jitter and roughness) through resonances
+that move as a mouth does. Rain is a soft wash with drops on it — tens of
+thousands, each a soft tick of its own colour, none nearer than a few metres.
+Deterministic (a seed per name);
+Ogg Vorbis when `ffmpeg` is on the PATH, else WAV. The spectrogram of a take
+is the quick way to see what a change did.
+
+**They are kept soft**, and the first set was not — it was called harsh and
+digital, the birds "right in your ear". What that came from, so that it stays
+out:
+
+- **No bare sine** for anything but a whistle or a bubble. Grit, a board, a
+  pane of glass are a short breath of noise through what resonates (`ring`,
+  `grains`); they were pure tones a few thousandths of a second long, which
+  is a blip.
+- **Nothing bright and dry.** Every one-shot ends through `finish`: little
+  left above 5–6 kHz, and a little air round it. The air is a real decay
+  (noise dying away, convolved by FFT — `clap`), where six comb filters used
+  to ring like a tin.
+- **Quiet.** Peaks are 0.3–0.6 of full scale, where they were 0.5–0.95.
+- **The soft grounds are duller and quieter still** (`top`, `level` in
+  `GROUND`): grass, sand and snow keep nothing above 2.4–3 kHz and have next
+  to no grit — a second complaint, after the first softening, was about those
+  three.
+- **Weight is noise, a hard thing rings clean.** A foot landing is low noise
+  with no note (`body`; a sine there is a drum machine). A board or a rock
+  that is knocked does ring, on a few low notes for a few hundredths of a
+  second, set going by one clean push (`ring` with `tone`) — struck with
+  noise they fuzzed, and wood, stone and dirt "did not sound like the real
+  thing". `GROUND`'s comment says what each ground is meant to be.
+- **Rain is neither hiss nor crackle.** Filtered noise hissed; drops alone,
+  some at the listener's feet, crackled. It is both now: a level wash, and on
+  it drops that keep their distance (5–7 m), come in over a thousandth of a
+  second and carry little above 4 kHz.
+- **Every take of an animal is a different call** (`fn(r, kind, take)`): a
+  cow's long moo, a low murmur, a call that breaks upward; hurt, a bellow, or
+  a snort and a groan. They were one call at three pitches. The game adds its
+  own pitch each time one is played (`vary` 9%, and by the animal's size).
+- **Birds are far off**: five of them (seven), none singing above 3.5 kHz
+  (5.6), each waiting 9–22 seconds between songs (3.5–9), heard mostly as what
+  the wood gives back, over leaves moving; the loop is 44 seconds. Crickets
+  the same way.
+- **Thunder as files was taken out again.** A stroke worked out pulse by
+  pulse from a model of the lightning channel replaced the noise-made thunder
+  for a while and sounded like a machine rumbling; the noise-made one was
+  called realistic, and is back (see *Day Cycle and Weather*).
+
+Nobody has listened to any of this but the player: the tool's author cannot
+hear. Judge a change by ear, not by this list.
 
 **The mixer** (`Sound.js`, one `AudioContext` for the game):
 
@@ -2762,8 +2918,9 @@ weather ─┘        (WeatherAudio.js plays into the weather bus)
 - **A browser lets a page make sound only after a click or a key.** Until
   then nothing plays, and the music starts on that first click (the desktop
   app starts it at once). The short sounds are decoded then; ambience and
-  thunder, tens of megabytes decoded, when first wanted (`wait` plays a sound
-  when it has arrived, for thunder, which is late anyway).
+  rain, tens of megabytes decoded, when first wanted (`sound.buffer(name)`
+  hands a decoded loop to a module that plays it itself, as the rain is;
+  `wait` plays a one-shot when it has arrived).
 - **Positional sounds** are placed by ear, cheaply: quieter with distance,
   panned by where they are from the way the listener faces, nothing beyond
   `reach`.
@@ -2774,12 +2931,29 @@ weather ─┘        (WeatherAudio.js plays into the weather bus)
   ambience, weather (`sound.shared`); every pane plays its own player's
   sounds.
 
+**Waves** (`_waterNearby` in `world.js`, every three quarters of a second).
+Sixteen places on each of six rings round the player, out to 68 blocks, are
+asked whether the first thing under the open air there is water; each stands
+for the piece of ground round it. The sound is there only when that adds up
+to a large body (`WAVE_AREA`: none under 1,400 blocks², all of it from 3,400
+— a pond is a few hundred, the sea tens of thousands; a river in full view
+comes to a little), and distance takes little from it: at the far edge of the
+reach it is still 0.6 of what it is on the shore. (It used to be heard within
+six blocks of any water, a puddle included.)
+
 `GameSounds` decides when: a footstep for every stride on the ground walked on
 (longer strides running, a harder one for landing), a knock every quarter
 second while mining, a splash going into water, a bite while eating, and the
 ambience eased toward how much of each there should be. It is handed what it
 needs each tick (`_tickSounds`) and reads nothing of the world itself. Mobs
 speak through `EntityManager.onSound`: now and then, when near, and when hit.
+
+**Everybody's feet are heard.** A mob's stride (`_animate`) gives two
+footfalls a cycle within 20 blocks (`_footstep` → `step` → `_mobStep` in
+`world.js`): the animal's own kind of foot, with a little of the ground under
+it, or the ground alone. Another player's come from `Players.js` (`onStep`:
+a stride of ground covered, or a landing → `_otherStep`) — except for players
+on the same screen, whose own pane plays them through the same speakers.
 
 ---
 
@@ -2798,15 +2972,48 @@ the two alike.
 
 All the games hold the whole world and each runs its own player, with its own
 camera, inventory, health and menus. **The first to join is the host**; its
-game also runs what there must be only one of.
+game also runs what there must be only one of (the clock and the weather —
+the mobs are shared out).
 
 | | Run by | The others |
 |---|---|---|
 | Players | each their own | are told where each is, 15 times a second (`packState`: place, look, speed, a few flags, blows begun), and draw them (`Players.js`: a `PlayerModel` and a name over it, eased toward the latest) |
 | Blocks | whoever changes one (`WorldState.onSet`) | put it down (`_applyRemoteBlock`). A chunk not loaded there keeps it in `pendingChanges`, which is put down when the chunk arrives — the mechanism that already carried a player's own edits across an unload |
-| Mobs | the host | are replicas (`EntityManager.replica`): they spawn nothing and decide nothing, and show the host's snapshots (ten a second, eleven numbers a mob, each mob's look sent once). A guest's blow goes to the host (`hit`); a mob's blow on a guest, and the drops of a mob a guest killed, go to that guest |
+| Mobs | the game of the player nearest each | show it as that game says (below) |
+| Chests | the world's owner keeps them | ask the owner's game for one to open it; a chest that is changed is said whole to everyone (see *Chests*) |
 | Clock and weather | the host | take the host's every two seconds (`Atmosphere.sync`). One player's pause menu does not stop the clock while others are there |
 | Dropped items, lightning strikes | each game its own | — |
+
+**Mobs** (`EntityManager`: *With other players*; `test/mobshare.test.mjs`).
+Every game spawns mobs round its own player, exactly as it does alone, and
+runs the ones nearest that player; the rest it shows (`mob.net`: where the
+game that runs it last said it was, eased toward). So wherever a player is
+there are mobs, and the game moving a mob is one that has that land loaded.
+(The host's game used to run them all, round the host, with only its own
+chunks to run them in: a guest who walked off met none.)
+
+- **Together, no faster and no fuller.** A game counts every mob within
+  `DESPAWN_RADIUS` of its player toward the cap (`MAX_MOBS`, 24), whoever's
+  game runs it, and with `n` players within `SHARE_RADIUS` (64 blocks) of
+  each other each game takes one spawn turn in `n` — two players side by side
+  fill the place as one would.
+- **Told** ten times a second (`snapshot`: eleven numbers a mob; each mob's
+  look with the first word of it, and all of them every two seconds, since a
+  player who has only just come near was not told), and only while another
+  player is within `WORD_RADIUS` (96 blocks) of one of the mobs
+  (`hasWord`) — players far apart say nothing of their mobs to each other.
+  A mob nothing has been said of for `REPLICA_TTL` (1.5 s) is gone: its game
+  left, let it go, or is out of range.
+- **Handed over.** Twice a second each game looks at whose its mobs should
+  be: one that is `HANDOFF_MARGIN` (6 blocks) nearer another player than its
+  own is given to that player's game (`onGive` → `mobgive` → `adopt`), and
+  shown here from then on. A player who goes away leaves the mobs beside
+  another player to that player. A mob's id is its first game's number in
+  the session × 1,000,000 plus a count, and it keeps it.
+- **A blow** on a mob another game runs goes to that game (`hit`); a mob's
+  blow on another player, and what a mob drops for the player who killed it,
+  go to that player (`attack`, `drops`).
+- What one game has for one other goes through `_sayTo` (`world.js`).
 
 - **The journal.** The server keeps the latest block for every place changed
   in the session and hands it to whoever joins: the chunk it was in may not
@@ -2910,9 +3117,9 @@ what the free plan allows and what has been checked. As shipped
 of this.
 
 - **The host still hosts.** One player's game is the host, as above: the world
-  stays on their disk, their game runs the mobs and the clock, and answers
-  for the world. Ably only replaces the game's own server as the thing
-  messages go through.
+  stays on their disk, their game runs the clock and keeps the chests, and
+  answers for the world. Ably only replaces the game's own server as the
+  thing messages go through.
 - **A token is what lets a game in, and it is all the server there is**
   (`online/auth.js`, the token service: stateless, Web Crypto only, so it runs
   as a Cloudflare Worker, a Node server, or inside the game's own server on a
@@ -2926,12 +3133,16 @@ of this.
     hash of the code and of who they are). Only a token asked for with it may
     publish on the room's host channel.
 - **A room is four kinds of channel** (`channels` in `OnlineProtocol.js`):
-  `all` (everyone speaks and hears: where players are, blocks; and everyone is
-  *present* here, which is the list of players), `host` (only the host
-  speaks: who is let in and under which number, mobs, clock and weather, a
-  block put right), `up` (guests speak, only the host hears: a blow on a mob,
-  what a guest asks of the host's world) and `to:<clientId>` (the host to one
-  guest: the welcome, answers).
+  `all` (everyone speaks and hears: where players are, blocks, a guest's word
+  of the mobs its game runs; and everyone is *present* here, which is the
+  list of players), `host` (only the host speaks: who is let in and under
+  which number, the host's mobs, clock and weather, a block put right), `up`
+  (guests speak, only the host hears: what a guest has for the host alone,
+  and what it asks of the host's world) and `to:<clientId>` (the host to one
+  guest: the welcome, answers). There is no line from one guest to another:
+  what one has for one other (a blow on a mob that guest's game runs, a mob
+  handed over) goes on `all` marked `to`, and the rest let it pass
+  (`_sayTo`). `PROTOCOL` is 2 since the mobs were shared out and chests came.
 - **Public games** (`visibility`, chosen in the Players panel before the world
   is opened; `goOnline(world, { visibility })`). Every room has a code; a
   public one is a room whose code is given out. Its host's token may also be
@@ -2944,7 +3155,13 @@ of this.
   made public, advertised by the game it made it for; what it says of itself
   is its host's word, cleaned. `online.rooms()` asks it;
   `refreshOnlineRooms` (`players.js`) draws it, every eight seconds while it
-  is on screen, as text.
+  is on screen, as text. **The service has to be the one in `online/`**: a
+  copy deployed before there were public games hands out no tag and answers
+  `GET /rooms` with a line about itself — so a game opened for *Anyone* was
+  quietly a private one, and the list was always empty. The game now says the
+  service is out of date instead (`OnlineError('outdated')`, from
+  `OnlineAuth.rooms` and `OnlineSession.open`). After any change to
+  `online/auth.js`: `npx wrangler deploy`, in `online/`.
 - **The host's game decides what a server would have**: who is let in (same
   protocol, same content fingerprint, room not full or shut, not sent away)
   and their number; and what a block ends up as. A guest's block further
@@ -2963,8 +3180,9 @@ of this.
 - **Every message is counted** against the Ably plan, once when sent and once
   for each game that hears it, so things are said as seldom as they can be
   (`RATE`): where a player is, five times a second moving and every two
-  seconds standing still, however often `world.js` offers it; mobs three
-  times a second; nothing while the host is alone. A game does not hear its
+  seconds standing still, however often `world.js` offers it; a game's mobs
+  three times a second, and only while another player is near enough to them
+  to see them; nothing while the host is alone. A game does not hear its
   own messages (`echoMessages: false`). Chunks and the list of saved chunks
   go as bytes, in parts under Ably's message size.
 - **A world is in one session.** Opening it online moves the running world
@@ -3042,7 +3260,12 @@ How it is put together:
   `closeWorldSettingsModal()` from the world list. Both go through
   `saveWorldSettingsFor`, which sends only what changed.
 - **The world list** plays a world in one click (Play on its card); the rest of
-  the card opens its options.
+  the card opens its options. **It keeps itself up to date** (`refreshWorldList`,
+  `watchWorldList` in `main.js`): the list is asked for whenever the screen
+  comes up — a `MutationObserver` on the screen's class, so however it comes
+  up — and, while it is up, when the window is come back to and every four
+  seconds. It is drawn again only when what the server says has changed
+  (`_worldListShown`), so nothing flickers and a controller's ring stays put.
 - **The HUD** shows health, hunger and energy as bars with the number beside
   each (`_hudMeter` in `world.js` moves the fill and rewrites the number only
   when it changes).
@@ -3170,6 +3393,98 @@ with the look that goes with each (`profiles`: `[{ name, skin }]`).
   with a capital anyway. X rubs out, Y is a space, Start is Done.
 - A name is up to 16 of letters, digits, spaces and `. _ ' -`.
 
+### The inventory, crafting and chests (`main.js`, `world.js`: *Chests*)
+
+- **A slot takes what it is for** (`_slotTakes`): what is worn goes where it
+  is worn — an item's `slot` (`head`, `chest`, `legs`, `feet`, `quiver`) names
+  the one place it fits, and only armor and quivers are worn at all. (Any item
+  could be put in any of them.) A slot that will not take what is offered
+  shakes (`inv-refuse`).
+- **What is carried is weighed on its way in** (`_canCarry`): each stack in
+  the inventory weighs what one of its items does, a chest's slots weigh
+  nothing, so a new stack is refused when there is no weight left for it.
+  What is in hand when the screen closes goes back into the inventory, or —
+  with no room — onto the ground (`_stowCursor`; `WorldJS_dropItem`, which
+  until now nothing listened for: what did not fit after a craft was gone).
+- **Crafting keeps its place.** The list is drawn again after every craft
+  (what can be made has changed); the recipe that was chosen stays chosen
+  (`_selectedRecipeId`), with the list scrolled where it was. Recipes are
+  told apart by their `id`, not by what they make. **A crafting table makes
+  what hands make too** (`STATION_ALSO`).
+- **A chest holds things**: twenty-seven slots, shown as part of the
+  inventory screen (`openChest`; a slot of type `chest`), so every slot does
+  what the inventory's do; shift-click sends a stack across. (A chest used to
+  open the crafting panel, with nothing in it.) `world.js` keeps them
+  (`window.__wwChests`): by where the chest stands, the owner's game saving
+  them with the world (`containers.json`, `GET` / `PUT
+  /api/worlds/:id/containers`, a second and a half after a change and with
+  every save). Anyone else in the world asks the owner's game for a chest to
+  open it (`chest?`) and is shown nothing until it has answered; a chest that
+  is changed is said whole to everyone (`chest`), so whoever has it open sees
+  it change. Broken, it spills what was in it — in the game of whoever broke
+  it, who asks the owner's game for it first if it is not theirs
+  (`chestTake` / `chestTaken`).
+
+### Export World and Import World (`server.js`: *Export and import*; `main.js`)
+
+A world as one file, `<name>.wwworld`, to keep somewhere or hand to someone.
+
+- **Export** is in a world's options. The game asks where to put the file
+  first (`showSaveFilePicker`, while the click still counts) and then writes
+  `GET /api/worlds/:id/export` into it as it arrives. Where there is no such
+  window to ask with, the file is handed over as a download.
+- **Import World** is on the list. It asks where the world is
+  (`showOpenFilePicker`, else the hidden `<input type="file">`), then **the
+  file is scanned** (`POST /api/worlds/import/scan`, which keeps nothing) and
+  the player is shown what it is — name, mode, seed, saved chunks, size — or
+  told what is wrong with it. Only on Yes is it sent again to
+  `POST /api/worlds/import`.
+- **An import is always a new world**: a new id, and "(Imported)" after its
+  name if that name is taken. It never replaces a world that is here.
+- **The file**: `"WWEX1\n"`, a u32 length, a JSON header
+  (`{ app, version, exported, world, files: [{ path, size }] }`), then every
+  file's bytes in that order — the world's folder as it is on disk. Regions
+  are gzipped already, so it is not compressed again and is streamed out file
+  by file. Only what a world's folder is known to hold goes in or comes out
+  (`WORLD_FILE`: its JSON files, the screenshot, `players/*.json`,
+  `regions/<x>,<z>.wwr`).
+- **Nothing in a file is trusted** (`scanWorldFile`, run by both routes):
+  every path against `WORLD_FILE` (so none can leave the folder), the sizes
+  against the file's length, `world.json` against this build's world format
+  and height, every JSON file parsed, and every region gunzipped and decoded.
+  A file from a newer export version is refused by name. A refused file
+  leaves nothing behind; `world.json` is written last, so a world cut off
+  half way is never listed.
+- The whole file is held in memory on the way in (up to 2 GB, twice: the scan
+  and the import). The routes are the owner's: a guest from the network
+  reaches neither.
+- `openMessage(title, text)` is the confirm popup with one button (OK).
+
+### Release notes (`ReleaseNotes.txt`, `main.js`: *RELEASE NOTES*)
+
+What this version added and fixed is `ReleaseNotes.txt`, beside the game (it
+is packaged with it): a little Markdown — a `# title` line that names the
+version, `### sections`, `- items`, `**bold**`. `GET /api/release-notes`
+hands it over as `{ version, notesVersion, text }`: the version running, and
+the one the file's first line names.
+
+- **Settings → Game → Release Notes** shows it (`showReleaseNotes`,
+  `#ReleaseNotesScreen`). It is drawn as elements (`renderReleaseNotes`), so
+  the file's text is only ever text.
+- **The first time a newer version is played it comes up by itself**, over
+  the title, as *What's New* (`maybeShowWhatsNew`, from `enterGame`). The
+  game keeps the last version played with the player's settings
+  (`lastVersion`; it survives Reset to Defaults) and compares
+  (`versionNewer`: semver precedence, as the launcher's `isNewerVersion`).
+  A player with a name but no version on record came from a version that kept
+  none, and is shown it; someone starting for the first time is not. Going
+  back to an older version shows nothing, and is recorded.
+- **Only notes that are this version's are shown that way**: if the file's
+  first line names another version than `package.json`'s, the pop-up stays
+  away (Settings still shows the file). So a release is: bump the version,
+  and write the notes under the same number.
+- Not for a split screen's further panes or a guest from the network.
+
 ### The Character screen (`src/scripts/Character.js`)
 
 The look that goes with the name: a choice for each of the Quiddle's
@@ -3216,6 +3531,11 @@ opens a window pointed at it.
   which derives its URLs from `location.origin`.
 - **Startup failures surface** via `dialog.showErrorBox` instead of a silent
   `app.quit()`.
+- **No application menu on Windows and Linux** (`Menu.setApplicationMenu(null)`).
+  Its bar was hidden but its shortcuts were live: Ctrl+W closed the window
+  mid-game and Ctrl+R reloaded it. An unpackaged run keeps F12 /
+  Ctrl+Shift+I for the developer tools. In a browser Ctrl+W is the browser's:
+  a page is not asked — which is one reason crouch is not on Ctrl.
 - **It runs on the discrete GPU** of a dual-GPU laptop
   (`force_high_performance_gpu`). Chromium otherwise puts WebGL on the
   integrated GPU even for a `high-performance` context. On an Intel iGPU + RTX
@@ -3269,13 +3589,33 @@ the legacy format, and the wrong-world-height rejection.
 
 Two mechanisms, because no single one works everywhere.
 
-| | Mechanism | Platforms | What the player sees |
+| | Mechanism | Platforms | What Update Now does |
 |---|---|---|---|
-| 1 | `electron-updater` via `latest.yml` | Windows | Downloads silently, installs on quit |
-| 2 | The website's `wonderworld-app.json` | everything else | "Update available — Download" |
+| 1 | `electron-updater` via `latest.yml` | Windows | Shows the download on its way, then installs and restarts by itself (it has been downloading since the app started; left alone it installs on quit) |
+| 2 | The website's `wonderworld-app.json` | everything else | Opens the download page in the browser |
 
 Where 1 is available it is used and 2 never runs. Where it is absent or errors,
 2 is the fallback, so the player still finds out an update exists.
+
+**The player is asked once, before the game starts** (`main.js`: *UPDATES*;
+`#UpdatePrompt`): *Update Now* or *Not Now*. The launcher looks for an update
+as it starts (it used to wait five seconds first), and the game holds its
+loading card for the answer — four seconds at most, and not at all in a
+browser (`updateSettled`, from `enterGame`) — then asks, before the name and
+the title. There used to be a banner over every menu instead, which stayed
+until the update was installed and could not be put away.
+
+- **Not Now is an answer**: the game goes on, and is not asked again that
+  session (Settings → Game → Check for Updates asks again).
+- **But not online.** Games of different versions cannot share a world, so
+  until the update is installed this copy opens no game online and joins none
+  (`updatePending()`, asked in `players.js` by the Players panel's Open
+  online, Join a game → Online, and `joinOnline`). A game already open online
+  stays open. The network and split screen are not affected: there, guests
+  run the host's copy.
+- **An update that comes out while a world is being played** is asked about
+  on the way out of it (`maybeAskUpdate`: only with the title or the list of
+  worlds showing), never over it.
 
 **macOS cannot auto-update while the build is unsigned.** Squirrel.Mac validates
 the signature of the downloaded update against the running app, so enabling it
@@ -3297,8 +3637,10 @@ rather than pulled from electron-updater's transitive `semver`. It implements
 semver precedence, which matters here: every shipped version is a prerelease, and
 a string compare puts `beta.10` *below* `beta.9`. `test/version.test.mjs` covers it.
 
-The banner only appears on the title and pause screens. An update is never worth
-interrupting play for, and it installs on quit regardless.
+The status the renderer reads also says how far a download has got
+(`progress`, 0–100, from the updater's `download-progress`).
+`test/update-ui.test.mjs` drives the question through its answers in the real
+page.
 
 #### Releasing
 
@@ -3352,7 +3694,7 @@ New worlds record `format`, `worldHeight` and `worldMinY` in their metadata.
 
 | Command | What it does |
 |---|---|
-| `npm test` | Chunk storage (filled rows only, edits anywhere, snapshots, the save format), mob navigation and behaviour (paths round pits, walls and water, jumps, no walking off cliffs, fleeing, chasing, fish), mob models (texel layout, geometry facing out and agreeing with the painter) and gaits (feet that are down do not slide), mesher correctness (incl. normals facing out, packed vertices, torch/lantern models inside their voxel, cutout and translucent blocks against each other, translucent faces in back-to-front order from any viewpoint, and the ground-blend codes), smooth-terrain invariants, sky- and block-light rules and seams, what is left out of the draw (lines of sight through real terrain never end on it; the mesher's section order; joined faces against a cell-by-cell flood), long frames in the player's physics (the same landing and damage at 10 to 144 frames a second), day cycle and weather (coverage, rain only under cloud, climate localisation, lightning placement), worker replies vs. the mesher and solver (for both generators), far-terrain tiles (well formed, deterministic, seamless between neighbours, equal to the chunks' surface at step 1 and close at step 4, their trees standing where the generated chunks have them, a changed chunk's surface replacing the generated one), world generation (legacy worlds unchanged, flat worlds of both kinds, determinism, one column equal to the chunk's, no water beside or above air in lake/river/coast/swamp/fjord country across seams, every named block and texture exists, land/sea and biome balance on four seeds, time per chunk), current-world climate, chunk scheduling (every chunk meshed, once, however the player moves; the loaded area is the square), multiplayer on the server's side (sessions: host, journal, who is told what; each player's own state file; everything a guest from the network may and may not reach), chunk-persistence round-trip (the server's, and the game's own `WorldClient` + `ChunkData` against it), semver precedence, and the update status bridge. Fast, no browser. |
+| `npm test` | Chunk storage (filled rows only, edits anywhere, snapshots, the save format), mob navigation and behaviour (paths round pits, walls and water, jumps, no walking off cliffs, fleeing, chasing, fish), mob models (texel layout, geometry facing out and agreeing with the painter) and gaits (feet that are down do not slide), mesher correctness (incl. normals facing out, packed vertices, torch/lantern models inside their voxel, cutout and translucent blocks against each other, translucent faces in back-to-front order from any viewpoint, and the ground-blend codes), smooth-terrain invariants, sky- and block-light rules and seams, what is left out of the draw (lines of sight through real terrain never end on it; the mesher's section order; joined faces against a cell-by-cell flood), long frames in the player's physics (the same landing and damage at 10 to 144 frames a second), day cycle and weather (coverage, rain only under cloud, climate localisation, lightning placement), worker replies vs. the mesher and solver (for both generators), far-terrain tiles (well formed, deterministic, seamless between neighbours, equal to the chunks' surface at step 1 and close at step 4, their trees standing where the generated chunks have them, a changed chunk's surface replacing the generated one), world generation (legacy worlds unchanged, flat worlds of both kinds, determinism, one column equal to the chunk's, no water beside or above air in lake/river/coast/swamp/fjord country across seams, every named block and texture exists, land/sea and biome balance on four seeds, time per chunk), current-world climate, chunk scheduling (every chunk meshed, once, however the player moves; the loaded area is the square), mobs with several players (they appear round each; players together fill a place no faster and no fuller than one; a mob is run by the game of the player nearest it, changes hands without leaving anyone's sight, and takes a blow from whoever strikes it), multiplayer on the server's side (sessions: host, journal, who is told what; each player's own state file; everything a guest from the network may and may not reach), chunk-persistence round-trip (the server's, and the game's own `WorldClient` + `ChunkData` against it), a world exported to a file and imported again byte for byte (and files that are not worlds, are cut short, or reach outside a world's folder refused), semver precedence, and the update status bridge. Fast, no browser. |
 | `npm run bench:load` | Saves 225 chunks of real terrain, then times a cold re-open against generating them fresh. |
 | `npm run bench:pipeline [radius] [seed]` | Times each worker stage (generate, compress, mesh blocky/smooth, section connectivity, light) on real terrain and prints a hash of each stage's output — compare hashes before and after an optimisation to prove it changed nothing else. |
 | `npm run bench:render [scenario …]` | Runs the real game on the real GPU (headless, vsync and frame cap off) and prints fps, frame-time percentiles, main-thread tick time, draw calls, heap and shadow redraws for each graphics preset, a thunderstorm, the Normal preset with twenty mobs round the camera (`mobs`: how many were posed, and how often the whole shadow map was copied for them) and a fly-over that streams terrain in. `preset+key=value` changes one setting (`normal+shadows=off`) to price it, and `fly+key=value` does the same for the fly-over. `BENCH_PROFILE=1` adds a main-thread CPU profile with the longest busy stretches, `BENCH_UNMIN=1` serves unminified Three.js so the profile names its functions, `BENCH_TRACE=1` breaks down every main-thread task over `BENCH_TRACE_MS` (50), and `BENCH_VSYNC=1` keeps 60 Hz pacing — the test for hitches as a player sees them, since with the cap off the main thread stalls waiting for the GPU — and `BENCH_EVAL="window.__wwMemory()"` prints, after each scenario, where the world's memory is (voxels, light volumes, chunk geometry on the GPU) and how many chunk meshes are visible. Laptop results swing with heat and background load: compare runs made in one session, and prefer `BROWSER=<chrome.exe>` — headless Edge can be marked hidden (no frames) when the display is off. |
@@ -3364,7 +3706,7 @@ New worlds record `format`, `worldHeight` and `worldMinY` in their metadata.
 | `npm run blocktex [-- name …]` | Repaints the block textures (`tools/gen_block_textures.py`; Python with Pillow and numpy). See *Block System*. |
 | `npm run shots -- [--seed N] [--only a,b] [--preset normal/far/classic] [--far chunks] [--terrain blocky] [--mobs] [--pitch r] [--cull-check]` | Finds a mountain range, river valley, lake, coast, fjord and a dozen biomes on the seed's geography, flies the real game (GPU) to each, and screenshots it (into the system temp folder unless `--out` says otherwise); reports each view's load time and draw calls. `panorama`, `far-range` and `edge` look into the distance, for Far Terrain (`--far` overrides the preset's: normal 16, far 64, classic off). `--mobs` stands one of every mob in front of each view. `--cull-check` draws each view — and looking down from it, and from inside the caves under it — with and without leaving out what the camera cannot see, and fails if a patch of pixels differs or more pinholes open onto the sky (see *What the camera cannot see*; best with `--preset classic`). |
 | `npm run test:online:e2e` | Two real games in a headless browser, one world, through a stand-in for Ably (`test/fakeAbly.mjs`, in the test's own process; each page reaches it over a WebSocket) and with a made-up key: two of the game's own servers (the host's machine and the guest's), the host's world opened online from the game, joined by the code, and checks that each sees the other, that what the host had built reaches the guest, that building goes both ways, that a block out of reach is put back, and that the guest's place and far-off building are kept on the host's disk. Also that Ably's real SDK loads in the page. `npm test` runs `test/online.test.mjs`: the token service (its signing checked against Ably's own SDK) and rooms of two to four games. `npm run test:online:live` asks the same of Ably itself — three games in a room, and everything a guest's token must be refused — with a key in `WW_ABLY_KEY` (it is not part of `npm test`: it needs the key and the network, and spends a few hundred messages). |
-| `npm run test:smoke` | Boots the server, drives the real game in headless Edge/Chrome into a smooth world (the default) and then one switched to blocky, and fails on any console error, page exception, failed request, or a world loading in the wrong terrain style. Also drives the update banner through its states. Set `BROWSER=<path>` to pick the browser, and `SMOKE_SHOTS=<dir>` to save a screenshot of each world. |
+| `npm run test:smoke` | Boots the server, drives the real game in headless Edge/Chrome into a smooth world (the default) and then one switched to blocky, and fails on any console error, page exception, failed request, or a world loading in the wrong terrain style. Then (`update-ui.test.mjs`) the question about an update through its answers: asked before the title, Not Now, the download page, a download followed to its install, and online play off meanwhile. Then (`releasenotes-ui.test.mjs`, which tells the server to be the version `ReleaseNotes.txt` names: `WW_APP_VERSION`) the release notes: up by themselves for a newer version than was played last, not again, not for an older one, and from Settings. Then (`worldfile-ui.test.mjs`) the list of worlds: a world made behind the page's back turns up by itself, an unchanged list is not drawn again, Export asks where and writes the file, Import World scans a file and adds it only on Yes. Then (`play.test.mjs`, on `playHarness.mjs`) the game played with a mouse and keys in a flat survival world, **with the pointer really locked** — headless Chromium gives pointer lock to a focused page, and keys sent through the debugger take the browser's own path, Esc included: a click takes the pointer; the inventory closed by its button, by Esc and by E goes back to playing and not to the pause menu; dying shows no pause menu and Respawn plays on; armor goes only where it is worn; a recipe stays chosen through crafts and a table makes what hands do; a chest opens as storage, keeps what is put in it on the server and spills it when broken; a pickaxe is no quicker through wood and an axe is; a penned pig cannot be struck through its wall, nor built into. Set `BROWSER=<path>` to pick the browser, and `SMOKE_SHOTS=<dir>` to save a screenshot of each world. |
 
 `test/smooth.test.mjs` checks the smooth-terrain rules directly: every smooth
 triangle stays inside its column and faces out of the solid, and a surface
@@ -3406,8 +3748,9 @@ falls and is removed. Then it plugs in a made-up controller (a stand-in for
 `navigator.getGamepads`) and checks that it plays with no pointer lock, moves
 the player, pauses with the ring on Resume, resumes, and steps back when the
 mouse is used. Test hooks on `window`:
-`__wwSetBlock(x, y, z, name)`, `__wwBlockAt`, `__wwLightAt` (sky and block
-levels), `__wwLook(yaw, pitch)`, `__wwPadLook()` (where the camera points),
+`__wwSetBlock(x, y, z, name)`, `__wwBlockAt`, `__wwBreak(x, y, z)` (break a
+block as the player would, with its drops), `__wwDrops()` (what lies on the
+ground), `__wwLightAt` (sky and block levels), `__wwLook(yaw, pitch)`, `__wwPadLook()` (where the camera points),
 `__wwExposure()`, `__wwMemory()`, `__wwCaveCull(on)` (draw everything, or only
 what the camera could see), `__wwGrabFrame()` (the next frame drawn, as
 ImageData, for comparing frames in the page), `__wwPlayers()` (who is in the
@@ -3435,13 +3778,14 @@ requests. Treat any of those being non-zero as a failure, not as noise.
 | Water | Incremental BFS spread (`WaterSimulator`) | Proper fluid levels / pressure |
 | Structures | Hardcoded builders (trees, plants, boulders, a house), frequencies per biome | GamePack-defined structure blueprints; villages |
 | Mobs | Six kinds with jointed, skinned limbs, variants, and gaits that plant their feet; A* paths, jumps, no walking into pits; passive or defensive; voices | Hands that hold things (a player's too: what they hold is not shown); ears and tails that hang by their weight; a gallop; feet that find the height of the ground on a slope (they are placed on the level the mob stands at); spawning by biome (`spawnRules.biomes` is not enforced yet); herds that keep together; Quiddle villages, trades and talk; mobs that are hostile unprovoked |
-| Playing together | Split screen (2–4, a controller each) and other machines on the network, in one session a world; blocks, players, the host's mobs, clock and weather are shared | Mobs live round the host: a guest far from the host meets none. Dropped items are each game's own (a mob's drops go to whoever killed it; what a player throws down the others do not see). Players cannot hurt each other. Each pane of a split screen is a whole game — its own chunks, meshes and workers — so two cost twice the memory. When the host leaves, the session ends. No chat |
+| Playing together | Split screen (2–4, a controller each) and other machines on the network, in one session a world; blocks, players, chests, the mobs (each run by the game of the player nearest it), and the host's clock and weather are shared | A mob changing hands starts afresh in its new game: what it was doing (fleeing, a fight) is forgotten, and its health is the only thing it brings. Two players moving things in one chest in the same instant can cross: the later word stands. Dropped items are each game's own (a mob's drops go to whoever killed it; what a player throws down the others do not see). Players cannot hurt each other. Each pane of a split screen is a whole game — its own chunks, meshes and workers — so two cost twice the memory. When the host leaves, the session ends. No chat |
+| Dying | The death screen, then Respawn at the world's spawn | "Your things are lying where you fell" is not true yet: armor is dropped, and a `_death_pack_` item in place of everything else, which holds nothing (`EntityManager.spawnDeathPack`) — what was carried is lost |
 | Menu scene | A model baked from real terrain (19 MB, 490 thousand triangles): two views of it and the way between them | Only what those cameras see is in it, so a new view means a new bake, and a screen wider than 16:9 is cropped, not widened. One afternoon's light: no weather, no shadows, still water. The animals graze but do not walk. It does not follow the game: after a change to the generator, the mesher or a block texture it goes on looking as the game did until it is baked again |
-| Sound | Footsteps, blocks, animals, ambience and thunder from files made by a script; rain and wind made as they fall; menu music | The voices are built, not recorded (a cow is a larynx and a mouth in arithmetic): recordings dropped in under the same names replace them. No music in the world itself. Nothing is muffled by walls; other players' footsteps are not heard |
+| Sound | Footsteps, blocks, animals, ambience and rain from files made by a script; wind and thunder made as they happen; menu music | The voices are built, not recorded (a cow is a larynx and a mouth in arithmetic): recordings dropped in under the same names replace them. No music in the world itself. Nothing is muffled by walls; other players' footsteps are not heard |
 | World generation | Continents, mountain belts, rivers and creeks at sea level, elevated lakes, fjords, cliffs, mesas, 28 biomes chosen after the terrain, six kinds of cave | Waterfalls (rivers all run at sea level, so none are needed yet — a spring feature would add them); grass tufts and flowers (needs a cross-shaped model that sits on the smooth surface); per-biome grass tint; mobs spawning by biome (entity `spawnRules.biomes` is not enforced yet) |
 | Far terrain | The geography as a heightfield, with trees and buildings as boxes in the two nearest levels (thinned in woods) and the surfaces of chunks the player has changed; no caves or overhangs; a river narrower than a cell shows only where a sample falls in it; a new level of detail pops in when tiles swap, and trees become a tinted canopy at the third level | Blend (geomorph) between levels; a changed chunk shows only its highest blocks (a bridge is a wall down to the ground) |
 | Underground geometry | Every cave wall is meshed, and the sections of a chunk the camera could not see are left out of the draw (*What the camera cannot see*): about half the triangles from the surface | A chunk draws one range, from the lowest section it needs to the highest: one visible cave deep down brings everything above it with it. Ranges of sections a chunk (multi-draw) would leave more out. The pinholes in the mesh, which are there with or without this |
-| Online | A world opened online from the Players panel, joined by a code, through Ably: the host's game still runs the world and settles what a server would have. Works against Ably itself (`npm run test:online:live`, with a key); **the token service is not deployed**, so it only runs where `WW_ABLY_KEY` is set (`online/README.md`) | Deploy the token service and put its address in `data/online.json`. Compare the message counts with Ably's statistics. The free plan's six million messages a month is tens of hours of four-player play in total (cost grows with the square of the players): lower the rates, or pay, before shipping to many. No server checks movement or inventories: a changed game can fly or place what it does not have, within reach. A removed player is silenced but could go on listening until the room is opened again. Names are display names. A guest is sent every chunk the host has saved near them, changed or not. Far terrain does not show a guest what the host has built. Opening or closing a world online sends away whoever was in it by split screen or network, to join again. Public games are unmoderated: names are restricted to plain characters, but nothing filters words and nothing reports a room. No chat |
+| Online | A world opened online from the Players panel, joined by a code, through Ably: the host's game still runs the world and settles what a server would have. Works against Ably itself (`npm run test:online:live`, with a key). `data/online.json` names a deployed token service; **on 2026-10-11 the copy deployed there was older than `online/auth.js`** — it had no `/rooms` and gave out no listing tag, which is why no public game was ever listed | **Deploy `online/` again** (`npx wrangler deploy`) for public games; the game says "out of date" until then. Every game now tells the others of its mobs when they are near, where only the host did: with four players together that is about as many mob messages again for each player past the first (the measured table in `online/README.md` is of the host alone telling). Compare the message counts with Ably's statistics. The free plan's six million messages a month is tens of hours of four-player play in total (cost grows with the square of the players): lower the rates, or pay, before shipping to many. No server checks movement or inventories: a changed game can fly or place what it does not have, within reach. A removed player is silenced but could go on listening until the room is opened again. Names are display names. A guest is sent every chunk the host has saved near them, changed or not. Far terrain does not show a guest what the host has built. Opening or closing a world online sends away whoever was in it by split screen or network, to join again. Public games are unmoderated: names are restricted to plain characters, but nothing filters words and nothing reports a room. No chat |
 | See-through blocks | Leaves and glass are cutouts in the opaque pass; water and ice are blended, ordered exactly along each axis and chunk by chunk | Between axes the order is fixed (horizontal faces first), so the side of an ice block standing in water can blend in the wrong order; glass is clear with a frame, not tinted; nothing but terrain is veiled by cloud (mobs, items, rain) |
 | Smooth terrain | Diagonal slopes of one block or half a block a block are planes; a lone block is a low mound; ground of different kinds blends along a ragged line, and a lone block keeps its face; shading is smooth | A gentle slope is still terraces joined by one-block ramps (leaning every terrace was tried and taken out: it changed the look of all terrain); diagonal steps three or more wide still zigzag; a step of two blocks right beside low ground is a wall, so ground steeper than the diagonal breaks into teeth; a slope between an axis and a diagonal is close to a plane, not one |
 | Controller | Play and every menu, analog movement, no pointer lock needed; names typed on a keypad | No rumble; no remapping; the other text boxes (a world's name, the creative search, a network address) still need a keyboard; sensitivity is shared with the mouse |
@@ -3451,4 +3795,5 @@ requests. Treat any of those being non-zero as a failure, not as noise.
 | Memory | Chunk geometry is the largest holder: ~330 KB a chunk on the GPU, 107 MB at render distance 8 and 275 MB on Pro (`__wwMemory()`), then voxels (55 MB on Pro) and light volumes | Quantise positions (they are floats, half of each vertex); fewer cave triangles (below) |
 | Smooth meshing | 7–8 ms a chunk, nearly all of it the smooth-shape pass now that the greedy sweep reads only the cells with faces; each voxel is described once (`prepare` only looks at its corners) | `topCrossNear` reads five levels for every slope; inline `SmoothField.get` for in-chunk reads |
 | Chunk transfer | Palette snapshot, copied per job | `SharedArrayBuffer` voxel store (needs COOP/COEP headers on the server) |
+| World files | Export and Import World: one `.wwworld` file, scanned before it is taken in | An import is read into memory whole, twice (scan, then import): a streamed scan would lift the 2 GB limit. A controller cannot open the "where is it?" window (a browser wants a click or a key for that). A world exported while it is being played holds what had been saved so far. The desktop app's own save window has not been tried by hand |
 | Code signing | Unsigned — SmartScreen warns | OV/EV certificate or Azure Trusted Signing |

@@ -18,6 +18,7 @@ import { PlayerModel } from './PlayerModel.js';
 
 const ON_GROUND = 1, IN_WATER = 2, DEAD = 4, HIDDEN = 8;
 const SNAP = 6;              // blocks: a move longer than this is not walked
+const STRIDE_WALK = 2.1, STRIDE_RUN = 2.9;      // blocks between footfalls (GameSounds.js)
 const r2 = (v) => Math.round(v * 100) / 100;
 
 /** What this game tells the others about its player, as an array. */
@@ -59,6 +60,8 @@ export class RemotePlayers {
         this.scene = scene;
         this.models = models;
         this.map = new Map();        // id → { id, name, model, tag, x, y, z, yaw, pitch, speed, flags, hurt, swings, at }
+        /** A foot of theirs comes down: (player, run 0 … 1, landing). world.js makes the sound of it. */
+        this.onStep = null;
     }
 
     get size() { return this.map.size; }
@@ -71,7 +74,7 @@ export class RemotePlayers {
         const tag = nameTag(p.name);
         tag.visible = false;
         this.scene.add(tag);
-        const e = { id: p.id, name: p.name, model, tag, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, speed: 0, flags: 0, hurt: 0, swings: -1, at: null };
+        const e = { id: p.id, name: p.name, model, tag, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, speed: 0, flags: 0, hurt: 0, swings: -1, at: null, walked: 0, wasGround: true };
         this.map.set(p.id, e);
         if (p.state) this.state(p.id, p.state);
         return e;
@@ -127,8 +130,18 @@ export class RemotePlayers {
         const k = 1 - Math.exp(-dt * 16);
         for (const e of this.map.values()) {
             if (!e.at) continue;
-            e.x += (e.at.x - e.x) * k; e.y += (e.at.y - e.y) * k; e.z += (e.at.z - e.z) * k;
+            const mx = (e.at.x - e.x) * k, mz = (e.at.z - e.z) * k;
+            e.x += mx; e.y += (e.at.y - e.y) * k; e.z += mz;
             const hidden = !!(e.flags & HIDDEN);
+            // Their footsteps: one for every stride of ground they cover, and one for landing.
+            const ground = (e.flags & (ON_GROUND | IN_WATER | DEAD | HIDDEN)) === ON_GROUND;
+            if (ground) {
+                const run = Math.min(1, Math.max(0, (e.speed - 4.4) / 2.5));
+                if (!e.wasGround) { e.walked = 0; this.onStep?.(e, run, true); }
+                e.walked += Math.hypot(mx, mz);
+                if (e.walked >= STRIDE_WALK + (STRIDE_RUN - STRIDE_WALK) * run) { e.walked = 0; this.onStep?.(e, run, false); }
+            }
+            e.wasGround = ground || !!(e.flags & (IN_WATER | DEAD | HIDDEN));
             e.model.show(!hidden, !hidden && shadows);
             e.tag.visible = !hidden;
             e.model.update(dt, {

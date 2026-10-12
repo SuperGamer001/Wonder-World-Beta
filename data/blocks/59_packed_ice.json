@@ -8,7 +8,9 @@
     0.87
   ],
   "hardness": 0.5,
+  "tool": "pickaxe",
   "drops": [],
   "texture": "Packed_Ice.png",
-  "blend": 78
+  "blend": 78,
+  "slippery": 0.9
 }

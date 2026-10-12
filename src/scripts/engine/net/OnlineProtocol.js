@@ -8,11 +8,13 @@
  * holds the two equal):
  *
  *   all    everyone speaks and hears: where each player is, the blocks they
- *          change. Everyone is "present" here, which is the list of players.
+ *          change, a guest's word of the mobs its game runs. Everyone is
+ *          "present" here, which is the list of players.
  *   host   only the host speaks: who is in the room and under which number,
- *          the mobs, the clock and weather, a block put right, goodbye.
- *   up     guests speak, only the host hears: a blow on a mob, and what a
- *          guest asks of the host's world (its chunks, its own saved place).
+ *          the host's mobs, the clock and weather, a block put right, goodbye.
+ *   up     guests speak, only the host hears: what a guest has for the host
+ *          alone (a blow on a mob the host's game runs, a chest to open), and
+ *          what it asks of the host's world (its chunks, its own saved place).
  *   to:<clientId>   the host speaks, one guest hears: the welcome, answers.
  *
  * And one channel for all rooms: `ww:lobby`, where the host of a public room
@@ -21,11 +23,17 @@
  *
  * PROTOCOL goes up whenever a message changes shape or meaning; a host turns
  * away a game that speaks another.
+ *   2: every game runs the mobs nearest its own player and tells the others
+ *      (a guest's word of its mobs goes on `all`), a mob is handed from game
+ *      to game, and a chest's contents are shared — where 1 had the host run
+ *      every mob and nobody share a chest. A message one player has for one
+ *      other, with no line between them (guest to guest), goes on `all`
+ *      marked `to`.
  *
  * No Three.js, no DOM: it runs in a test.
  */
 
-export const PROTOCOL = 1;
+export const PROTOCOL = 2;
 
 /** The channels of the room with this code. */
 export function channels(code) {

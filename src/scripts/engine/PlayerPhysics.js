@@ -45,6 +45,14 @@ const ACCEL_STOP         = 12;     // slowing to a halt on solid ground
 // a standing jump would land before you reached walking speed.
 const ACCEL_AIR          =  8;
 const ACCEL_WATER        =  6;     // swimming feels heavier than walking
+// Crouching (the sneak key, on the ground): slow, and never off an edge —
+// a step that would leave nothing under the feet within CROUCH_DROP is not
+// taken, so the player can lean out over a drop to build. The drop is what a
+// slope may fall away by in one step in a smooth world (SNAP_DOWN), and next
+// to nothing in a blocky one, where the ground is level or it is an edge.
+const CROUCH_SPEED       =  1.8;   // m/s
+const CROUCH_DROP_SMOOTH =  0.65;  // blocks
+const CROUCH_DROP_BLOCKY =  0.1;
 const FLY_SPEED_CREATIVE = 16;     // m/s (creative fly)
 const FLY_SPEED_SPECTATOR= 12;     // m/s (spectator)
 
@@ -87,6 +95,26 @@ const STEP_ITERS  = 10;    // binary-search steps — resolves to ~0.0006 blocks
 const MAX_MOVE     = 0.45;   // blocks a step; the player is 0.6 wide
 const MAX_SUBSTEPS = 8;
 
+// ── Contact ───────────────────────────────────────────────────────────────────
+// A move that would end inside something used to be refused whole, so the
+// player stopped wherever the frame before had left them: up to a frame's
+// travel short of a wall, and — falling — up to a third of a block above the
+// ground, where they "landed", hung for a frame, and fell the rest. Against a
+// wall the speed was zeroed and built up again over the gap, a little less
+// each time: a shudder. Now a blocked move goes as far as it can
+// (`_moveAxis`: the last clear place along it, found by halving), so the
+// player comes to rest touching what stopped them.
+const CONTACT_ITERS = 12;    // of at most MAX_MOVE: to within 0.0001 of a block
+
+// ── Jumping ───────────────────────────────────────────────────────────────────
+// Two small allowances, each a tenth of a second, that every platform game
+// makes because without them a jump pressed at the right moment as the player
+// sees it is dropped: the ground still counts just after it is walked off
+// (COYOTE), and a jump asked for just before landing is made on landing
+// (JUMP_BUFFER). Holding the key still jumps again on every landing.
+const COYOTE      = 0.1;     // seconds
+const JUMP_BUFFER = 0.1;     // seconds
+
 /**
  * Frame-rate independent exponential approach factor.
  * Returns the fraction of the remaining gap to close this frame for a given
@@ -105,10 +133,18 @@ export class PlayerPhysics {
         this.onGround = false;
         this.inWater  = false;
         this.flying   = false;   // creative fly mode toggle
+        this.crouching = false;  // the sneak key is held with feet on the ground
 
         this._prevFallVel  = 0;  // y-vel just before landing
         this._lastJumpTime = 0;  // ms — double-tap detection
         this._jumpWasDown  = false;
+        this._sinceGround  = 1;  // seconds since there was ground underfoot (COYOTE)
+        this._jumpWant     = 0;  // seconds a jump that was asked for is still wanted (JUMP_BUFFER)
+
+        // How far the last update() lifted (+) or dropped (−) the player in no
+        // time at all — a step up a slope's edge, a snap down onto one. The
+        // caller eases the camera over it instead of jumping with the feet.
+        this.stepped = 0;
 
         // SmoothTerrain collider in smooth worlds; null keeps blocky collision.
         this.smooth = null;
@@ -117,8 +153,8 @@ export class PlayerPhysics {
         //   external — velocity the surroundings push the player toward (a
         //              tornado's pull, a gale); x/z join the walking target,
         //              y is an upward acceleration (m/s²)
-        //   slip     — 0..1, how icy the ground underfoot is (freezing rain);
-        //              scales down grip, so the player slides
+        //   slip     — 0..1, how icy the ground underfoot is (an ice block, or
+        //              freezing rain); scales down grip, so the player slides
         this.external = { x: 0, y: 0, z: 0 };
         this.slip     = 0;
     }
@@ -138,6 +174,7 @@ export class PlayerPhysics {
         const isSpectator = gameMode === 'SPECTATOR';
         const isCreative  = gameMode === 'CREATIVE';
         const isSurvival  = gameMode === 'SURVIVAL';
+        this.stepped = 0;
 
         // Creative double-tap jump → toggle fly
         if (isCreative) this._checkDoubleTap(input);
@@ -201,9 +238,9 @@ export class PlayerPhysics {
         if (noClip) {
             pos.x = nx; pos.y = ny; pos.z = nz;
         } else {
-            if (this._canMoveTo(nx, pos.y, pos.z)) pos.x = nx;
-            if (this._canMoveTo(pos.x, ny, pos.z)) pos.y = ny;
-            if (this._canMoveTo(pos.x, pos.y, nz)) pos.z = nz;
+            this._moveAxis(pos, 'x', nx);
+            this._moveAxis(pos, 'y', ny);
+            this._moveAxis(pos, 'z', nz);
         }
 
         this.vel = { x: dx * speed, y: dy * speed, z: dz * speed };
@@ -223,7 +260,9 @@ export class PlayerPhysics {
         // speed was unreachable there.
         const canSprint = input.sprint
             && (!isSurvival || ((stats.hunger ?? 100) > 15 && (stats.energy ?? 100) > 10));
-        const speed = canSprint ? SPRINT_SPEED : WALK_SPEED;
+        const crouch = !!input.sneak && this.onGround && !this.inWater;
+        this.crouching = crouch;
+        const speed = crouch ? CROUCH_SPEED : canSprint ? SPRINT_SPEED : WALK_SPEED;
 
         let dx = 0, dz = 0;
         if (input.forward)  { dx += fwd.x; dz += fwd.z; }
@@ -269,7 +308,13 @@ export class PlayerPhysics {
                 this.vel.y = Math.min(this.vel.y + WATER_SWIM_ACCEL * dt, WATER_SWIM_SPEED);
             }
         } else {
-            if (input.jump && this.onGround) this.vel.y = JUMP_VEL;
+            this._sinceGround = this.onGround ? 0 : this._sinceGround + dt;
+            this._jumpWant = input.jump ? JUMP_BUFFER : Math.max(0, this._jumpWant - dt);
+            if (this._jumpWant > 0 && this.vel.y <= 0 && (this.onGround || this._sinceGround < COYOTE)) {
+                this.vel.y = JUMP_VEL;
+                this._jumpWant = 0;
+                this._sinceGround = COYOTE;     // one jump for one piece of ground
+            }
             // Gravity applies unconditionally; the collision test below is what
             // re-establishes onGround each frame.
             //
@@ -289,15 +334,20 @@ export class PlayerPhysics {
         // Stepping is for walking on slopes, so it needs footing (or water).
         const canStep = this.smooth !== null && (prevOnGround || this.inWater);
 
+        // Crouching, a step that would leave the ground behind is not taken.
+        const drop = crouch && prevOnGround && this.vel.y <= 0 ? (this.smooth !== null ? CROUCH_DROP_SMOOTH : CROUCH_DROP_BLOCKY) : 0;
+
         // Move X
         const nx = pos.x + this.vel.x * dt;
-        if (this._canMoveTo(nx, pos.y, pos.z))              pos.x = nx;
-        else if (!(canStep && this._stepUp(pos, nx, pos.z))) this.vel.x = 0;
+        if (drop > 0 && this._canMoveTo(nx, pos.y, pos.z) && this._canMoveTo(nx, pos.y - drop, pos.z)) this.vel.x = 0;
+        else if (this._canMoveTo(nx, pos.y, pos.z))         pos.x = nx;
+        else if (!(canStep && this._stepUp(pos, nx, pos.z))) { this._moveAxis(pos, 'x', nx); this.vel.x = 0; }
 
         // Move Z
         const nz = pos.z + this.vel.z * dt;
-        if (this._canMoveTo(pos.x, pos.y, nz))              pos.z = nz;
-        else if (!(canStep && this._stepUp(pos, pos.x, nz))) this.vel.z = 0;
+        if (drop > 0 && this._canMoveTo(pos.x, pos.y, nz) && this._canMoveTo(pos.x, pos.y - drop, nz)) this.vel.z = 0;
+        else if (this._canMoveTo(pos.x, pos.y, nz))         pos.z = nz;
+        else if (!(canStep && this._stepUp(pos, pos.x, nz))) { this._moveAxis(pos, 'z', nz); this.vel.z = 0; }
 
         if (this.smooth !== null && prevOnGround && !this.inWater && this.vel.y <= 0) {
             this._snapDown(pos);
@@ -305,10 +355,10 @@ export class PlayerPhysics {
 
         // Move Y
         const ny = pos.y + this.vel.y * dt;
-        if (this._canMoveTo(pos.x, ny, pos.z)) {
-            pos.y = ny;
+        if (this._moveAxis(pos, 'y', ny)) {
             this.onGround = false;
         } else {
+            // Down onto the ground, or up against a ceiling: as far as it goes.
             this.onGround = this.vel.y < 0;
             this.vel.y    = 0;
         }
@@ -349,6 +399,26 @@ export class PlayerPhysics {
     _canMoveTo(x, y, z) { return !this._collidesAt(x, y, z); }
 
     /**
+     * Move along one axis to `to`, or — if something is in the way — as far
+     * toward it as is clear (see *Contact*). Returns whether it got there.
+     */
+    _moveAxis(pos, axis, to) {
+        const from = pos[axis];
+        const clear = (v) => axis === 'x' ? this._canMoveTo(v, pos.y, pos.z)
+                           : axis === 'y' ? this._canMoveTo(pos.x, v, pos.z)
+                           : this._canMoveTo(pos.x, pos.y, v);
+        if (clear(to)) { pos[axis] = to; return true; }
+        if (to === from || !clear(from)) return false;      // already inside something: stay put
+        let lo = from, hi = to;                              // lo clear, hi blocked
+        for (let i = 0; i < CONTACT_ITERS; i++) {
+            const mid = (lo + hi) * 0.5;
+            if (clear(mid)) lo = mid; else hi = mid;
+        }
+        pos[axis] = lo;
+        return false;
+    }
+
+    /**
      * Smooth worlds: try to climb onto what blocked a horizontal move. Succeeds
      * when the destination is clear at most STEP_HEIGHT higher (with headroom
      * both here and there), then settles at the lowest clear height.
@@ -361,6 +431,7 @@ export class PlayerPhysics {
             const mid = (lo + hi) * 0.5;
             if (this._canMoveTo(nx, mid, nz)) hi = mid; else lo = mid;
         }
+        this.stepped += hi - pos.y;
         pos.x = nx; pos.y = hi; pos.z = nz;
         return true;
     }
@@ -379,6 +450,7 @@ export class PlayerPhysics {
             const mid = (lo + hi) * 0.5;
             if (this._canMoveTo(pos.x, mid, pos.z)) hi = mid; else lo = mid;
         }
+        this.stepped += hi - pos.y;
         pos.y = hi;
     }
 

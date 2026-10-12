@@ -8,6 +8,7 @@
     0.43
   ],
   "hardness": 0.6,
+  "tool": "shovel",
   "drops": [
     {
       "itemId": "gravel",

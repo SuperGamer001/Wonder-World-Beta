@@ -1,13 +1,14 @@
 /**
  * Sound — everything the game plays that is a recording: footsteps, blocks,
- * animals, ambience, thunder and the music. (Rain and wind are made as they
- * are needed, in WeatherAudio.js, and come out through this module's mixer.)
+ * animals, ambience, the loops of rain and the music. (Wind and thunder are
+ * made as they are needed, in WeatherAudio.js, which also plays the rain; all
+ * of it comes out through this module's mixer.)
  *
  * **The files** are in data/sounds/, found through the data manifest:
  *
  *   blocks/    <material>_step_1.ogg, _hit_, _break_, _place_, water_splash_ …
  *   entities/  cow_idle_1.ogg, cow_hurt_1.ogg, player_hurt_1.ogg, eat_1.ogg …
- *   ambiant/   birds.ogg, crickets.ogg, cave.ogg, water.ogg, thunder_close_1.ogg …
+ *   ambiant/   birds.ogg, crickets.ogg, cave.ogg, water.ogg, rain_light.ogg …
  *   ui/        click.ogg
  *   music/     Adventure Awaits.m4a
  *
@@ -58,7 +59,9 @@ class SoundEngine {
         this._muffled = false;
         this._music = null;          // { el, name, fade, target, timer }
         this._musicWant = null;
-        this._ready = this._loadManifest();
+        /** True once the list of files is in: only then does "there is no such sound" mean it. */
+        this.loaded = false;
+        this._ready = this._loadManifest().then(() => { this.loaded = true; });
         // The first click or key lets sound through.
         const wake = () => this._wake();
         for (const ev of ['pointerdown', 'keydown', 'touchstart']) window.addEventListener(ev, wake, { capture: true, passive: true });
@@ -90,6 +93,15 @@ class SoundEngine {
 
     has(name) { return this._takes.has(name); }
 
+    /**
+     * A sound's first take, decoded, for a module that plays it its own way
+     * (WeatherAudio's rain); null while it is on its way, and it is asked for then.
+     */
+    buffer(name) {
+        const list = this._takes.get(name);
+        return list && this._context() ? this._buffer(list[0]) : null;
+    }
+
     /** The decoded take, or null while it is on its way (it is asked for then). */
     _buffer(url) {
         const got = this._buffers.get(url);
@@ -104,7 +116,7 @@ class SoundEngine {
 
     /**
      * Fetch and decode the short sounds ahead of need, so the first footstep is
-     * not missed. Ambience and thunder are long (tens of megabytes decoded) and
+     * not missed. Ambience and rain are long (tens of megabytes decoded) and
      * are left until they are wanted; the music is never decoded whole.
      */
     async preload() {

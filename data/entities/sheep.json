@@ -31,5 +31,7 @@
     "maxY": 200,
     "minGroupSize": 2,
     "maxGroupSize": 5
-  }
+  },
+  "footstep": "trotter",
+  "length": 1.5
 }

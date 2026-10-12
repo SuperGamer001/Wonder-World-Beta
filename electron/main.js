@@ -13,7 +13,7 @@
  * No Node integration is exposed to the page — the renderer is the plain web
  * game and talks to the server over HTTP/WebSocket like in a browser.
  */
-import { app, BrowserWindow, shell, dialog, screen } from 'electron';
+import { app, BrowserWindow, shell, dialog, screen, Menu } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -111,9 +111,10 @@ const UPDATE_MANIFEST_URL =
 const UPDATE_LIBRARY_URL =
     'https://alex.planetkodiak.com/Interlinked-Creations/Library/';
 
-// Delay before the first check. The window is already up by then, so this never
-// competes with gamepack loading or the first world generation for bandwidth.
-const UPDATE_CHECK_DELAY_MS   = 5000;
+// The first check is made as the app starts, with no wait: the game asks the
+// player about an update before it shows its menu (src/main.js: UPDATES), and
+// holds its loading card a few seconds for the answer. (It used to wait five
+// seconds first, when all there was to show for an update was a banner.)
 // A hung or slow host must cost the player nothing.
 const UPDATE_FETCH_TIMEOUT_MS = 8000;
 
@@ -236,15 +237,20 @@ async function runUpdateCheck(setUpdateState) {
                 autoUpdater.logger = null;
 
                 autoUpdater.on('update-available', (info) => {
-                    setUpdateState({ available: true, canAutoInstall: true, newVersion: info?.version });
+                    // Known now, though the download has only begun: the game is waiting to ask the player.
+                    setUpdateState({ checking: false, available: true, canAutoInstall: true, downloaded: false, progress: 0,
+                                     newVersion: info?.version, lastChecked: Date.now() });
                     console.log('[updater] downloading', info?.version);
+                });
+                autoUpdater.on('download-progress', (p) => {
+                    setUpdateState({ progress: Math.round(p?.percent ?? 0) });
                 });
                 autoUpdater.on('update-not-available', () => {
                     setUpdateState({ checking: false, available: false, lastChecked: Date.now() });
                 });
                 autoUpdater.on('update-downloaded', (info) => {
                     setUpdateState({
-                        checking: false, available: true, canAutoInstall: true,
+                        checking: false, available: true, canAutoInstall: true, progress: 100,
                         downloaded: true, newVersion: info?.version, lastChecked: Date.now(),
                     });
                     console.log('[updater] update ready:', info?.version);
@@ -288,11 +294,10 @@ async function setupUpdates(server) {
         onInstall: () => { if (_autoUpdater) _autoUpdater.quitAndInstall(false, true); },
     });
 
-    // Deferred so the first check never competes with startup.
-    setTimeout(() => {
-        runUpdateCheck(setUpdateState).catch(err =>
-            console.warn('[updater] initial check failed:', err?.message ?? err));
-    }, UPDATE_CHECK_DELAY_MS);
+    // At once (it says "checking" before this returns): the page asks what was
+    // found as soon as it has loaded.
+    runUpdateCheck(setUpdateState).catch(err =>
+        console.warn('[updater] initial check failed:', err?.message ?? err));
 }
 
 // ── Window state persistence ──────────────────────────────────────────────────
@@ -357,6 +362,12 @@ function createWindow() {
 
     if (state.maximized) mainWindow.maximize();
 
+    // No application menu on Windows and Linux. Its bar was hidden already, but
+    // its shortcuts were not: Ctrl+W closed the window — in the middle of a
+    // game, for anyone holding Ctrl and walking forward — and Ctrl+R reloaded
+    // it. (macOS keeps its menu: an app without one cannot be quit from the bar.)
+    if (process.platform !== 'darwin') Menu.setApplicationMenu(null);
+
     mainWindow.once('ready-to-show', () => mainWindow.show());
     mainWindow.loadURL(serverOrigin);
 
@@ -364,6 +375,12 @@ function createWindow() {
     // key, so only consume it when actually fullscreen.
     mainWindow.webContents.on('before-input-event', (event, input) => {
         if (input.type !== 'keyDown') return;
+        // The developer tools went with the menu; an unpackaged run keeps a way in.
+        if (!app.isPackaged && (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i'))) {
+            event.preventDefault();
+            mainWindow.webContents.toggleDevTools();
+            return;
+        }
         if (input.key === 'F11') {
             event.preventDefault();
             mainWindow.setFullScreen(!mainWindow.isFullScreen());

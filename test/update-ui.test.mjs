@@ -1,6 +1,7 @@
-// Drives the real renderer in headless Chromium: stubs update states into the
-// server and checks the banner, its wording, when it hides, and the Settings
-// check button. Covers the UI paths the main smoke test never reaches.
+// Drives the real page in headless Chromium: stubs update states into the
+// server and checks the question the game asks about an update — when it is
+// asked, what each answer does, that online play waits for the update — and
+// the Settings check button. Covers the UI paths the main smoke test never reaches.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -84,8 +85,11 @@ for (let i = 0; i < 60; i++) {
 
 let fails = 0;
 const ck = (n, ok, d = '') => { if (!ok) fails++; console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}${d ? '  — ' + d : ''}`); };
-const bannerVisible = () => ev(`!document.getElementById('updateBanner').classList.contains('hidden')`);
-const bannerText    = () => ev(`document.getElementById('updateBanner').textContent`);
+const promptUp   = () => ev(`!document.getElementById('UpdatePrompt').classList.contains('hidden')`);
+const promptText = () => ev(`document.getElementById('UpdatePrompt').textContent.replace(/\\s+/g, ' ').trim()`);
+const titleUp    = () => ev(`!document.getElementById('TitleScreen').classList.contains('hidden')`);
+const press      = (id) => ev(`document.getElementById('${id}').click(); 1`);
+const until      = async (test, ms = 6000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; ) { if (await test().catch(() => false)) return true; await sleep(150); } return false; };
 
 const pkgVersion = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
 
@@ -94,36 +98,68 @@ ck('version label shows the real version',
    (await ev(`document.getElementById('versionText')?.textContent`)) === `Wonder World Beta v${pkgVersion}`,
    await ev(`document.getElementById('versionText')?.textContent`));
 
-ck('no banner when up to date', (await bannerVisible()) === false);
+ck('nothing is asked when the game is up to date', (await promptUp()) === false && (await ev(`updatePending()`)) === false);
 
-// Update available but not auto-installable — the macOS / unsigned path.
+// What the launcher does, stood in for: it can check, and it can install.
+let installs = 0;
+server.setUpdateHandlers({ onCheck: async () => {}, onInstall: () => { installs++; } });
+
+// An update that came out while the game was open, where the app cannot install it — the macOS / unsigned path.
 server.setUpdateState({
     supported: true, available: true, canAutoInstall: false, downloaded: false,
     newVersion: '1.0.0-beta.2', downloadUrl: 'https://example.invalid/dl',
 });
-await ev(`fetchUpdateStatus()`); await sleep(300);
-ck('banner appears when an update is available', (await bannerVisible()) === true);
-let txt = await bannerText();
-ck('banner offers a manual download', txt.includes('1.0.0-beta.2') && txt.includes('Download'), txt);
+await ev(`fetchUpdateStatus().then(maybeAskUpdate)`); await sleep(300);
+ck('the player is asked when an update is out', (await promptUp()) === true);
+let txt = await promptText();
+ck('… which version, and whether to update now', txt.includes('1.0.0-beta.2') && txt.includes('Update Now') && txt.includes('Not Now'), txt);
+ck('… and that online play waits for it', /online/i.test(txt), txt);
 
-// Downloaded and installable — the Windows path.
-server.setUpdateState({ canAutoInstall: true, downloaded: true });
-await ev(`fetchUpdateStatus()`); await sleep(300);
-txt = await bannerText();
-ck('banner offers restart once downloaded', txt.includes('Restart') && txt.includes('ready'), txt);
+// Not now: the question goes away, and stays away.
+await press('updateLaterBtn'); await sleep(200);
+ck('Not Now puts the question away', (await promptUp()) === false && (await titleUp()) === true);
+await ev(`fetchUpdateStatus().then(maybeAskUpdate)`); await sleep(300);
+ck('… and it is not asked again', (await promptUp()) === false);
 
-// Must never cover live gameplay.
-await ev(`gameStarted = true; paused = false; _menuOpen = false; renderUpdateBanner(); 1`);
-ck('banner hidden during active play', (await bannerVisible()) === false);
-await ev(`paused = true; renderUpdateBanner(); 1`);
-ck('banner returns on the pause screen', (await bannerVisible()) === true);
-await ev(`gameStarted = false; paused = false; renderUpdateBanner(); 1`);
+// Until it is installed, there is no playing online.
+ck('online play is off until the update is installed', (await ev(`updatePending()`)) === true);
+await ev(`openLanJoin(); 1`); await sleep(200);
+await ev(`joinOnline('ABCD-EFGH')`); await sleep(200);
+const refused = await ev(`document.getElementById('lanJoinNote').textContent`);
+ck('… a game cannot be joined with its code', /update/i.test(refused), refused);
+await ev(`closeLanJoin(); 1`);
 
-// Settings → Check for Updates.
+// Settings → Check for Updates asks again.
 await ev(`checkForUpdatesNow()`); await sleep(600);
 const st = await ev(`document.getElementById('updateCheckStatus')?.textContent`);
-ck('settings reports a check result', typeof st === 'string' && st.length > 0, st);
+ck('settings reports a check result', st === 'Version 1.0.0-beta.2 available', st);
 ck('check button label restored', (await ev(`document.getElementById('settingCheckUpdates')?.textContent`)) === 'Check for Updates');
+ck('… and asks the question again', (await promptUp()) === true);
+// Update Now, where the app cannot install it: the download page, and a way to carry on.
+await ev(`window.open = (url) => { window.__opened = url; }; 1`);
+await press('updateNowBtn'); await sleep(200);
+txt = await promptText();
+ck('Update Now opens the download page', (await ev(`window.__opened`)) === 'https://example.invalid/dl' && txt.includes('download page'), txt);
+await press('updateLaterBtn'); await sleep(200);
+ck('… and the game can be carried on with', (await promptUp()) === false);
+
+// Where the app can install it — the Windows path: downloading, then installed by itself.
+server.setUpdateState({ canAutoInstall: true, downloaded: false, progress: 40 });
+await ev(`checkForUpdatesNow()`); await sleep(500);
+await press('updateNowBtn'); await sleep(900);
+txt = await promptText();
+ck('Update Now shows the download on its way', txt.includes('Downloading') && txt.includes('40%') && installs === 0, txt);
+server.setUpdateState({ downloaded: true, progress: 100 });
+ck('… and installs it the moment it is here', await until(async () => installs === 1, 5000), `installs=${installs}`);
+txt = await promptText();
+ck('… saying so', txt.includes('restart'), txt);
+
+// At startup the question comes first: before the title, with the game waiting behind it.
+server.setUpdateState({ canAutoInstall: false, downloaded: false, progress: 0 });
+await send('Page.navigate', { url: `${base}/game.html` });
+ck('started with an update out, the game asks before anything else', await until(promptUp, 30000) && (await titleUp()) === false);
+await press('updateLaterBtn');
+ck('… and goes on to the title when answered', await until(titleUp, 8000) && (await promptUp()) === false);
 
 console.log(fails === 0 ? '\nALL PASS' : `\n${fails} FAILURE(S)`);
 ws.close(); kill();

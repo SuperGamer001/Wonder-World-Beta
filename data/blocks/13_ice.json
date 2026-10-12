@@ -9,6 +9,8 @@
     0.9
   ],
   "hardness": 0.5,
+  "tool": "pickaxe",
   "drops": [],
-  "render": "translucent"
+  "render": "translucent",
+  "slippery": 0.9
 }

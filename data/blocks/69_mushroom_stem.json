@@ -8,6 +8,7 @@
     0.72
   ],
   "hardness": 0.2,
+  "tool": "axe",
   "drops": [],
   "texture": "Mushroom_Stem.png"
 }

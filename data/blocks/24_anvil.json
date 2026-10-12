@@ -10,6 +10,7 @@
   "interactable": true,
   "interactType": "anvil",
   "hardness": 5,
+  "tool": "pickaxe",
   "drops": [
     {
       "itemId": "anvil",

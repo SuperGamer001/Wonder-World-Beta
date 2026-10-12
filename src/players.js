@@ -274,6 +274,7 @@ async function enterGame() {
     if (!getSettings().clientId) saveSettings({ ...getSettings(), clientId: (crypto.randomUUID?.() ?? String(Math.random()).slice(2)) });
 
     if (isGuest()) {
+        DOM.appLoadingContainer.classList.add('hidden');
         document.body.classList.add('isGuest');
         DOM.titleLogo?.classList.add('hidden');
         // Each new player says who they are; the others play on meanwhile.
@@ -303,8 +304,16 @@ async function enterGame() {
         return startWorld(world);
     }
 
+    // Is there a newer version? The launcher has been looking since it started;
+    // the loading card stays up the moment it takes to hear, and then the
+    // player is asked — before anything else (main.js: UPDATES).
+    await updateSettled();
+    DOM.appLoadingContainer.classList.add('hidden');
+    await askToUpdate();
+
     // The first time: a name. After that, the one chosen last.
     const s = getSettings();
+    const returning = getProfiles().length > 0 || !!s.playerName;      // was here before this launch
     if (getProfiles().length === 0) {
         if (s.playerName) { saveProfile(s.playerName, s.skin ?? null); }        // a name from before there was a list
         else await pickName({ title: 'Welcome! What shall we call you?', required: true });
@@ -313,6 +322,8 @@ async function enterGame() {
     DOM.titleScreen.classList.remove("hidden");
     sound?.playMusic(MENU_MUSIC);
     startMenuWorld();
+    // A newer version than was played last: what it added and fixed, over the title.
+    maybeShowWhatsNew(returning);
 }
 
 /** The world this player was in has gone (the host left, the network closed) or could not be reached. */
@@ -326,6 +337,7 @@ const SESSION_WHY = {
     update: 'That game is on a newer version. Update the game to join it.', content: 'That game uses different game packs from yours.',
     busy: 'Too many attempts. Wait a minute and try again.', auth: 'The online service would not let this game in.',
     unavailable: 'This copy of the game has no online play set up.', world: "This world's seed cannot be shared online.",
+    outdated: 'The online service has not been updated for public games yet, so this game cannot be listed. Open it for "Whoever has the code" for now.',
 };
 const sessionWhy = (reason) => SESSION_WHY[reason] ?? 'The game has ended.';
 
@@ -422,13 +434,17 @@ async function _refreshPlayers() {
     document.getElementById('onlineSection').classList.toggle('hidden', !available || !(own || net));
     if (available && (own || net)) {
         const toggle = document.getElementById('onlineOpenToggle');
+        // A newer version is out: this one does not go online until it is installed (a game already open stays open).
+        const stale = updatePending() && !net;
         document.getElementById('onlineRow').classList.toggle('hidden', !own);
         if (toggle && document.activeElement !== toggle && !_onlineBusy) toggle.checked = !!net;
+        if (toggle) toggle.disabled = stale;
         // Who can join is chosen before the game is opened; open, it is what it was opened as.
-        document.getElementById('onlineWhoRow').classList.toggle('hidden', !own || !!net || _onlineBusy);
+        document.getElementById('onlineWhoRow').classList.toggle('hidden', !own || !!net || _onlineBusy || stale);
         const open = document.getElementById('onlineVisibility').value === 'public';
         const note = document.getElementById('onlineNote');
         if (_onlineBusy) note.textContent = 'One moment…';
+        else if (stale) note.textContent = UPDATE_FIRST;
         else if (!net) note.textContent = open ? 'Lists this world under Play → Join a game → Online, for anyone to join.'
                                                : 'Lets anyone you give the code to join this world over the internet.';
         else {
@@ -446,6 +462,7 @@ let _onlineBusy = false;
 /** Open this world to players over the internet, or close it again. */
 async function setOnlineOpen(on) {
     if (!activeWorld || _onlineBusy || isGuest() || _onlineGuest) return;
+    if (on && updatePending()) { showNotice(UPDATE_FIRST); _refreshPlayers(); return; }
     _onlineBusy = true;
     _refreshPlayers();
     try {
@@ -509,7 +526,9 @@ function openLanJoin() {
     const way = document.getElementById('joinOnlineWayBtn'), wayNote = document.getElementById('joinOnlineWayNote');
     const set = (yes) => {
         way.classList.toggle('cannot', !yes);
-        wayNote.textContent = yes ? 'A public game, or a friend’s game with its code' : 'This copy of the game has no online play set up';
+        wayNote.textContent = !yes ? 'This copy of the game has no online play set up'
+            : updatePending() ? 'Update the game to play online'        // (the button then asks about the update)
+            : 'A public game, or a friend’s game with its code';
     };
     set(false);
     window.__wwOnline?.available().then(set, () => set(false));
@@ -562,11 +581,15 @@ async function _refreshLanGames() {
 /** The public games open now: asked of the online service, and asked again every few seconds while they are on screen. */
 async function refreshOnlineRooms() {
     const list = document.getElementById('onlineRoomList');
-    if (!list || !window.__wwOnline || _joiningOnline) return;
+    if (!list || !window.__wwOnline || _joiningOnline || updatePending()) return;
     const ask = ++_onlineRoomsAsk;
     let rooms = null, why = '';
     try { rooms = await window.__wwOnline.rooms({ gamepack: mergedGamePackData }); }
-    catch (e) { why = e?.reason === 'busy' ? sessionWhy('busy') : 'The list of public games could not be reached.'; }
+    catch (e) {
+        why = e?.reason === 'busy' ? sessionWhy('busy')
+            : e?.reason === 'outdated' ? 'Public games cannot be listed yet: the online service has not been updated for them. A game can still be joined with its code.'
+            : 'The list of public games could not be reached.';
+    }
     if (ask !== _onlineRoomsAsk || _joinView !== 'online') return;      // a newer asking has been answered, or the screen has gone
     list.innerHTML = '';
     if (!rooms) { const n = document.createElement('div'); n.className = 'formNote'; n.textContent = why; list.appendChild(n); return; }
@@ -610,6 +633,7 @@ let _joiningOnline = false;
 /** Go to an online game: `text` is its code, as the host's Players panel shows it — or, `listed`, as the list of public games gave it. */
 async function joinOnline(text, listed = false) {
     const note = document.getElementById('lanJoinNote');
+    if (updatePending()) { note.textContent = UPDATE_FIRST; return; }
     const code = window.__wwOnline?.cleanCode(text);
     if (!code) { note.textContent = 'A game code is eight letters and digits, like ABCD-EFGH. It is on the host\'s Players panel.'; return; }
     if (_joiningOnline) return;
@@ -658,7 +682,7 @@ document.addEventListener('DOMContentLoaded', () => {
     on('joinLanBtn', openLanJoin);
     on('lanJoinCloseBtn', backFromJoin);
     on('joinLanWayBtn', () => _showJoin('lan'));
-    on('joinOnlineWayBtn', () => _showJoin('online'));
+    on('joinOnlineWayBtn', () => { if (updatePending()) showUpdatePrompt(); else _showJoin('online'); });
     on('onlineRoomsRefresh', refreshOnlineRooms);
     on('onlineJoinGoBtn', () => joinOnline(document.getElementById('onlineJoinCode').value));
     on('onlineJoinCode', (e) => { if (e.key === 'Enter') joinOnline(e.target.value); }, 'keydown');

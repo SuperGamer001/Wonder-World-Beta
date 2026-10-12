@@ -8,6 +8,7 @@
     0.19
   ],
   "hardness": 0.4,
+  "tool": "shovel",
   "drops": [
     {
       "itemId": "mud",

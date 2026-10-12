@@ -4,7 +4,7 @@
   "model": "cow",
   "grazes": true,
   "health": 20,
-  "speed": 3.0,
+  "speed": 3,
   "width": 0.9,
   "height": 1.4,
   "color": [
@@ -36,5 +36,7 @@
     "maxY": 200,
     "minGroupSize": 2,
     "maxGroupSize": 4
-  }
+  },
+  "footstep": "hoof",
+  "length": 2.2
 }

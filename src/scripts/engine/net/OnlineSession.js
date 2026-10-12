@@ -128,7 +128,10 @@ export class OnlineAuth {
         if (res.status === 429) throw new OnlineError('busy');
         if (!res.ok) throw new OnlineError('unreachable');
         const rooms = (await res.json().catch(() => null))?.rooms;
-        return Array.isArray(rooms) ? rooms : [];
+        // A service from before there were public games answers any GET with a line about itself, and no list.
+        // That is not "no games are open": it cannot say, and the player is told so.
+        if (!Array.isArray(rooms)) throw new OnlineError('outdated');
+        return rooms;
     }
 }
 
@@ -220,6 +223,9 @@ export class OnlineSession {
         this.max = Math.max(1, Math.min(HARD_MAX_PLAYERS, maxPlayers | 0));
         for (let tries = 0; ; tries++) {
             const grant = await this.auth.host(visibility === 'public');
+            // Asked to be listed, and handed nothing to be listed with: the service is one from before public
+            // games. Opened anyway it would be a private game that its host believed anyone could find.
+            if (visibility === 'public' && !grant.tag) throw new OnlineError('outdated');
             await this._connect(grant.code, 0, grant, grant.ticket, grant.tag ?? null);
             const ch = this._ch;
             try {
@@ -658,18 +664,21 @@ export class OnlineSession {
         this._publish(this._ch.host, MSG.ATMOS, a);
     }
 
-    /** To everyone: the host's mobs, mostly — sent a few times a second, however often they are handed over. */
+    /**
+     * To everyone: the mobs this game runs, mostly — sent a few times a second, however often they are handed over.
+     * The host's word goes on the line only the host can speak on; a guest's on the one everyone can.
+     */
     all(d) {
         if (!this._ready || this._closed || this.alone || !d) return;
-        if (!this.isHost) return this._publish(this._ch.all, MSG.SAY, d);
-        if (d.t !== 'mobs') return this._publish(this._ch.host, MSG.SAY, d);
+        const ch = this.isHost ? this._ch.host : this._ch.all;
+        if (d.t !== 'mobs') return this._publish(ch, MSG.SAY, d);
         // A mob's look is sent once, with whichever snapshot it first appears in: none may be dropped with a snapshot.
         if (d.info && Object.keys(d.info).length) this._mobInfo = { ...this._mobInfo, ...d.info };
         const t = this._now();
         if (t - this._mobsAt < RATE.MOBS) return;
         this._mobsAt = t;
         const info = this._mobInfo; this._mobInfo = null;
-        this._publish(this._ch.host, MSG.SAY, info ? { t: 'mobs', list: d.list, info } : { t: 'mobs', list: d.list });
+        this._publish(ch, MSG.SAY, info ? { t: 'mobs', list: d.list, info } : { t: 'mobs', list: d.list });
     }
     /** To the host alone. */
     host(d) { if (this._ready && !this.isHost && d) this._publish(this._ch.up, MSG.TO_HOST, d); }

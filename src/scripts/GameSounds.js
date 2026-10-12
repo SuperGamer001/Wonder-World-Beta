@@ -42,7 +42,7 @@ export class GameSounds {
      *   skyLight     0 (sealed in) … 1 (open sky) at the head
      *   sun          sine of the sun's height (below 0: night)
      *   rain         what is falling on the player, 0 … 1
-     *   nearWater    0 … 1: how much open water is close by
+     *   nearWater    0 … 1: the waves of a large body of water, by how near and how large
      *   paused
      * }
      */
@@ -95,10 +95,12 @@ export class GameSounds {
         const under = s.headInWater ? 1 : 0;
         // Under ground: no sky light to speak of.
         const deep = Math.max(0, Math.min(1, (0.16 - s.skyLight) / 0.14));
-        a.birds = ease(a.birds, 0.55 * day * open * dry * (1 - under), 0.6, dt);
-        a.crickets = ease(a.crickets, 0.5 * night * open * dry * (1 - under), 0.5, dt);
+        // Birds and crickets are a long way off (the files are made so, and
+        // quiet): they come up slowly and are never the loudest thing.
+        a.birds = ease(a.birds, 0.6 * day * open * dry * (1 - under), 0.25, dt);
+        a.crickets = ease(a.crickets, 0.6 * night * open * dry * (1 - under), 0.25, dt);
         a.cave = ease(a.cave, 0.6 * deep * (1 - under), 0.5, dt);
-        a.water = ease(a.water, 0.45 * s.nearWater * (1 - under), 0.8, dt);
+        a.water = ease(a.water, 0.45 * s.nearWater * (1 - under), 0.4, dt);
         a.underwater = ease(a.underwater, 0.7 * under, 3, dt);
         // Ten times a second is plenty: each call writes to an audio parameter.
         this._ambT = (this._ambT ?? 0) + dt;

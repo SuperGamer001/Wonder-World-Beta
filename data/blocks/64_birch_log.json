@@ -13,6 +13,7 @@
     0.5
   ],
   "hardness": 2,
+  "tool": "axe",
   "drops": [
     {
       "itemId": "wood_log",

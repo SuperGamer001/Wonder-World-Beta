@@ -15,6 +15,7 @@
   "interactable": true,
   "interactType": "crafting",
   "hardness": 2.5,
+  "tool": "axe",
   "drops": [
     {
       "itemId": "crafting_table",

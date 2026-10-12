@@ -20,6 +20,8 @@
  *   GET  /api/lan/status | games | info
  *   GET  /api/worlds/:id/pending-edits   blocks changed in chunks this game never had loaded
  *   PUT  /api/worlds/:id/pending-edits   … all of them, replacing what was kept
+ *   GET  /api/worlds/:id/containers      what is in the world's chests
+ *   PUT  /api/worlds/:id/containers      … all of them, replacing what was kept
  *   GET  /api/online/config       where the online token service is (see *Online*)
  *   POST /api/online/auth/host | token, GET …/rooms   … which is this server, on a developer's machine (WW_ABLY_KEY)
  *
@@ -505,6 +507,170 @@ app.post('/api/worlds/:id/duplicate', (req, res) => {
     res.status(201).json(meta);
 });
 
+// ── Export and import ─────────────────────────────────────────────────────────
+//
+// A world as one file (.wwworld), to keep somewhere or hand to someone:
+//
+//   "WWEX1\n"                       6 bytes
+//   header length                   u32, little-endian
+//   header                          JSON: { app, version, exported, world, files: [{ path, size }] }
+//   every file's bytes, in the header's order
+//
+// `world` is the world's world.json, so a file can be told about without being
+// read through; the files are everything in the world's folder, as it is on
+// disk (regions are gzipped already, so the file is not compressed again and
+// is written out as it is read). Nothing in the file is trusted on the way
+// back in: `scanWorldFile` goes through all of it before a byte is kept.
+// These routes are the owner's alone — a guest from the network reaches
+// nothing that is not on the list at the top of the app.
+const EXPORT_MAGIC   = Buffer.from('WWEX1\n', 'latin1');
+const EXPORT_VERSION = 1;
+const IMPORT_MAX     = 2 * 1024 * 1024 * 1024 - 1;     // bytes: what one Buffer may hold
+const IMPORT_FILES   = 20000;
+// What a world's folder holds, and so what an import may bring: its own files,
+// one player file each, and regions by their coordinates.
+const WORLD_FILE = /^(world\.json|player\.json|screenshot\.jpg|chunk-index\.json|far-edits\.json|pending-edits\.json|containers\.json|players\/[A-Za-z0-9_-]{1,80}\.json|regions\/-?\d{1,7},-?\d{1,7}\.wwr)$/;
+
+function worldFiles(dir, rel = '') {
+    const out = [];
+    for (const e of fs.readdirSync(path.join(dir, rel), { withFileTypes: true })) {
+        const p = rel ? `${rel}/${e.name}` : e.name;
+        if (e.isDirectory()) out.push(...worldFiles(dir, p));
+        else if (e.isFile() && WORLD_FILE.test(p)) out.push({ path: p, size: fs.statSync(path.join(dir, p)).size });
+    }
+    return out;
+}
+
+app.get('/api/worlds/:id/export', (req, res) => {
+    const meta = readMeta(req.params.id);
+    if (!meta) return res.status(404).json({ error: 'Not found' });
+    const dir = worldDir(req.params.id), files = worldFiles(dir);
+    const header = Buffer.from(JSON.stringify({ app: 'WonderWorld', version: EXPORT_VERSION, exported: Date.now(), world: meta, files }));
+    const size = Buffer.alloc(4);
+    size.writeUInt32LE(header.length);
+    const name = (String(meta.name ?? 'World').replace(/[^A-Za-z0-9 ._-]/g, '').trim() || 'World').slice(0, 60);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}.wwworld"`);
+    res.setHeader('Content-Length', EXPORT_MAGIC.length + 4 + header.length + files.reduce((n, f) => n + f.size, 0));
+    res.write(EXPORT_MAGIC); res.write(size); res.write(header);
+    // One file after another, each read as it is sent: a world can be large.
+    let i = 0;
+    const next = () => {
+        if (i >= files.length) return res.end();
+        const f = files[i++], stream = fs.createReadStream(path.join(dir, f.path), { end: Math.max(0, f.size - 1) });
+        let sent = 0;
+        if (f.size === 0) { stream.destroy(); return next(); }
+        stream.on('data', (chunk) => { sent += chunk.length; });
+        stream.on('error', () => res.destroy());                      // the length promised cannot be kept: the download fails, as it should
+        stream.on('end', () => (sent === f.size ? next() : res.destroy()));
+        stream.pipe(res, { end: false });
+    };
+    next();
+});
+
+/**
+ * Go through a world file and say what it is, or why it will not do. Every
+ * path is checked against what a world's folder may hold, the sizes against
+ * the file's length, world.json against this build's world format, and every
+ * region is opened and decoded — a file that is cut short or is not a world
+ * is found out here, before anything is written.
+ * Returns { ok, error?, world?, files?, chunks, regions, bytes, entries? }.
+ */
+async function scanWorldFile(buf) {
+    const bad = (error) => ({ ok: false, error });
+    if (!Buffer.isBuffer(buf) || buf.length < EXPORT_MAGIC.length + 4) return bad('This is not a Wonder World world file.');
+    if (!buf.subarray(0, EXPORT_MAGIC.length).equals(EXPORT_MAGIC)) return bad('This is not a Wonder World world file.');
+    let o = EXPORT_MAGIC.length;
+    const headerLen = buf.readUInt32LE(o); o += 4;
+    if (headerLen > 8 * 1024 * 1024 || o + headerLen > buf.length) return bad('The file is damaged: its list of contents is cut short.');
+    let header;
+    try { header = JSON.parse(buf.toString('utf8', o, o + headerLen)); } catch { return bad('The file is damaged: its list of contents cannot be read.'); }
+    o += headerLen;
+    if (header?.app !== 'WonderWorld' || !Array.isArray(header.files)) return bad('This is not a Wonder World world file.');
+    if (header.version > EXPORT_VERSION) return bad('This world was exported by a newer version of Wonder World. Update the game to import it.');
+    if (header.files.length > IMPORT_FILES) return bad('The file lists more files than a world has.');
+
+    const entries = [], seen = new Set();
+    for (const f of header.files) {
+        const p = String(f?.path ?? ''), size = Number(f?.size);
+        if (!WORLD_FILE.test(p) || seen.has(p)) return bad(`The file holds something that is not part of a world ("${p.slice(0, 60)}").`);
+        if (!Number.isInteger(size) || size < 0 || o + size > buf.length) return bad('The file is cut short: part of the world is missing.');
+        seen.add(p);
+        entries.push({ path: p, data: buf.subarray(o, o + size) });
+        o += size;
+    }
+    if (o !== buf.length) return bad('The file is damaged: it is longer than its contents.');
+
+    const metaFile = entries.find(e => e.path === 'world.json');
+    if (!metaFile) return bad('The file has no world in it (no world.json).');
+    let world;
+    try { world = JSON.parse(metaFile.data.toString('utf8')); } catch { return bad('The world\'s description (world.json) cannot be read.'); }
+    if (!world || typeof world !== 'object' || !Number.isFinite(Number(world.seed))) return bad('The world\'s description (world.json) is not a world\'s.');
+    if ((world.format ?? WORLD_FORMAT) !== WORLD_FORMAT || (world.worldHeight ?? CHUNK_SIZE_Y) !== CHUNK_SIZE_Y || (world.worldMinY ?? WORLD_MIN_Y) !== WORLD_MIN_Y) {
+        return bad('This world was made by a version of the game whose worlds are a different height, and cannot be opened by this one.');
+    }
+    for (const e of entries) {
+        if (!e.path.endsWith('.json') || e.path === 'world.json') continue;
+        try { JSON.parse(e.data.toString('utf8')); } catch { return bad(`The file is damaged: "${e.path}" cannot be read.`); }
+    }
+    let chunks = 0, regions = 0;
+    for (const e of entries) {
+        if (!e.path.startsWith('regions/')) continue;
+        try {
+            const region = _decodeRegion(await gunzip(e.data));
+            for (const c of Object.values(region)) if (c.indices.length !== CHUNK_VOLUME) throw new Error('size');
+            chunks += Object.keys(region).length;
+            regions++;
+        } catch { return bad(`The file is damaged: part of the world's land ("${e.path}") cannot be read.`); }
+    }
+    return {
+        ok: true, entries, chunks, regions, bytes: buf.length,
+        world: {
+            name: String(world.name ?? 'World').slice(0, 40), seed: Number(world.seed),
+            gameMode: world.gameMode ?? 'SURVIVAL', difficulty: world.difficulty ?? 'NORMAL',
+            worldType: world.worldType === 'flat' ? 'flat' : 'normal', lastPlayed: world.lastPlayed ?? null,
+        },
+        meta: world,
+    };
+}
+
+const worldUpload = express.raw({ type: 'application/octet-stream', limit: IMPORT_MAX });
+
+// Look at a world file: what world it is, or what is wrong with it. Keeps nothing.
+app.post('/api/worlds/import/scan', worldUpload, async (req, res) => {
+    const scan = await scanWorldFile(req.body);
+    if (!scan.ok) return res.status(400).json({ ok: false, error: scan.error });
+    res.json({ ok: true, world: scan.world, chunks: scan.chunks, regions: scan.regions, bytes: scan.bytes, files: scan.entries.length });
+});
+
+// Take a world file in, as a new world: it never replaces one that is here.
+app.post('/api/worlds/import', worldUpload, async (req, res) => {
+    const scan = await scanWorldFile(req.body);
+    if (!scan.ok) return res.status(400).json({ ok: false, error: scan.error });
+    const id = crypto.randomUUID(), now = Date.now(), dir = worldDir(id);
+    const taken = new Set(listWorlds().map(w => w.name));
+    let name = scan.world.name.trim() || 'World';
+    if (taken.has(name)) name = `${name} (Imported)`.slice(0, 48);
+    try {
+        fs.mkdirSync(dir, { recursive: true });        // a world never played is its description and nothing else
+        for (const e of scan.entries) {
+            if (e.path === 'world.json') continue;
+            const dst = path.join(dir, ...e.path.split('/'));
+            fs.mkdirSync(path.dirname(dst), { recursive: true });
+            fs.writeFileSync(dst, e.data);
+        }
+        // Its description last: a world is listed once it has one, so one that
+        // was cut off half way through being written is never offered.
+        const meta = { ...scan.meta, id, name, lastPlayed: now, imported: now };
+        writeMeta(id, meta);
+        _cacheDropWorld(id);
+        res.status(201).json(meta);
+    } catch (err) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        res.status(500).json({ ok: false, error: `The world could not be saved here: ${err?.message ?? err}` });
+    }
+});
+
 // Legacy player position (kept for backwards compat)
 app.put('/api/worlds/:id/player-pos', (req, res) => {
     const meta = readMeta(req.params.id);
@@ -638,6 +804,37 @@ app.put('/api/worlds/:id/pending-edits', (req, res) => {
     res.json({ ok: true });
 });
 
+// What is in the world's chests: "x,y,z" → its slots, each null or { itemId,
+// count } (world.js: *Chests*). The owner's game keeps them and sends the
+// whole set when any has changed; it replaces what was kept. Guests do not
+// come here: they ask the owner's game, through the session.
+const MAX_CONTAINERS = 20000, MAX_CONTAINER_SLOTS = 64;
+function containersPath(id) { return path.join(worldDir(id), 'containers.json'); }
+
+app.get('/api/worlds/:id/containers', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    try { res.json(JSON.parse(fs.readFileSync(containersPath(req.params.id), 'utf8'))); }
+    catch { res.json({}); }
+});
+
+app.put('/api/worlds/:id/containers', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const out = {};
+    let n = 0;
+    for (const [key, slots] of Object.entries(req.body ?? {})) {
+        if (n >= MAX_CONTAINERS) break;
+        if (!/^-?\d{1,8},-?\d{1,4},-?\d{1,8}$/.test(key) || !Array.isArray(slots)) continue;
+        const clean = slots.slice(0, MAX_CONTAINER_SLOTS).map(s =>
+            s && typeof s.itemId === 'string' && /^[A-Za-z0-9_]{1,48}$/.test(s.itemId) && Number.isInteger(s.count) && s.count > 0 && s.count <= 9999
+                ? { itemId: s.itemId, count: s.count } : null);
+        if (clean.some(Boolean)) { out[key] = clean; n++; }
+    }
+    const file = containersPath(req.params.id);
+    if (n === 0) { try { fs.rmSync(file, { force: true }); } catch { /* nothing kept */ } }
+    else fs.writeFileSync(file, JSON.stringify(out));
+    res.json({ ok: true });
+});
+
 // ── Online ────────────────────────────────────────────────────────────────────
 // Playing over the internet goes through Ably (see *Online* in CLAUDE.md), not
 // through this server. All this server has to do with it is tell the page
@@ -742,6 +939,8 @@ let _appVersion = '0.0.0';
 try {
     _appVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version ?? _appVersion;
 } catch { /* keep the placeholder */ }
+// A test says which version this is (the release notes come up for a newer one).
+if (process.env.WW_APP_VERSION) _appVersion = process.env.WW_APP_VERSION;
 
 const _updateState = {
     supported:      false,  // an updater is present at all
@@ -749,6 +948,7 @@ const _updateState = {
     available:      false,
     canAutoInstall: false,  // false => notify only, user downloads manually
     downloaded:     false,
+    progress:       0,      // of a download under way, 0–100
     currentVersion: _appVersion,
     newVersion:     null,
     downloadUrl:    null,
@@ -769,6 +969,17 @@ export function setUpdateHandlers({ onCheck, onInstall }) {
 }
 
 app.get('/api/update-status', (_req, res) => res.json(_updateState));
+
+// What this version added and fixed: ReleaseNotes.txt, beside the game, as it
+// is written (a little Markdown: "# title", "### section", "- item",
+// **bold**). `notesVersion` is the version its first line names, so the game
+// can tell notes that are this version's from ones left over from the last.
+app.get('/api/release-notes', (_req, res) => {
+    let text = '';
+    try { text = fs.readFileSync(path.join(ROOT, 'ReleaseNotes.txt'), 'utf8'); } catch { /* none shipped */ }
+    const named = text.split(/\r?\n/, 1)[0].match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/);
+    res.json({ version: _appVersion, notesVersion: named ? named[0] : null, text });
+});
 
 app.post('/api/update-check', async (_req, res) => {
     if (!_onCheckRequested) return res.json({ ..._updateState, supported: false });
