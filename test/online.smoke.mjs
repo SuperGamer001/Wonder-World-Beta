@@ -1,24 +1,33 @@
 // Two real games playing one world over the internet, as far as that can be
-// had on one machine: the online server (online/) on a port of its own, two of
-// the game's own servers — the host's machine and the guest's, each with its
-// own data folder — and a headless browser with a page for each player.
+// had on one machine with no Ably account: two of the game's own servers — the
+// host's machine and the guest's, each with its own data folder — and a
+// headless browser with a page for each player.
+//
+// Ably itself is stood in for (test/fakeAbly.mjs, which enforces what Ably
+// enforces: signed token requests, what each token may do, who sent what). It
+// runs in this process, and each page talks to it through a thin `Ably` of its
+// own over a WebSocket. Everything else is the real thing: the game's pages,
+// the Players panel and Join screen, Online.js, OnlineSession.js, world.js,
+// and the token service (online/auth.js, served by each game's own server as
+// it is on a developer's machine, with a made-up key).
 //
 // The host opens a world online from the game itself and is given a code; the
 // guest joins by the code. Then: each sees the other; what the host had built
 // before the guest came is in the guest's world (it came from the host's game,
 // through the room); what either builds afterwards reaches the other; what the
-// server refuses is put back; the guest's place in the world is kept on the
-// host's disk; what the guest built far from the host is kept with the world;
-// and when the host closes the game the guest is back at their own menu.
+// host's game will not have is put back; the guest's place in the world is
+// kept on the host's disk; what the guest built far from the host is kept with
+// the world; and when the host closes the game the guest is back at their own
+// menu.
 //
-// It needs the online server's dependencies: cd online && npm install.
 // Set BROWSER=<path> to pick the browser.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import WebSocket from 'ws';
+import WebSocket, { WebSocketServer } from 'ws';
+import { makeFakeAbly } from './fakeAbly.mjs';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -33,12 +42,10 @@ const BROWSER = [
     '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ].filter(Boolean).find(p => { try { return fs.existsSync(p); } catch { return false; } });
 if (!BROWSER) { console.error('No Chromium-family browser found. Set BROWSER=<path to chrome/edge>.'); process.exit(2); }
-const TSX = path.join(ROOT, 'online', 'node_modules', 'tsx', 'dist', 'cli.mjs');
-if (!fs.existsSync(TSX)) { console.error('The online server is not installed: cd online && npm install'); process.exit(2); }
 
 // Ports of this run's own, so a run that was cut short cannot be mistaken for this one.
 const P = 21000 + (process.pid % 2000) * 4;
-const ONLINE = `http://127.0.0.1:${P}`, HOST = `http://127.0.0.1:${P + 1}`, GUEST = `http://127.0.0.1:${P + 2}`, DBG = P + 3;
+const HUB = `ws://127.0.0.1:${P}`, HOST = `http://127.0.0.1:${P + 1}`, GUEST = `http://127.0.0.1:${P + 2}`, DBG = P + 3;
 
 const children = [];
 function run(cmd, args, opts) {
@@ -63,25 +70,109 @@ async function up(url, what) {
     throw new Error(`${what} did not come up at ${url}`);
 }
 
-// ── The three servers ────────────────────────────────────────────────────────
-const online = run(process.execPath, [TSX, 'src/index.ts'], {
-    cwd: path.join(ROOT, 'online'),
-    env: {
-        ...process.env, NODE_ENV: 'development', PORT: String(P), LOG_LEVEL: 'warn',
-        // Neither page is under Steam, so both are guests — who, as shipped, do not host. Here they may.
-        EDITION_FREE: JSON.stringify({ canHost: true, maxRoomPlayers: 4, maxLocalPlayers: 2 }),
-    },
+// ── Ably's stand-in, and the line each page has to it ────────────────────────
+// A made-up key of the right shape: the game's servers sign with it, the stand-in checks the signature with it.
+const KEY = 'aBcDeF.GhIjKl:' + 'e2e-' + 'k'.repeat(40);
+const { Ably: Fake, hub } = makeFakeAbly({ key: KEY });
+const b64 = (bytes) => Buffer.from(bytes).toString('base64');
+const pack = (d) => d instanceof ArrayBuffer || ArrayBuffer.isView(d) ? { $b: b64(d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer, d.byteOffset, d.byteLength)) } : d;
+const unpack = (d) => d && typeof d === 'object' && typeof d.$b === 'string' ? new Uint8Array(Buffer.from(d.$b, 'base64')) : d;
+new WebSocketServer({ port: P, host: '127.0.0.1' }).on('connection', (ws) => {
+    const clients = new Map(), asking = new Map();
+    let asks = 0;
+    const send = (m) => { if (ws.readyState === 1) ws.send(JSON.stringify(m)); };
+    ws.on('close', () => { for (const rt of clients.values()) rt.close(); });
+    ws.on('message', async (raw) => {
+        const m = JSON.parse(raw.toString());
+        if (m.t === 'new') {
+            const rt = new Fake.Realtime({
+                authCallback: (_p, cb) => { const id = ++asks; asking.set(id, cb); send({ t: 'auth?', c: m.c, id }); },
+            });
+            rt.connection.on((change) => send({ t: 'state', c: m.c, s: change.current, reason: change.reason ?? null }));
+            clients.set(m.c, rt);
+        } else if (m.t === 'auth') {
+            asking.get(m.id)?.(m.e ?? null, m.r ?? null);
+            asking.delete(m.id);
+        } else if (m.t === 'close') {
+            clients.get(m.c)?.close();
+        } else if (m.t === 'call') {
+            const rt = clients.get(m.c);
+            try {
+                const ch = rt.channels.get(m.ch, m.o);
+                const tell = (k) => (msg) => send({ t: 'msg', c: m.c, ch: m.ch, k, m: { ...msg, data: pack(msg.data) } });
+                let r;
+                if (m.m === 'subscribe') r = await ch.subscribe(tell('m'));
+                else if (m.m === 'presence.subscribe') r = await ch.presence.subscribe(tell('p'));
+                else if (m.m === 'publish') r = await ch.publish(m.a[0], unpack(m.a[1]));
+                else if (m.m === 'attach') r = await ch.attach();
+                else if (m.m.startsWith('presence.')) r = await ch.presence[m.m.slice(9)](...m.a);
+                send({ t: 'ret', id: m.id, r: r ?? null });
+            } catch (e) { send({ t: 'ret', id: m.id, e: { message: e.message, code: e.code ?? 0 } }); }
+        }
+    });
 });
+
+/** What each page has for `Ably`: the SDK's shape, with the stand-in at the other end of a socket. */
+function ablyShim(url) {
+    const ws = new WebSocket(url), ready = new Promise((res) => { ws.onopen = res; });
+    const send = (m) => ready.then(() => ws.send(JSON.stringify(m)));
+    const calls = new Map(), clients = new Map();
+    let ids = 0;
+    const b64 = (buf) => { let t = ''; for (const b of new Uint8Array(buf)) t += String.fromCharCode(b); return btoa(t); };
+    const pack = (d) => d instanceof ArrayBuffer || ArrayBuffer.isView(d) ? { $b: b64(d instanceof ArrayBuffer ? d : d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)) } : d;
+    const unpack = (d) => d && typeof d === 'object' && typeof d.$b === 'string' ? Uint8Array.from(atob(d.$b), (ch) => ch.charCodeAt(0)).buffer : d;
+    ws.onmessage = (e) => {
+        const m = JSON.parse(e.data), rt = clients.get(m.c);
+        if (m.t === 'ret') { const p = calls.get(m.id); calls.delete(m.id); m.e ? p.rej(Object.assign(new Error(m.e.message), { code: m.e.code })) : p.res(m.r); }
+        else if (m.t === 'auth?') rt._options.authCallback({}, (err, r) => send({ t: 'auth', id: m.id, e: err ? String(err) : null, r }));
+        else if (m.t === 'state') { const previous = rt.connection.state; rt.connection.state = m.s; for (const fn of [...rt._listeners]) fn({ current: m.s, previous, reason: m.reason }); }
+        else if (m.t === 'msg') for (const fn of rt._subs.get(`${m.k}|${m.ch}`) ?? []) fn({ ...m.m, data: unpack(m.m.data) });
+    };
+    class Realtime {
+        constructor(options) {
+            this._options = options; this._listeners = new Set(); this._subs = new Map(); this._chans = new Map();
+            const c = this._c = ++ids;
+            clients.set(c, this);
+            this.connection = { state: 'initialized', on: (fn) => this._listeners.add(fn), off: (fn) => this._listeners.delete(fn) };
+            const call = (ch, o, m, a = []) => new Promise((res, rej) => { const id = ++ids; calls.set(id, { res, rej }); send({ t: 'call', c, id, ch, o, m, a }); });
+            const listen = (k, ch, o, m) => (fn) => {
+                const key = `${k}|${ch}`, first = !this._subs.has(key);
+                if (first) this._subs.set(key, []);
+                this._subs.get(key).push(fn);
+                return first ? call(ch, o, m) : Promise.resolve();
+            };
+            this.channels = {
+                get: (name, o) => {
+                    if (!this._chans.has(name)) this._chans.set(name, {
+                        name, on() {}, attach: () => call(name, o, 'attach'),
+                        subscribe: listen('m', name, o, 'subscribe'),
+                        publish: (n, d) => call(name, o, 'publish', [n, pack(d)]),
+                        presence: {
+                            enter: (d) => call(name, o, 'presence.enter', [d]), update: (d) => call(name, o, 'presence.update', [d]),
+                            leave: () => call(name, o, 'presence.leave'), get: () => call(name, o, 'presence.get'),
+                            subscribe: listen('p', name, o, 'presence.subscribe'),
+                        },
+                    });
+                    return this._chans.get(name);
+                },
+            };
+            send({ t: 'new', c });
+        }
+        close() { send({ t: 'close', c: this._c }); }
+    }
+    globalThis.Ably = { Realtime, stoodIn: true };
+}
+
+// ── The two machines ─────────────────────────────────────────────────────────
 function gameServer(port, dir) {
     return run(process.execPath, ['server/server.js'], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(port), WONDER_DATA_DIR: dir, WW_ONLINE_URL: ONLINE, WW_LAN_PORT: '0', WW_BEACON_PORT: String(port + 200) },
+        env: { ...process.env, PORT: String(port), WONDER_DATA_DIR: dir, WW_ABLY_KEY: KEY, WW_LAN_PORT: '0', WW_BEACON_PORT: String(port + 200) },
     });
 }
 const hostDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-online-host-')), guestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-online-guest-'));
 gameServer(P + 1, hostDir);
 gameServer(P + 2, guestDir);
-await up(`${ONLINE}/healthz`, 'the online server');
 await up(`${HOST}/api/online/config`, "the host's game server");
 await up(`${GUEST}/api/online/config`, "the guest's game server");
 
@@ -102,7 +193,7 @@ run(BROWSER, [
 ]);
 
 class Page {
-    static async open(url) {
+    static async open(url, { ably = true } = {}) {
         let target;
         for (let i = 0; i < 60 && !target; i++) {
             try { target = await (await fetch(`http://127.0.0.1:${DBG}/json/new?about:blank`, { method: 'PUT' })).json(); } catch { await sleep(250); }
@@ -112,6 +203,7 @@ class Page {
         await new Promise((res, rej) => { page.ws.once('open', res); page.ws.once('error', rej); });
         for (const domain of ['Runtime', 'Log', 'Page', 'Network']) await page.send(`${domain}.enable`);
         await page.send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
+        if (ably) await page.send('Page.addScriptToEvaluateOnNewDocument', { source: `(${ablyShim})(${JSON.stringify(HUB)})` });
         await page.send('Page.navigate', { url });
         return page;
     }
@@ -178,7 +270,7 @@ const LAMP = 43, BRICKS = 27, PLANKS = 25;
 // Before anyone else is here, and not saved yet: only the host's game has it.
 await hostPage.eval(`window.__wwSetBlock(${at.x + 2}, ${at.y + 3}, ${at.z}, 'LAMP')`);
 
-check('this copy of the game has an online server to go to', await hostPage.eval('window.__wwOnline.available()', true));
+check('this copy of the game can go online', await hostPage.eval('window.__wwOnline.available()', true));
 const code = await hostPage.eval('window.__wwWorld.goOnline(activeWorld)', true);
 check('the host opens the world online and is given a code', /^[A-Z2-9]{8}$/.test(code), code);
 const hostNet = await hostPage.eval('window.__wwWorld.online()');
@@ -208,12 +300,12 @@ await hostPage.eval(`window.__wwSetBlock(${at.x + 2}, ${at.y + 4}, ${at.z}, 'BRI
 check('what the host builds now reaches the guest',
     await guestPage.until(`window.__wwBlockAt(${at.x + 2}, ${at.y + 4}, ${at.z}) === ${BRICKS}`, 'the bricks', 20000).then(() => true, () => false));
 const gx = Math.floor(guestPos.x) + 1, gy = Math.floor(guestPos.y) + 3, gz = Math.floor(guestPos.z);
-await sleep(600);                                                            // the server has heard where the guest stands
+await sleep(600);                                                            // the host has heard where the guest stands
 await guestPage.eval(`window.__wwSetBlock(${gx}, ${gy}, ${gz}, 'WOODEN_PLANKS')`);
 check('what the guest builds reaches the host',
     await hostPage.until(`window.__wwBlockAt(${gx}, ${gy}, ${gz}) === ${PLANKS}`, 'the planks', 20000).then(() => true, () => false));
 
-// A block far out of the guest's reach: the server refuses it, and the guest's own game puts it back.
+// A block far out of the guest's reach: the host's game will not have it, and says what is there instead.
 const far = { x: gx + 40, y: gy, z: gz };
 const before = await guestPage.eval(`window.__wwBlockAt(${far.x}, ${far.y}, ${far.z})`);
 await guestPage.eval(`window.__wwSetBlock(${far.x}, ${far.y}, ${far.z}, 'BRICKS')`);
@@ -235,7 +327,7 @@ for (let i = 0, last = NaN; i < 60; i++) {
     last = y;
 }
 const farBlock = { x: away.x + 1, y: Math.floor(rest ?? 200) + 2, z: away.z };
-await sleep(800);                                                            // the server has heard where the guest now stands
+await sleep(800);                                                            // the host has heard where the guest now stands
 await guestPage.eval(`window.__wwSetBlock(${farBlock.x}, ${farBlock.y}, ${farBlock.z}, 'BRICKS')`);
 await sleep(1500);
 check('the host is not there', await hostPage.eval(`window.__wwBlockAt(${away.x}, 0, ${away.z})`) === 0);
@@ -252,7 +344,7 @@ for (let i = 0; i < 40 && !keptFile; i++) {
 }
 const keptState = keptFile ? JSON.parse(fs.readFileSync(path.join(playersDir, keptFile), 'utf8')) : null;
 check('the guest\'s place in the world is kept with the world, on the host\'s machine, under a key that names nobody',
-    !!keptState && Math.abs(keptState.position.x - (away.x + 0.5)) < 2 && /^online-[A-Za-z0-9_-]{24}\.json$/.test(keptFile) && !/gus/i.test(keptFile), keptFile ?? 'no file');
+    !!keptState && Math.abs(keptState.position.x - (away.x + 0.5)) < 2 && /^online-p[A-Za-z0-9_-]{20}-0\.json$/.test(keptFile) && !/gus/i.test(keptFile), keptFile ?? 'no file');
 check('… and nothing of the world was written on the guest\'s', !fs.existsSync(path.join(guestDir, 'user', 'worlds', 'online')));
 check('the guest is their own again: their own menu, their own settings',
     await guestPage.eval("!document.body.classList.contains('isGuest') && window.__wwWorld.online() === null"));
@@ -290,11 +382,16 @@ for (const [who, p] of [['host', hostPage], ['guest', guestPage]]) {
     check(`the ${who}'s page logged no errors`, errors.length === 0, errors.slice(0, 3).join(' | '));
     check(`the ${who}'s page had no failed requests`, failed.length === 0, failed.slice(0, 3).join(' | '));
 }
-const serverLog = online.output.split('\n').filter(l => /"level":"(warn|error)"/.test(l));
-// The one refusal the test asked for is a warning; anything else is not expected.
-const unexpected = serverLog.filter(l => !/security\.violation.*block_reach/.test(l));
-check('the online server logged nothing unexpected', unexpected.length === 0, unexpected.slice(0, 3).join(' | ').slice(0, 400));
-check('… and named nobody', !/Hana|Gus/.test(online.output));
+check('nothing was tried that a token would not allow', hub.refused.length === 0, hub.refused.slice(0, 4).join(' | '));
+console.log(`      (${hub.messages} messages, as Ably counts them, for the whole run)`);
+
+// ── … and the real SDK is where the game looks for it ────────────────────────
+// (Every page above had the stand-in for `Ably`. This one loads what a player's game loads.)
+const sdkPage = await Page.open(`${HOST}/data/online.json`, { ably: false });
+await sleep(500);
+const sdk = await sdkPage.eval(`new Promise((res) => { const s = document.createElement('script'); s.src = '/node_modules/ably/build/ably.min.js';
+    s.onload = () => res({ realtime: typeof globalThis.Ably?.Realtime, version: globalThis.Ably?.version ?? null }); s.onerror = () => res(null); document.documentElement.appendChild(s); })`, true);
+check("Ably's own SDK loads in the page from where the game asks for it", sdk?.realtime === 'function', JSON.stringify(sdk));
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);
 stopAll();

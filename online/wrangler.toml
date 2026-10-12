@@ -1,0 +1,10 @@
+# Cloudflare Worker settings for the token service (online/README.md).
+# The Ably key is NOT here: it is a secret (npx wrangler secret put ABLY_API_KEY).
+name = "wonder-world-online"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[vars]
+# The browser edition's exact origins, comma separated. Empty: only the desktop
+# app and pages served from a player's own machine may ask.
+ALLOWED_ORIGINS = ""

@@ -10,7 +10,7 @@ import WebSocket from 'ws';
 process.env.WONDER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-mp-'));
 process.env.WW_LAN_PORT = '0';                                    // any free port
 process.env.WW_BEACON_PORT = String(41000 + (process.pid % 2000));
-process.env.WW_ONLINE_URL = 'https://online.example.com/';         // where the online server is, for this run
+process.env.WW_ONLINE_AUTH = 'https://online.example.com/';        // where the online token service is, for this run
 
 const { serverReady } = await import('../server/server.js');
 const { port, host } = await serverReady;
@@ -199,22 +199,39 @@ check('when the last player leaves, a guest can still save where they were', lin
 check('… and then the world closes to the network', again.open === true && after.open === false, JSON.stringify({ again, after }));
 
 // ── Online: what this server has to do with it ───────────────────────────────
-// (The online server itself is online/, with tests of its own: cd online && npm test.)
+// (Online play goes through Ably; test/online.test.mjs is the test of that.)
 const conf = await (await json(`${base}/api/online/config`)).json();
-check('the page is told where the online server is', conf.url === 'https://online.example.com' && typeof conf.version === 'string' && conf.steam === false, JSON.stringify(conf));
+check('the page is told where the online token service is', conf.auth === 'https://online.example.com' && typeof conf.version === 'string', JSON.stringify(conf));
 check('… which, as shipped, is nowhere: the game has no online play until it is given one',
-    JSON.parse(fs.readFileSync(new URL('../data/online.json', import.meta.url), 'utf8')).url === '');
-// A token — and under Steam, a ticket — is sent there: only over https, or to this machine.
-const urlFor = async (value) => { process.env.WW_ONLINE_URL = value; return (await (await json(`${base}/api/online/config`)).json()).url; };
+    JSON.parse(fs.readFileSync(new URL('../data/online.json', import.meta.url), 'utf8')).auth === '');
+// The game's own secret is sent there: only over https, or to this machine.
+const authFor = async (value) => {
+    if (value === undefined) delete process.env.WW_ONLINE_AUTH; else process.env.WW_ONLINE_AUTH = value;
+    return (await (await json(`${base}/api/online/config`)).json()).auth;
+};
 const refused = [];
-for (const bad of ['http://online.example.com', 'ws://online.example.com', 'https://online.example.com/path', 'https://user:pw@online.example.com',
-    'javascript:alert(1)', '//online.example.com', 'https://online.example.com?x=1', 'http://127.0.0.1.evil.example:2567', 'not a url']) {
-    if (await urlFor(bad) !== '') refused.push(bad);
+for (const bad of ['http://online.example.com', 'ws://online.example.com', 'https://user:pw@online.example.com',
+    'javascript:alert(1)', '//online.example.com', 'https://online.example.com?x=1', 'https://online.example.com/a b', 'http://127.0.0.1.evil.example:2567', 'not a url']) {
+    if (await authFor(bad) !== '') refused.push(bad);
 }
 check('an address that is not https (or this machine) is no address at all', refused.length === 0, refused.join(' | '));
-check('… a developer\'s own server on this machine is', await urlFor('http://127.0.0.1:2567') === 'http://127.0.0.1:2567' && await urlFor('http://localhost:2567/') === 'http://localhost:2567');
-process.env.WW_ONLINE_URL = 'https://online.example.com/';
-check('with no launcher there is no Steam ticket to be had', (await (await json(`${base}/api/online/steam-ticket`, 'POST')).json()).ticket === null);
+check('… a developer\'s own on this machine is, and so is one at a path',
+    await authFor('http://127.0.0.1:8787') === 'http://127.0.0.1:8787' && await authFor('http://localhost:8787/') === 'http://localhost:8787' &&
+    await authFor('https://example.workers.dev/online') === 'https://example.workers.dev/online');
+
+// With no Ably key this server is no token service …
+check('without an Ably key this server signs nothing', await authFor(undefined) === '' && (await json(`${base}/api/online/auth/host`, 'POST', { device: 'd'.repeat(30), slot: 0 })).status === 404);
+// … and with one (a developer's machine) it is: the code that is deployed, at an address of its own.
+const ABLY_KEY = 'aBcDeF.GhIjKl:' + 'k'.repeat(44);
+process.env.WW_ABLY_KEY = ABLY_KEY;
+const devConf = await (await json(`${base}/api/online/config`)).json();
+const minted = await json(`${base}/api/online/auth/host`, 'POST', { device: 'd'.repeat(30), slot: 0 });
+const mintedBody = await minted.json();
+check('with an Ably key in its environment, a developer\'s server is the token service',
+    devConf.auth === `${base}/api/online/auth` && minted.status === 200 && /^[A-Z2-9]{8}$/.test(mintedBody.code) && mintedBody.tokenRequest.keyName === 'aBcDeF.GhIjKl');
+check('… and the key itself goes nowhere: not in an answer, not in the page\'s configuration',
+    !JSON.stringify(mintedBody).includes('kkkkkkkk') && !JSON.stringify(devConf).includes('kkkkkkkk') &&
+    !(await (await json(`${base}/api/settings`)).text()).includes('kkkkkkkk'));
 
 // Blocks changed in chunks the owner's game never loaded are kept with the world until it does.
 const pend = `${base}/api/worlds/${world.id}/pending-edits`;
@@ -238,15 +255,17 @@ check('a world that does not exist keeps nothing', (await json(`${base}/api/worl
 const openedAgain = await (await json(`${base}/api/lan/open`, 'POST', { worldId: world.id })).json();
 const lanBase = `http://127.0.0.1:${openedAgain.port}`;
 await json(`${base}/api/settings`, 'PUT', { onlineCredential: 'the-owners-own' });
-check('a guest from the network cannot reach the owner\'s online identity, a Steam ticket, or the changes kept for the world',
-    (await json(`${lanBase}/api/online/steam-ticket`, 'POST')).status === 403 &&
-    (await (await json(`${lanBase}/api/online/config`)).json()).url === '' &&        // … nor go online from the host's copy of the game
+check('a guest from the network cannot reach the owner\'s online identity, have tokens signed, or reach the changes kept for the world',
+    (await json(`${lanBase}/api/online/auth/host`, 'POST', { device: 'd'.repeat(30), slot: 0 })).status === 403 &&
+    (await json(`${lanBase}/api/online/auth/token`, 'POST', { code: mintedBody.code, device: 'd'.repeat(30), slot: 0 })).status === 403 &&
+    (await (await json(`${lanBase}/api/online/config`)).json()).auth === '' &&       // … nor go online from the host's copy of the game
     (await json(`${lanBase}/api/worlds/${world.id}/pending-edits`)).status === 403 &&
     (await json(`${lanBase}/api/worlds/${world.id}/pending-edits`, 'PUT', { '0,0': [[1, 1]] })).status === 403 &&
     !JSON.stringify(await (await json(`${lanBase}/api/settings`)).json()).includes('the-owners-own') &&
     (await json(`${lanBase}/user/settings.json`)).status === 403 &&
-    (await json(`${lanBase}/online/src/app.config.ts`)).status === 403 &&
-    (await json(`${lanBase}/online/.env.example`)).status === 403);
+    (await json(`${lanBase}/online/auth.js`)).status === 403 &&
+    (await json(`${lanBase}/online/server.mjs`)).status === 403);
+delete process.env.WW_ABLY_KEY;
 await json(`${base}/api/lan/close`, 'POST');
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

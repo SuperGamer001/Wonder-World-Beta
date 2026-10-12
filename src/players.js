@@ -20,8 +20,8 @@
  *     world list has "Join a game" for the other end. A guest's page is this
  *     game served by the host (server.js, *On the network*), so it is told it
  *     is a guest (`/api/lan/info`) and goes straight into the host's world.
- *   • Online. The same panel opens the world to players anywhere, through the
- *     online server (online/; src/scripts/Online.js is this page's end of it),
+ *   • Online. The same panel opens the world to players anywhere, through
+ *     Ably (src/scripts/Online.js is this page's end of it),
  *     and shows the code they join with; "Join a game" takes a code. A guest
  *     of an online game plays in their own copy of the game, from their own
  *     menu, and goes back to it afterwards.
@@ -321,12 +321,11 @@ const SESSION_WHY = {
     left: 'You have left the game.', host: 'The host has left the game.', closed: 'The game was closed to the network.',
     lost: 'The connection to the game was lost.', unreachable: 'The game could not be reached.', full: 'The game is full.',
     // Online (the reasons of OnlineError, src/scripts/engine/net/OnlineSession.js).
-    code: 'No game has that code — or it is full, or closed to new players.', kicked: 'The host removed you from the game.',
-    update: 'Update the game to play online.', content: 'That game uses different game packs from yours.',
-    edition: 'The free edition cannot host an online game.', busy: 'Too many attempts. Wait a minute and try again.',
-    auth: 'Could not sign in to the online server.', unavailable: 'This copy of the game has no online server set.',
-    world: "This world's seed cannot be shared online.", shutdown: 'The online server is restarting. Try again in a moment.',
-    flood: 'The online server closed the connection.',
+    code: 'No game has that code. Check it with the host — a code is only good while their game is open.',
+    kicked: 'The host removed you from the game.', locked: 'The host is not letting anyone else in just now.',
+    update: 'That game is on a newer version. Update the game to join it.', content: 'That game uses different game packs from yours.',
+    busy: 'Too many attempts. Wait a minute and try again.', auth: 'The online service would not let this game in.',
+    unavailable: 'This copy of the game has no online play set up.', world: "This world's seed cannot be shared online.",
 };
 const sessionWhy = (reason) => SESSION_WHY[reason] ?? 'The game has ended.';
 
@@ -348,7 +347,7 @@ window.addEventListener('ww_sessionClosed', (e) => {
 });
 // The host's online room has gone; the world plays on (world.js has gone back to the game's own server).
 window.addEventListener('ww_onlineEnded', (e) => {
-    showNotice(`The online game has ended. ${e.detail?.reason === 'shutdown' ? SESSION_WHY.shutdown : e.detail?.reason === 'flood' ? SESSION_WHY.flood : 'The connection to the online server was lost.'}`);
+    showNotice('The online game has ended: the connection was lost. You can open it again from the Players panel.');
     if (_playersTimer) _refreshPlayers();
 });
 
@@ -381,7 +380,7 @@ async function _refreshPlayers() {
     const list = document.getElementById('playersList');
     const players = window.__wwPlayers?.() ?? [];
     const net = window.__wwWorld?.online?.() ?? null;       // this world's online room, if it is in one
-    // Online, the host can send a player away (and their account does not come back).
+    // Online, the host can send a player away (and their game is not let back in).
     const removable = (p) => net?.host && !p.you ? `<span class="menuButton small quiet playerKick" data-kick="${p.id}">Remove</span>` : '';
     const html = players.map(p =>
         `<div class="playerRow"><span class="playerName">${escapeHtml(p.name)}</span>` +
@@ -433,8 +432,7 @@ async function _refreshPlayers() {
             const code = window.__wwOnline.showCode(net.code);
             note.innerHTML = (net.host ? 'Others can join from <b>Play → Join a game</b> with this code:' : 'You are in an online game. Its code:') +
                 `<br><span class="lanAddress" id="onlineCode">${escapeHtml(code)}</span>` +
-                (net.down ? '<br>The connection was lost: reconnecting…' : '') +
-                (net.edition === 'free' ? '<br>You are playing the free edition.' : '');
+                (net.down ? '<br>The connection was lost: reconnecting…' : '');
         }
     }
 }

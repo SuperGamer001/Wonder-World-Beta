@@ -20,8 +20,8 @@
  *   GET  /api/lan/status | games | info
  *   GET  /api/worlds/:id/pending-edits   blocks changed in chunks this game never had loaded
  *   PUT  /api/worlds/:id/pending-edits   … all of them, replacing what was kept
- *   GET  /api/online/config       where the online server is (see *Online*)
- *   POST /api/online/steam-ticket a Steam ticket for it, in the desktop app
+ *   GET  /api/online/config       where the online token service is (see *Online*)
+ *   POST /api/online/auth/host | token   … which is this server, on a developer's machine (WW_ABLY_KEY)
  *
  * WebSocket — multiplayer: every `mp:*` text message goes to multiplayer.js.
  *
@@ -639,34 +639,47 @@ app.put('/api/worlds/:id/pending-edits', (req, res) => {
 });
 
 // ── Online ────────────────────────────────────────────────────────────────────
-// Playing over the internet goes through the online server (online/, a Colyseus
-// server run somewhere else), not through this one. All this server has to do
-// with it is tell the page where that is — WW_ONLINE_URL, or data/online.json
-// as shipped; empty means the game has no online play — and, in the desktop
-// app, fetch a Steam ticket for it: the page has no way to Steam, and the
-// launcher (which shares this process) does.
-let _onSteamTicket = null;
+// Playing over the internet goes through Ably (see *Online* in CLAUDE.md), not
+// through this server. All this server has to do with it is tell the page
+// where the token service is: WW_ONLINE_AUTH, or data/online.json as shipped
+// (`auth`); empty means the game has no online play.
+//
+// On a developer's machine it can be the token service itself: with
+// WW_ABLY_KEY set (an Ably API key), it answers at /api/online/auth, with the
+// code that is deployed (online/auth.js). That is for trying online play with
+// no service deployed. The key is never in a build: online/ is not packaged,
+// and nothing in the game reads the variable but this.
+let _onlineAuth = null;
+async function onlineAuth() {
+    if (!process.env.WW_ABLY_KEY) return null;
+    if (_onlineAuth?.key !== process.env.WW_ABLY_KEY) {
+        const { createAuth } = await import('../online/auth.js');
+        _onlineAuth = { key: process.env.WW_ABLY_KEY, auth: createAuth({ key: process.env.WW_ABLY_KEY }) };
+    }
+    return _onlineAuth.auth;
+}
 
-/** Called by the launcher: `steamTicket` resolves with a fresh ticket as hex, or null. */
-export function setOnlineHandlers({ steamTicket }) { _onSteamTicket = steamTicket ?? null; }
-
-function onlineUrl() {
-    let url = process.env.WW_ONLINE_URL;
+function onlineAuthUrl(req) {
+    let url = process.env.WW_ONLINE_AUTH;
+    if (url === undefined && process.env.WW_ABLY_KEY) return `${req.protocol}://${req.get('host')}/api/online/auth`;
     if (url === undefined) {
-        try { url = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'online.json'), 'utf8')).url; } catch { url = ''; }
+        try { url = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'online.json'), 'utf8')).auth; } catch { url = ''; }
     }
     url = String(url ?? '').trim().replace(/\/+$/, '');
-    // https, or this machine for a developer's own server: a token is not sent anywhere else in the clear.
-    return /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/.test(url) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/.test(url) ? url : '';
+    // https, or this machine for a developer's own: a game's secret is not sent anywhere else in the clear.
+    return /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.test(url) ||
+           /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.test(url) ? url : '';
 }
 
 // A guest from the network plays in the host's copy of the game, as the host's guest: going online is not theirs to do from here.
-app.get('/api/online/config', (req, res) => res.json({ url: req.lan ? '' : onlineUrl(), version: _appVersion, steam: !req.lan && !!_onSteamTicket }));
+app.get('/api/online/config', (req, res) => res.json({ auth: req.lan ? '' : onlineAuthUrl(req), version: _appVersion }));
 
-app.post('/api/online/steam-ticket', async (_req, res) => {
-    if (!_onSteamTicket) return res.json({ ticket: null });
-    try { res.json({ ticket: await _onSteamTicket() ?? null }); }
-    catch { res.json({ ticket: null }); }
+app.all('/api/online/auth/:op', async (req, res) => {
+    const auth = req.lan ? null : await onlineAuth().catch(() => null);
+    if (!auth) return res.status(404).json({ error: 'Not found' });
+    const r = await auth.respond({ method: req.method, path: req.path, origin: req.get('origin') ?? '', body: req.body, ip: req.socket.remoteAddress ?? '' });
+    res.status(r.status).set(r.headers);
+    if (r.body === null) res.end(); else res.json(r.body);
 });
 
 // Global player settings

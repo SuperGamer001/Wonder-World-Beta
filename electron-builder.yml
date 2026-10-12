@@ -20,12 +20,6 @@ artifactName: "WonderWorld-${version}-${arch}.${ext}"
 # helpers are excluded below.
 asar: false
 
-# Do not recompile native modules for Electron. The only one is msgpackr-extract
-# (an optional speed-up inside @colyseus/sdk, which the game loads in the page,
-# where it is never used); it ships prebuilt N-API binaries, and compiling it
-# needs Visual Studio and fails outright in a folder with a space in its path.
-npmRebuild: false
-
 files:
   - "**/*"
   - "!user${/*}"                 # local dev world saves — never ship these
@@ -34,7 +28,7 @@ files:
   - "!.claude${/*}"
   - "!.ui-shots${/*}"            # screenshots taken while working on the menus
   - "!test${/*}"                 # dev-only test harnesses
-  - "!online${/*}"               # the online server: deployed by itself, never shipped to players
+  - "!online${/*}"               # the online token service: deployed by itself, never shipped to players
   - "!tools${/*}"                # texture generators
   - "!**/*.py"
   - "!INSTRUCT.md"
@@ -43,13 +37,6 @@ files:
   # three ships ~35 MB but the game loads exactly one build file. Dropping the
   # examples, the TypeScript-facing sources and the unused bundles takes ~33 MB
   # off the installer with no runtime effect.
-  # msgpackr-extract is a native speed-up for msgpackr under @colyseus/sdk, in
-  # Node. The game loads the SDK's browser bundle in the page, where it is never
-  # touched — and npm installs only the build machine's binary, so the x64 and
-  # arm64 halves of the universal macOS app held the same file and could not be
-  # merged.
-  - "!node_modules/msgpackr-extract${/*}"
-  - "!node_modules/@msgpackr-extract${/*}"
   - "!node_modules/three/examples${/*}"
   - "!node_modules/three/src${/*}"
   - "!node_modules/three/test${/*}"

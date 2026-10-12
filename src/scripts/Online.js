@@ -2,31 +2,33 @@
  * Online — playing over the internet, as this page does it.
  *
  * The line itself is engine/net/OnlineSession.js, which knows nothing of pages.
- * This is the page's end: where the online server is, the Colyseus SDK (loaded
- * only when someone goes online), who this game is to that server, and the one
- * room this game is in. world.js takes the room from here (`online.session`)
- * in place of its line to the game's own server; players.js (the Players panel,
- * "Join a game") asks for one to be opened or joined.
+ * This is the page's end: where the token service is, Ably's SDK (loaded only
+ * when someone goes online), who this game is, and the one room it is in.
+ * world.js takes the room from here (`online.session`) in place of its line to
+ * the game's own server; players.js (the Players panel, "Join a game") asks
+ * for one to be opened or joined.
  *
- * Where the online server is comes from the game itself — `/api/online/config`
- * (the game's own server: WW_ONLINE_URL, or data/online.json as shipped) — and
- * never from the address bar or anything a link could carry: a token, and in
- * the desktop app a Steam ticket, is sent to whatever that says.
+ * Online games go through Ably. This page never holds Ably's key: it asks the
+ * token service (online/auth.js) for a token good for one room. Where that
+ * service is comes from the game itself — `/api/online/config` (the game's own
+ * server: WW_ONLINE_AUTH, or data/online.json as shipped) — and never from the
+ * address bar or anything a link could carry.
  */
-import { OnlineSession, OnlineAccount, OnlineWorldClient, OnlineError } from './engine/net/OnlineSession.js';
+import { OnlineSession, OnlineAuth, OnlineWorldClient, OnlineError } from './engine/net/OnlineSession.js';
 import * as codec from './engine/net/ChunkCodec.js';
 import { contentHash, cleanCode, showCode, HARD_MAX_PLAYERS } from './engine/net/OnlineProtocol.js';
 
 const HERE = (typeof location !== 'undefined' && location.origin && location.origin !== 'null') ? location.origin : 'http://127.0.0.1:3000';
-const SDK_SRC = '/node_modules/@colyseus/sdk/dist/colyseus.js';
-const GUEST_KEY = 'ww_online_guest';
+const SDK_SRC = '/node_modules/ably/build/ably.min.js';
+const DEVICE_KEY = 'ww_online_device';
 
-let _config = null, _sdk = null, _account = null;
+let _config = null, _sdk = null, _auth = null;
 
-/** https, or this machine (a developer's own server): nothing is sent anywhere else. */
+/** https, or this machine (a developer's own): this game's secret is not sent anywhere else. */
 function checkedUrl(url) {
     url = String(url ?? '').trim().replace(/\/+$/, '');
-    return /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/.test(url) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?$/.test(url) ? url : '';
+    return /^https:\/\/[A-Za-z0-9.-]+(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.test(url) ||
+           /^http:\/\/(127\.0\.0\.1|localhost)(:\d{1,5})?(\/[A-Za-z0-9._~\/-]*)?$/.test(url) ? url : '';
 }
 
 async function config() {
@@ -43,48 +45,42 @@ async function config() {
             if (res.ok) c = await res.json();
         } catch { /* no online play */ }
     }
-    return _config = { url: checkedUrl(c?.url), version: String(c?.version ?? '0.0.0'), steam: !!c?.steam };
+    return _config = { auth: checkedUrl(c?.auth), version: String(c?.version ?? '0.0.0') };
 }
 
 function loadSdk() {
-    if (globalThis.Colyseus?.Client) return Promise.resolve(globalThis.Colyseus);
+    if (globalThis.Ably?.Realtime) return Promise.resolve(globalThis.Ably);
     return _sdk ??= new Promise((resolve, reject) => {
         const s = document.createElement('script');
         s.src = SDK_SRC;
-        s.onload = () => globalThis.Colyseus?.Client ? resolve(globalThis.Colyseus) : reject(new OnlineError('unreachable'));
+        s.onload = () => globalThis.Ably?.Realtime ? resolve(globalThis.Ably) : reject(new OnlineError('unreachable'));
         s.onerror = () => { _sdk = null; reject(new OnlineError('unreachable')); };
         document.head.appendChild(s);
     });
 }
 
 /**
- * Where a guest's credential is kept: with the player's settings, which the
+ * Where this game's secret is kept: with the player's settings, which the
  * game's own server keeps (the desktop app's page has a new origin, and so
  * empty localStorage, at every launch). A further pane of a split screen reads
- * the first player's, so one machine is one guest.
+ * the first player's, so one machine is one player's — and a second player on
+ * it is that player's `slot` 1.
  */
-const guestStore = {
+const deviceStore = {
     get() {
-        try { return globalThis.getSettings?.().onlineCredential ?? localStorage.getItem(GUEST_KEY); } catch { return null; }
+        try { return globalThis.getSettings?.().onlineCredential ?? localStorage.getItem(DEVICE_KEY); } catch { return null; }
     },
     set(v) {
-        try { localStorage.setItem(GUEST_KEY, v); } catch { /* storage unavailable */ }
+        try { localStorage.setItem(DEVICE_KEY, v); } catch { /* storage unavailable */ }
         try { if (globalThis.getSettings && globalThis.saveSettings) globalThis.saveSettings({ ...globalThis.getSettings(), onlineCredential: v }); } catch { /* likewise */ }
     },
 };
 
-async function account() {
-    if (_account) return _account;
+async function auth() {
+    if (_auth) return _auth;
     const c = await config();
-    if (!c.url) throw new OnlineError('unavailable');
-    return _account = new OnlineAccount({
-        url: c.url, storage: guestStore,
-        // In the desktop app the launcher can ask Steam for a ticket; the page cannot.
-        steamTicket: c.steam ? async () => {
-            const res = await fetch(`${HERE}/api/online/steam-ticket`, { method: 'POST' });
-            return res.ok ? (await res.json()).ticket ?? null : null;
-        } : null,
-    });
+    if (!c.auth) throw new OnlineError('unavailable');
+    return _auth = new OnlineAuth({ url: c.auth, storage: deviceStore });
 }
 
 /** What every game says of itself at the door. */
@@ -124,8 +120,8 @@ export const online = {
 
     showCode, cleanCode,
 
-    /** Whether this game has an online server to go to. */
-    async available() { return !!(await config()).url; },
+    /** Whether this copy of the game can go online at all. */
+    async available() { return !!(await config()).auth; },
 
     /**
      * Host `world` (a world.json) online. Resolves with the session; its `code` is what guests type.
@@ -133,7 +129,7 @@ export const online = {
      */
     async host(world, who) {
         this.release();
-        const session = new OnlineSession(await loadSdk(), await account());
+        const session = new OnlineSession(await loadSdk(), await auth());
         await session.open(await hello(who), describe(world), HARD_MAX_PLAYERS);
         this.session = session;
         this.remote = false;
@@ -146,7 +142,7 @@ export const online = {
      */
     async join(code, who, local = false) {
         this.release();
-        const session = new OnlineSession(await loadSdk(), await account());
+        const session = new OnlineSession(await loadSdk(), await auth());
         await session.enter(code, await hello(who));
         this.session = session;
         this.remote = !local;

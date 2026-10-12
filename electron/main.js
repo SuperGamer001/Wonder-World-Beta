@@ -17,7 +17,6 @@ import { app, BrowserWindow, shell, dialog, screen } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { setupSteam } from './steam.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -84,8 +83,6 @@ async function startApp() {
 
     createWindow();
     setupUpdates(server);
-    // Online play: under Steam, the launcher is what can ask it to vouch for the player (steam.js).
-    setupSteam(server, path.join(__dirname, '..')).catch(err => console.warn('[steam]', err?.message ?? err));
 
     app.on('activate', () => {
         // macOS: re-create a window when the dock icon is clicked and none open.

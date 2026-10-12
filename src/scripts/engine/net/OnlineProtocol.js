@@ -1,64 +1,78 @@
 /**
- * The online protocol, as the game knows it: what it and the online server
- * say to each other (online/src/protocol.ts is the server's copy; the server
- * is deployed by itself and cannot import this, so online/test/protocol.test.ts
- * reads both and fails when they differ).
+ * The online protocol: what games in one online room say to one another.
  *
- * PROTOCOL goes up whenever a message changes shape or meaning. A game the
- * server does not speak the number of is turned away with `Reject.PROTOCOL`.
+ * Online play goes through Ably (see *Online* in CLAUDE.md): there is no game
+ * server in the middle, only channels that Ably passes messages along. A room
+ * is four kinds of channel, and what a game may do on each is in its token
+ * (online/auth.js — `channels` here is the game's copy of the names; a test
+ * holds the two equal):
  *
- * No Three.js, no DOM: it runs in a test, and in the tool that tells the
- * server which blocks there are (online/tools/sync-content.mjs).
+ *   all    everyone speaks and hears: where each player is, the blocks they
+ *          change. Everyone is "present" here, which is the list of players.
+ *   host   only the host speaks: who is in the room and under which number,
+ *          the mobs, the clock and weather, a block put right, goodbye.
+ *   up     guests speak, only the host hears: a blow on a mob, and what a
+ *          guest asks of the host's world (its chunks, its own saved place).
+ *   to:<clientId>   the host speaks, one guest hears: the welcome, answers.
+ *
+ * PROTOCOL goes up whenever a message changes shape or meaning; a host turns
+ * away a game that speaks another.
+ *
+ * No Three.js, no DOM: it runs in a test.
  */
 
 export const PROTOCOL = 1;
-export const MIN_PROTOCOL = 1;
 
-/** The one room type: a world someone is hosting. */
-export const ROOM = 'world';
+/** The channels of the room with this code. */
+export function channels(code) {
+    return { all: `ww:${code}:all`, host: `ww:${code}:host`, up: `ww:${code}:up`, to: (clientId) => `ww:${code}:to:${clientId}` };
+}
 
-/** Game → server. */
-export const C2S = {
-    STATE: 'state', BLOCK: 'block', PROFILE: 'profile', SYNC: 'sync',
-    ATMOS: 'atmos', MOBS: 'mobs', ATTACK: 'attack', DROPS: 'drops', KICK: 'kick', LOCK: 'lock', REPLY: 'reply',
-    HIT: 'hit', MANIFEST: 'manifest', CHUNK: 'chunk', PLOAD: 'pload', PSAVE: 'psave',
+/** Message names. Short: each is sent many times. */
+export const MSG = {
+    // all
+    STATE: 's', BLOCK: 'b', SAY: 'm',
+    // host
+    ROSTER: 'r', ATMOS: 'a', FIX: 'f', BYE: 'bye',
+    // up
+    TO_HOST: 'h', ASK: 'q',
+    // to:<clientId>
+    WELCOME: 'w', REFUSE: 'x', KICK: 'k', TO: 't', REPLY: 'r',
 };
-
-/** Server → game. */
-export const S2C = {
-    WELCOME: 'welcome', STATES: 'states', BLOCK: 'block', REJECT: 'reject', ATMOS: 'atmos', MOBS: 'mobs',
-    HIT: 'hit', ATTACK: 'attack', DROPS: 'drops', CLOSED: 'closed', ASK: 'ask',
-};
-
-/** What the server asks the host's game for, on a guest's behalf. */
-export const HostOp = { MANIFEST: 'manifest', CHUNK: 'chunk', PLOAD: 'pload', PSAVE: 'psave' };
 
 /** What came of a chunk request. */
 export const ChunkStatus = { NONE: 0, DATA: 1, EDITS: 2, RETRY: 3 };
 
-/** Why a block change was refused. */
-export const RejectWhy = { RATE: 'rate', REACH: 'reach', BLOCK: 'block', EDITION: 'edition', MODE: 'mode', POSITION: 'position' };
-
-/** Why a join was refused (the `code` of the error the SDK's join rejects with). */
-export const Reject = {
-    AUTH: 461, PROTOCOL: 462, CONTENT: 463, CODE: 464, FULL: 465, BANNED: 466, EDITION: 467,
-    LIMIT: 468, BAD_REQUEST: 469, WORLD_GEN: 470, CLOSING: 471, VERSION: 472,
-};
-
-/** Why the room closed a connection (WebSocket close codes). */
-export const Close = { KICKED: 4101, HOST_LEFT: 4102, FLOOD: 4103, INVALID: 4104, ROOM_CLOSED: 4105, SHUTDOWN: 4106 };
-
-/** Reasons in S2C.CLOSED, as the game's sessionOver() knows them. */
-export const ClosedReason = { HOST: 'host', CLOSED: 'closed', KICKED: 'kicked', SHUTDOWN: 'shutdown', FLOOD: 'flood' };
-
-export const WORLD = { MIN_Y: -128, MAX_Y: 319, LIMIT_XZ: 2_000_000, CHUNK_LIMIT: 125_000, MAX_BLOCK_ID: 65_535, WATER: 5 };
-
-export const StateFlag = { ON_GROUND: 1, IN_WATER: 2, DEAD: 4, HIDDEN: 8 };
+export const WORLD = { MIN_Y: -128, MAX_Y: 319, LIMIT_XZ: 2_000_000, MAX_BLOCK_ID: 65_535, WATER: 5 };
 
 export const MAX_NAME = 16;
 export const MAX_SKIN_KEYS = 24;
 export const MAX_LOCAL_PLAYERS = 4;
-export const HARD_MAX_PLAYERS = 8;
+/** A room's most players. Ably's free plan carries 50 messages a second on a channel, and each player sends 5. */
+export const HARD_MAX_PLAYERS = 6;
+
+/** How often things are said online, at most (ms). Every message is counted against the Ably plan: see online/README.md. */
+export const RATE = { STATE: 200, STATE_IDLE: 2000, MOBS: 300, ATMOS: 4000, ASK: 40, REPLY: 35 };
+/** The most of one message's bytes (Ably's limit is 64 KiB). */
+export const PART_BYTES = 48 * 1024;
+/** How far from where a player stands a block of theirs may be, as the host judges it; further for water, which flows. */
+export const REACH = { BLOCK: 12, FLUID: 96 };
+
+/** A name as it may be shown: the game's own rule for names (src/players.js), applied to what a stranger sent. */
+export function cleanName(raw) {
+    return String(typeof raw === 'string' ? raw : '').replace(/[^A-Za-z0-9 ._'-]/g, '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME) || 'Player';
+}
+/** A look: small whole numbers by short names, and nothing else. */
+export function cleanSkin(raw) {
+    const out = {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+    let n = 0;
+    for (const [k, v] of Object.entries(raw)) {
+        if (n >= MAX_SKIN_KEYS) break;
+        if (/^[A-Za-z]{1,16}$/.test(k) && Number.isInteger(v) && v >= 0 && v < 64) { out[k] = v; n++; }
+    }
+    return out;
+}
 
 /** A room code: eight of these, shown as XXXX-XXXX. */
 export const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -106,7 +120,7 @@ const BLOCK_FIELDS = ['id', 'name', 'terrainType', 'transparent', 'liquid', 'noC
  * ids, names and shapes), the biomes and the geology. Two games with the same
  * fingerprint generate the same land from the same seed and mean the same
  * thing by a block id, so they can share a world; two that differ cannot, and
- * the server keeps them apart. Textures, sounds, items and recipes are not in
+ * a host turns the other away. Textures, sounds, items and recipes are not in
  * it: a pack that only repaints the game still plays with everyone.
  *
  * @param {{ blocks?: object[], biomes?: object[], terrain?: object[] }} gamepack  the merged gamepack data
@@ -120,9 +134,4 @@ export function contentHash(gamepack) {
     const terrain = [...(gamepack?.terrain ?? [])].map(stable).sort();
     const text = `${stable(blocks)}|${stable(biomes)}|[${terrain.join(',')}]`;
     return hash53(text, 1).toString(16).padStart(14, '0') + hash53(text, 2).toString(16).padStart(14, '0');
-}
-
-/** The blocks of a gamepack as the server keeps them: [id, name, liquid]. */
-export function blockTable(gamepack) {
-    return [...(gamepack?.blocks ?? [])].sort((a, b) => a.id - b.id).map(b => [b.id, String(b.name), b.liquid ? 1 : 0]);
 }

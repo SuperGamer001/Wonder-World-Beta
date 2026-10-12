@@ -3661,8 +3661,8 @@ async function _joinSession(worldId, session = null) {
     mp.onState = (id, s) => _others?.state(id, s);
     mp.onProfile = (p) => _others?.profile(p);
     mp.onBlock = (x, y, z, b) => _applyRemoteBlock(x, y, z, b);
-    // The online server would not have a block this game changed: back it goes.
-    mp.onBlockRejected = (x, y, z, was) => _applyRemoteBlock(x, y, z, was, true);
+    // Online, the host's game settles what a block is when players disagree: what this block is here, or null where no chunk is loaded.
+    mp.blockAt = (x, y, z) => worldState?.chunks.has(`${x >> 4},${z >> 4}`) ? worldState.getBlock(x, y, z) : null;
     mp.onDown = (down) => _notice(down ? 'Connection lost — reconnecting…' : 'Reconnected');
     mp.onAtmos = (a) => { if (!mp.isHost) _atmos?.sync(a); };
     mp.onMsg = (from, d) => {
@@ -3687,7 +3687,7 @@ async function _joinSession(worldId, session = null) {
     mp.onClosed = (reason) => {
         if (_mp !== mp) return;
         if (mp.online && !_guest) {
-            // The host's own online room has gone (the server restarted, the line was lost for good):
+            // The host's own online room has gone (the line was lost for good):
             // the world is here and plays on, back on the game's own server.
             goOffline().catch(() => { /* playing alone and unseen */ });
             window.dispatchEvent(new CustomEvent('ww_onlineEnded', { detail: { reason } }));
@@ -3725,8 +3725,7 @@ function _mpTick(dt) {
         _others.update(dt, _lightAt, _atmos?.state.lightDir ?? null, _gfx.shadows !== 'off');
         if (_entities) _entities.others = _others.positions(_otherPos);
     }
-    // Online, where this player is is said even alone: the server judges a block by where its player stands.
-    if (mp.alone && !mp.online) return;
+    if (mp.alone) return;
     _mpStateT -= dt;
     if (_mpStateT <= 0) {
         _mpStateT = 1 / STATE_HZ;
@@ -3902,7 +3901,7 @@ async function goOffline() {
 window.__wwWorld = {
     goOnline, goOffline,
     /** What the Players panel shows: whether this world is online, its code, and whose it is. */
-    online: () => _mp?.online ? { code: _mp.code, host: _mp.isHost, edition: _mp.edition, down: _mp.down, players: _mp.players.size + 1 } : null,
+    online: () => _mp?.online ? { code: _mp.code, host: _mp.isHost, down: _mp.down, players: _mp.players.size + 1 } : null,
     kick: (id) => _mp?.online && _mp.kick(id),
     lock: (locked) => _mp?.online && _mp.lock(locked),
 };
