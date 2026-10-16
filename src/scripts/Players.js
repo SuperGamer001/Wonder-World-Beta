@@ -16,24 +16,31 @@
 import * as THREE from 'three';
 import { PlayerModel } from './PlayerModel.js';
 
-const ON_GROUND = 1, IN_WATER = 2, DEAD = 4, HIDDEN = 8;
+const ON_GROUND = 1, IN_WATER = 2, DEAD = 4, HIDDEN = 8, SNEAK = 16, SIT = 32, LIE = 64;
 const SNAP = 6;              // blocks: a move longer than this is not walked
 const STRIDE_WALK = 2.1, STRIDE_RUN = 2.9;      // blocks between footfalls (GameSounds.js)
 const r2 = (v) => Math.round(v * 100) / 100;
 
-/** What this game tells the others about its player, as an array. */
+/**
+ * What this game tells the others about its player, as an array: where, which
+ * way they look, how fast, a few yes-or-noes (on the ground, crouching,
+ * sitting, lying in bed …), blows begun, how hurt — and, sitting or lying,
+ * which way the body faces (the head of the bed).
+ */
 export function packState(p, yaw, pitch, speed, o) {
     return [r2(p.x), r2(p.y), r2(p.z), r2(yaw), r2(pitch), r2(speed),
-        (o.onGround ? ON_GROUND : 0) | (o.inWater ? IN_WATER : 0) | (o.dead ? DEAD : 0) | (o.hidden ? HIDDEN : 0),
-        o.swings | 0, r2(o.hurt ?? 0)];
+        (o.onGround ? ON_GROUND : 0) | (o.inWater ? IN_WATER : 0) | (o.dead ? DEAD : 0) | (o.hidden ? HIDDEN : 0) |
+        (o.sneak ? SNEAK : 0) | (o.sit ? SIT : 0) | (o.lie ? LIE : 0),
+        o.swings | 0, r2(o.hurt ?? 0), r2(o.body ?? 0)];
 }
 
-/** A name on a little board, to hang over a head. */
-function nameTag(name) {
+/** A name on a little board, to hang over a head. `dup`: the number after it, in grey, for the second of that name (0: none). */
+function nameTag(name, dup = 0) {
     const cv = document.createElement('canvas'), cx = cv.getContext('2d');
     const font = '600 30px system-ui, "Segoe UI", sans-serif';
     cx.font = font;
-    cv.width = Math.min(512, Math.ceil(cx.measureText(name).width) + 28);
+    const nameWidth = Math.ceil(cx.measureText(name).width), extra = dup ? ` #${dup}` : '';
+    cv.width = Math.min(512, nameWidth + Math.ceil(cx.measureText(extra).width) + 28);
     cv.height = 44;
     cx.font = font;
     cx.fillStyle = 'rgba(24, 25, 28, 0.62)';
@@ -43,6 +50,7 @@ function nameTag(name) {
     cx.fillStyle = '#f2f2f0';
     cx.textBaseline = 'middle';
     cx.fillText(name, 14, cv.height / 2 + 1);
+    if (extra) { cx.fillStyle = '#9a9ca2'; cx.fillText(extra, 14 + nameWidth, cv.height / 2 + 1); }
     const tex = new THREE.CanvasTexture(cv);
     tex.colorSpace = THREE.SRGBColorSpace;
     const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }));
@@ -71,10 +79,10 @@ export class RemotePlayers {
         const model = new PlayerModel(this.models, p.skin);
         model.show(false, false);                           // until it is known where they are
         this.scene.add(model.mesh);
-        const tag = nameTag(p.name);
+        const tag = nameTag(p.name, p.dup | 0);
         tag.visible = false;
         this.scene.add(tag);
-        const e = { id: p.id, name: p.name, model, tag, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, speed: 0, flags: 0, hurt: 0, swings: -1, at: null, walked: 0, wasGround: true };
+        const e = { id: p.id, name: p.name, dup: p.dup | 0, model, tag, x: 0, y: 0, z: 0, yaw: 0, pitch: 0, speed: 0, flags: 0, hurt: 0, swings: -1, at: null, walked: 0, wasGround: true };
         this.map.set(p.id, e);
         if (p.state) this.state(p.id, p.state);
         return e;
@@ -84,10 +92,10 @@ export class RemotePlayers {
     profile(p) {
         const e = this.map.get(p.id);
         if (!e) return;
-        if (p.name !== e.name) {
+        if (p.name !== e.name || (p.dup | 0) !== e.dup) {
             this._dropTag(e);
-            e.name = p.name;
-            e.tag = nameTag(p.name);
+            e.name = p.name; e.dup = p.dup | 0;
+            e.tag = nameTag(p.name, e.dup);
             this.scene.add(e.tag);
         }
         this.scene.add(e.model.setSkin(p.skin));
@@ -99,7 +107,8 @@ export class RemotePlayers {
         if (!e || !Array.isArray(s)) return;
         const first = e.at === null;
         e.at = { x: s[0], y: s[1], z: s[2] };
-        e.yaw = s[3]; e.pitch = s[4]; e.speed = s[5]; e.flags = s[6] | 0; e.hurt = s[8] ?? 0;
+        e.yaw = s[3]; e.pitch = s[4]; e.speed = s[5]; e.flags = s[6] | 0; e.hurt = s[8] ?? 0; e.body = s[9] ?? 0;
+        e.sneak = !!(e.flags & SNEAK);
         if (first || Math.hypot(s[0] - e.x, s[1] - e.y, s[2] - e.z) > SNAP) { e.x = s[0]; e.y = s[1]; e.z = s[2]; }
         // A blow is counted by its player; a new count is a new blow.
         if (e.swings !== -1 && s[7] !== e.swings) e.model.swing();
@@ -134,7 +143,7 @@ export class RemotePlayers {
             e.x += mx; e.y += (e.at.y - e.y) * k; e.z += mz;
             const hidden = !!(e.flags & HIDDEN);
             // Their footsteps: one for every stride of ground they cover, and one for landing.
-            const ground = (e.flags & (ON_GROUND | IN_WATER | DEAD | HIDDEN)) === ON_GROUND;
+            const ground = (e.flags & (ON_GROUND | IN_WATER | DEAD | HIDDEN | SIT | LIE)) === ON_GROUND;
             if (ground) {
                 const run = Math.min(1, Math.max(0, (e.speed - 4.4) / 2.5));
                 if (!e.wasGround) { e.walked = 0; this.onStep?.(e, run, true); }
@@ -144,12 +153,16 @@ export class RemotePlayers {
             e.wasGround = ground || !!(e.flags & (IN_WATER | DEAD | HIDDEN));
             e.model.show(!hidden, !hidden && shadows);
             e.tag.visible = !hidden;
+            const lie = !!(e.flags & LIE);
             e.model.update(dt, {
                 x: e.x, y: e.y, z: e.z, yaw: e.yaw, pitch: e.pitch, speed: e.speed,
                 onGround: !!(e.flags & ON_GROUND), inWater: !!(e.flags & IN_WATER), dead: !!(e.flags & DEAD), hurt: e.hurt,
+                crouch: e.sneak, sit: !!(e.flags & SIT), lie, body: e.body,
                 light: lightAt ? lightAt(e.x, e.y + 1, e.z) : 1, lightDir,
             });
-            e.tag.position.set(e.x, e.y + e.model.height + 0.38, e.z);
+            // (Lying down, the name is over their head, on the pillow.)
+            if (lie) e.tag.position.set(e.x + Math.sin(e.body) * 1.5, e.y + 0.75, e.z + Math.cos(e.body) * 1.5);
+            else e.tag.position.set(e.x, e.y + e.model.height * (e.sneak ? 0.88 : 1) + 0.38, e.z);
         }
     }
 

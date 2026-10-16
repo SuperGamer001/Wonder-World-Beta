@@ -1,0 +1,26 @@
+{
+  "id": 104,
+  "name": "BROWN_CARPET",
+  "terrainType": "solid",
+  "model": "carpet",
+  "color": [
+    0.45,
+    0.31,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "brown_carpet",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Brown.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 60,
+  "sound": "grass"
+}

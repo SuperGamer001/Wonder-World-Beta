@@ -1,0 +1,22 @@
+{
+  "id": 326,
+  "name": "BRICK_STAIRS_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.27,
+    0.22
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Bricks.png",
+  "model": "stairs",
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "brick_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

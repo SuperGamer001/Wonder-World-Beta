@@ -1,0 +1,21 @@
+{
+  "id": 431,
+  "name": "BIRCH_PLANKS",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "birch_planks",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Planks.png",
+  "flammable": 25,
+  "sound": "wood"
+}

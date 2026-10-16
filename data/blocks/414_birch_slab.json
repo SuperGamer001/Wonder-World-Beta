@@ -1,0 +1,28 @@
+{
+  "id": 414,
+  "name": "BIRCH_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Birch_Planks.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "birch_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "BIRCH_SLAB",
+    "top": "BIRCH_SLAB_TOP",
+    "full": "BIRCH_PLANKS"
+  }
+}

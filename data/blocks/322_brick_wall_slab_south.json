@@ -1,0 +1,22 @@
+{
+  "id": 322,
+  "name": "BRICK_WALL_SLAB_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.27,
+    0.22
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Bricks.png",
+  "model": "vslab",
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "brick_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

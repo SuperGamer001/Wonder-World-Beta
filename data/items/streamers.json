@@ -1,0 +1,8 @@
+{
+  "id": "streamers",
+  "name": "Streamers",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

@@ -29,11 +29,15 @@
  *      every mob and nobody share a chest. A message one player has for one
  *      other, with no line between them (guest to guest), goes on `all`
  *      marked `to`.
+ *   3: chat ('chat'), commands (a guest's goes to the host as typed, 'cmd';
+ *      what came of one is the host's word, 'sys', and its part for one
+ *      player, 'act'), and a mob a guest has walked away from is the host's
+ *      to keep ('mobsleep') and to hand back.
  *
  * No Three.js, no DOM: it runs in a test.
  */
 
-export const PROTOCOL = 2;
+export const PROTOCOL = 3;
 
 /** The channels of the room with this code. */
 export function channels(code) {

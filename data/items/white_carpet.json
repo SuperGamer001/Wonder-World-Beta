@@ -1,0 +1,8 @@
+{
+  "id": "white_carpet",
+  "name": "White Carpet",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

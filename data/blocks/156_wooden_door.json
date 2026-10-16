@@ -1,0 +1,68 @@
+{
+  "id": 156,
+  "name": "WOODEN_DOOR",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "east",
+  "shape": {
+    "open": false,
+    "part": "lower"
+  },
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "wooden_door",
+      "count": 1
+    }
+  ],
+  "texture": "Door_Bottom.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    1,
+    0
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "WOODEN_DOOR_OPEN",
+    "sound": "door"
+  },
+  "place": {
+    "mode": "door",
+    "lower": {
+      "east": "WOODEN_DOOR",
+      "west": "WOODEN_DOOR_WEST",
+      "south": "WOODEN_DOOR_SOUTH",
+      "north": "WOODEN_DOOR_NORTH"
+    },
+    "upper": {
+      "east": "WOODEN_DOOR_TOP",
+      "west": "WOODEN_DOOR_WEST_TOP",
+      "south": "WOODEN_DOOR_SOUTH_TOP",
+      "north": "WOODEN_DOOR_NORTH_TOP"
+    },
+    "lowerRight": {
+      "east": "WOODEN_DOOR_RIGHT",
+      "west": "WOODEN_DOOR_WEST_RIGHT",
+      "south": "WOODEN_DOOR_SOUTH_RIGHT",
+      "north": "WOODEN_DOOR_NORTH_RIGHT"
+    },
+    "upperRight": {
+      "east": "WOODEN_DOOR_RIGHT_TOP",
+      "west": "WOODEN_DOOR_WEST_RIGHT_TOP",
+      "south": "WOODEN_DOOR_SOUTH_RIGHT_TOP",
+      "north": "WOODEN_DOOR_NORTH_RIGHT_TOP"
+    }
+  }
+}

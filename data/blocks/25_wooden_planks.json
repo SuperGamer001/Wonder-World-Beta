@@ -15,5 +15,6 @@
       "count": 1
     }
   ],
-  "texture": "Wooden_Planks.png"
+  "texture": "Wooden_Planks.png",
+  "flammable": 25
 }

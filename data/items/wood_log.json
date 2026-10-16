@@ -1,7 +1,9 @@
 {
   "id": "wood_log",
-  "name": "Wood Log",
+  "name": "Oak Log",
   "type": "resource",
+  "category": "Natural",
   "weight": 1,
-  "maxStack": 64
+  "maxStack": 64,
+  "group": "log"
 }

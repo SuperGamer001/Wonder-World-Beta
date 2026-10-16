@@ -150,7 +150,7 @@ void main() {
             // The sun lies along the moon's path, so the lit limb faces that way.
             vec3 ls = vec3(0.0, sin(uMoonPhase), -cos(uMoonPhase));
             float lit = smoothstep(-0.06, 0.08, dot(n, ls));
-            float maria = pretty ? 0.72 + 0.28 * texture(uCloudMap, q * 0.09 + 0.3).r : 0.9;
+            float maria = pretty ? 0.72 + 0.28 * textureLod(uCloudMap, q * 0.09 + 0.3, 0.0).r : 0.9;
             vec3 moon = vec3(0.92, 0.93, 0.98) * (lit * maria + 0.035);
             float edge = pretty ? smoothstep(1.0, 0.9, r2) : 1.0 - smoothstep(1.0 - rim, 1.0 + rim, sqrt(r2));
             col = mix(col, moon, edge * uMoonVis * clearSky);

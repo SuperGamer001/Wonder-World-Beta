@@ -1,0 +1,18 @@
+{
+  "id": "painting",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "painting",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stick",
+      "count": 8
+    },
+    {
+      "itemId": "wool_block",
+      "count": 1
+    }
+  ]
+}

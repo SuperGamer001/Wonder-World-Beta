@@ -28,7 +28,10 @@ export class Multiplayer {
         this.ws = null;
         this.id = 0;                 // this player, in the session (0: not in one)
         this.hostId = 0;
-        this.players = new Map();    // the others: id → { id, name, skin, state }
+        this.players = new Map();    // the others: id → { id, name, skin, state, key, dup }
+        this.key = '';               // who this player is, as the session has it (what was sent on joining)
+        this.dup = 0;                // the number after this player's own name, if someone here had it first (0: none)
+        this.refused = '';           // why the last join was turned away ('kicked', 'full', …), if it was
 
         this.onJoined = null;        // (player)
         this.onLeft = null;          // (id)
@@ -49,7 +52,9 @@ export class Multiplayer {
      * hostId, players, edits: [x, y, z, block, …], atmos }` — or null if the
      * server cannot be reached or will not have us.
      */
-    join({ worldId, clientId, name, skin }) {
+    join({ worldId, clientId, name, skin, key = '' }) {
+        this.refused = '';
+        this.key = /^[A-Za-z0-9_-]{4,64}$/.test(key) ? key : '';
         return new Promise((resolve) => {
             let done = false;
             const finish = (v) => { if (!done) { done = true; clearTimeout(timer); resolve(v); } };
@@ -57,7 +62,7 @@ export class Multiplayer {
             let ws;
             try { ws = new this._WS(this.url); } catch { return finish(null); }
             this.ws = ws;
-            ws.onopen = () => ws.send(JSON.stringify({ type: 'mp:join', worldId, clientId, name, skin }));
+            ws.onopen = () => ws.send(JSON.stringify({ type: 'mp:join', worldId, clientId, name, skin, key }));
             ws.onerror = () => finish(null);
             ws.onclose = () => {
                 finish(null);
@@ -71,11 +76,12 @@ export class Multiplayer {
                 let m;
                 try { m = JSON.parse(e.data); } catch { return; }
                 if (m.type === 'mp:welcome') {
-                    this.id = m.id; this.hostId = m.hostId;
+                    this.id = m.id; this.hostId = m.hostId; this.dup = m.dup | 0;
                     this.players.clear();
                     for (const p of m.players ?? []) this.players.set(p.id, p);
                     finish(m);
                 } else if (m.type === 'mp:closed' && !done) {
+                    this.refused = String(m.reason ?? '');
                     finish(null);
                 } else this._handle(m);
             };
@@ -94,9 +100,10 @@ export class Multiplayer {
             case 'mp:block':   this.onBlock?.(m.x, m.y, m.z, m.b); break;
             case 'mp:profile': {
                 const p = this.players.get(m.id);
-                if (p) { p.name = m.name; p.skin = m.skin; this.onProfile?.(p); }
+                if (p) { p.name = m.name; p.skin = m.skin; p.key = m.key ?? p.key; p.dup = m.dup | 0; this.onProfile?.(p); }
                 break;
             }
+            case 'mp:you':     this.dup = m.dup | 0; break;
             case 'mp:atmos':   this.onAtmos?.(m.a); break;
             case 'mp:msg':     this.onMsg?.(m.from, m.d); break;
             case 'mp:closed': {
@@ -117,7 +124,9 @@ export class Multiplayer {
     state(s) { if (!this.alone) this._send({ type: 'mp:state', s }); }
     /** A block changed here. Sent even alone: the session keeps it for whoever joins later. */
     block(x, y, z, b) { this._send({ type: 'mp:block', x, y, z, b }); }
-    profile(name, skin) { this._send({ type: 'mp:profile', name, skin }); }
+    profile(name, skin, key = '') { this._send({ type: 'mp:profile', name, skin, key }); }
+    /** The host: send a player away. They are not let back into this session. */
+    kick(id) { if (this.isHost) this._send({ type: 'mp:kick', id }); }
     atmos(a) { if (this.isHost) this._send({ type: 'mp:atmos', a }); }
     /** A message to everyone else, to the host, or to one player. */
     all(d) { if (!this.alone) this._send({ type: 'mp:all', d }); }

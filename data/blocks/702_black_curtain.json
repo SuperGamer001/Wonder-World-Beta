@@ -1,0 +1,39 @@
+{
+  "id": 702,
+  "name": "BLACK_CURTAIN",
+  "terrainType": "solid",
+  "model": "curtain",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.14,
+    0.14,
+    0.16
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "black_curtain",
+      "count": 1
+    }
+  ],
+  "texture": "Curtain_Black.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "grass",
+  "flammable": 80,
+  "use": {
+    "toggle": "BLACK_CURTAIN_OPEN"
+  },
+  "placement": {
+    "east": "BLACK_CURTAIN",
+    "west": "BLACK_CURTAIN_WEST",
+    "south": "BLACK_CURTAIN_SOUTH",
+    "north": "BLACK_CURTAIN_NORTH"
+  }
+}

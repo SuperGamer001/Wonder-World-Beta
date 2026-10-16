@@ -1,0 +1,8 @@
+{
+  "id": "spruce_fence",
+  "name": "Spruce Fence",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "cabinet",
+  "name": "Cabinet",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

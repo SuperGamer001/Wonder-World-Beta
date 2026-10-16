@@ -1,0 +1,25 @@
+{
+  "id": 299,
+  "name": "STONE_STAIRS_TOP_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "hardness": 2,
+  "requiresTool": "pickaxe",
+  "texture": "Stone.png",
+  "model": "stairs",
+  "facing": "north",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "stone_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

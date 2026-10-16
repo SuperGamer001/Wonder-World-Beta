@@ -1,0 +1,18 @@
+{
+  "id": "white_curtain",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "white_curtain",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "wool_block",
+      "count": 2
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

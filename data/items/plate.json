@@ -1,0 +1,8 @@
+{
+  "id": "plate",
+  "name": "Plate",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 16,
+  "category": "Building"
+}

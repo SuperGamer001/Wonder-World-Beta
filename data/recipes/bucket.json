@@ -1,0 +1,14 @@
+{
+  "id": "bucket",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "bucket",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "iron_ingot",
+      "count": 3
+    }
+  ]
+}

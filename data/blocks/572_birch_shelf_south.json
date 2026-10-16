@@ -1,0 +1,29 @@
+{
+  "id": 572,
+  "name": "BIRCH_SHELF_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "texture": "Birch_Planks.png",
+  "model": "shelf",
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "birch_shelf",
+      "count": 1
+    }
+  ],
+  "support": [
+    0,
+    0,
+    -1
+  ],
+  "variant": true
+}

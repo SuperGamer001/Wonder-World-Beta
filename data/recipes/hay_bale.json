@@ -1,0 +1,14 @@
+{
+  "id": "hay_bale",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "hay_bale",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "tall_grass",
+      "count": 9
+    }
+  ]
+}

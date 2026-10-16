@@ -1,0 +1,22 @@
+{
+  "id": 544,
+  "name": "SPRUCE_FENCE",
+  "terrainType": "solid",
+  "model": "fence",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "spruce_fence",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Planks.png",
+  "sound": "wood",
+  "flammable": 20
+}

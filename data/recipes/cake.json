@@ -1,0 +1,18 @@
+{
+  "id": "cake",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "cake",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "bread",
+      "count": 3
+    },
+    {
+      "itemId": "apple",
+      "count": 2
+    }
+  ]
+}

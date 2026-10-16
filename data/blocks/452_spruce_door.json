@@ -1,0 +1,68 @@
+{
+  "id": 452,
+  "name": "SPRUCE_DOOR",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "east",
+  "shape": {
+    "open": false,
+    "part": "lower"
+  },
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "spruce_door",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Door_Bottom.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    1,
+    0
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "SPRUCE_DOOR_OPEN",
+    "sound": "door"
+  },
+  "place": {
+    "mode": "door",
+    "lower": {
+      "east": "SPRUCE_DOOR",
+      "west": "SPRUCE_DOOR_WEST",
+      "south": "SPRUCE_DOOR_SOUTH",
+      "north": "SPRUCE_DOOR_NORTH"
+    },
+    "upper": {
+      "east": "SPRUCE_DOOR_TOP",
+      "west": "SPRUCE_DOOR_WEST_TOP",
+      "south": "SPRUCE_DOOR_SOUTH_TOP",
+      "north": "SPRUCE_DOOR_NORTH_TOP"
+    },
+    "lowerRight": {
+      "east": "SPRUCE_DOOR_RIGHT",
+      "west": "SPRUCE_DOOR_WEST_RIGHT",
+      "south": "SPRUCE_DOOR_SOUTH_RIGHT",
+      "north": "SPRUCE_DOOR_NORTH_RIGHT"
+    },
+    "upperRight": {
+      "east": "SPRUCE_DOOR_RIGHT_TOP",
+      "west": "SPRUCE_DOOR_WEST_RIGHT_TOP",
+      "south": "SPRUCE_DOOR_SOUTH_RIGHT_TOP",
+      "north": "SPRUCE_DOOR_NORTH_RIGHT_TOP"
+    }
+  }
+}

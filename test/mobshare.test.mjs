@@ -50,6 +50,9 @@ function session(places) {
         g.em.onRemoteHit = (pid, id, dmg) => to(pid)?.em.hitById(id, dmg, { id: g.id, ...g.pos });
         g.em.onRemoteAttack = (pid, dmg) => to(pid)?.attacks.push(dmg);
         g.em.onRemoteDrops = (pid, pos, items) => to(pid)?.drops.push(...items);
+        // The first game is the world's owner's: it keeps the mobs that are left behind.
+        g.em.keeper = g === games[0];
+        g.em.onSleep = (m) => games[0].em.store(JSON.parse(JSON.stringify(m)));
     }
     /** Run every game for `seconds`, each telling the others of its mobs ten times a second when it has something to say. */
     const run = (seconds, each = null) => {
@@ -182,6 +185,77 @@ const ids = (mobs) => mobs.map(m => m.id).sort((a, b) => a - b).join();
     a.em.adopt(null); a.em.adopt([1, 'dragon', 0, G, 0, 0, 5, null]); a.em.adopt([NaN, 'sheep', 0, G, 0, 0, 5, null]); a.em.adopt([9, 'sheep', Infinity, G, 0, 0, 5, null]);
     run(0.2);
     check('nonsense from another game makes no mob', a.em._mobs.size === 0);
+}
+
+// ── Mobs that are left behind ────────────────────────────────────────────────
+{
+    // One player: walk away, and come back.
+    const { games: [a], run } = session([[0, 0]]);
+    run(240);
+    const before = own(a).map(m => `${m.typeId}@${Math.round(m.pos.x)},${Math.round(m.pos.z)}`).sort();
+    check('there are mobs to leave', before.length >= 4, `${before.length}`);
+    a.em._spawnT = -1e9;                            // no new ones from here on: these are the ones asked about
+    a.pos.x = 400;
+    run(1);
+    check('walked away from, they are asleep — none up, none lost', own(a).length === 0 && a.em.asleepCount === before.length, `${own(a).length} up, ${a.em.asleepCount} asleep`);
+    a.pos.x = 0;
+    run(1);
+    const after = own(a).map(m => `${m.typeId}@${Math.round(m.pos.x)},${Math.round(m.pos.z)}`).sort();
+    check('come back to, the same mobs are where they were', after.join() === before.join() && a.em.asleepCount === 0, `${after.length} of ${before.length}`);
+
+    // A hurt one is still hurt; and the world's mobs are saved whether up or asleep.
+    const one = own(a)[0];
+    one.health = 3;
+    const kept = JSON.parse(JSON.stringify(a.em.serialize()));
+    check('saving takes every mob that is up', kept.length === before.length && kept.some(r => r[5] === 3));
+    a.pos.x = 400; run(1);
+    check('… and the same ones when they are asleep', a.em.serialize().length === before.length);
+
+    // Opened again: a new game, the saved list, and a player who walks to them.
+    const { games: [b], run: runB } = session([[400, 0]]);
+    b.em._spawnT = -1e9;
+    b.em.loadAsleep(kept);
+    runB(1);
+    check('a world opened again has its mobs asleep, far from the player', own(b).length === 0 && b.em.asleepCount === before.length);
+    b.pos.x = 0;
+    runB(1);
+    check('… and they wake as the player comes to them, the hurt one still hurt', own(b).length === before.length && own(b).some(m => m.health === 3), `${own(b).length}`);
+
+    b.em.loadAsleep([['dragon', 0, G, 0, 0, 5, null], ['sheep', NaN, G, 0, 0, 5, null], ['sheep', 0, G, 0, 0, 0, null], 'sheep', null, ['sheep', 1, G, 1, 0, 5, 'x']]);
+    check('nonsense in a saved list is left out', b.em.asleepCount === 1);
+}
+{
+    // Two players: the guest's mobs, left behind, are the owner's game's to keep — and to give back.
+    const { games: [host, guest], run } = session([[0, 0], [1000, 0]]);
+    run(120);
+    host.em._spawnT = guest.em._spawnT = -1e9;
+    const theirs = own(guest).length, mine = own(host).length;
+    guest.pos.x = 2000;
+    run(1);
+    check('a guest walks away from their mobs: the owner\'s game keeps them', own(guest).length === 0 && host.em.asleepCount === theirs && guest.em.asleepCount === 0, `${host.em.asleepCount} of ${theirs}`);
+    guest.pos.x = 1000;
+    run(1.5);
+    check('… and hands them back when the guest returns', own(guest).length === theirs && host.em.asleepCount === 0 && own(host).length === mine, `${own(guest).length} of ${theirs}`);
+}
+
+// ── Pushed ───────────────────────────────────────────────────────────────────
+// Bodies standing in one another are pushed apart: two mobs by each other, a
+// mob by the player (in the game that runs it), the player by a mob (world.js
+// asks pushOn) — and in a shared world a mob another game runs is pushed by
+// that game, from where it has this player.
+{
+    const { games, run } = session([[0.5, 0.5]]);
+    const g = games[0], em = g.em;
+    em._spawnMob('sheep', { x: 5.5, y: G, z: 5.5 });
+    em._spawnMob('sheep', { x: 5.5, y: G, z: 5.6 });
+    em._spawnMob('sheep', { x: 0.7, y: G, z: 0.5 });
+    const [a, b, c] = own(g);
+    const push = em.pushOn(g.pos.x, g.pos.y, g.pos.z);
+    check('a mob standing in the player pushes them away from it', push.x < -0.3 && Math.abs(push.z) < 0.01, `${push.x.toFixed(2)}, ${push.z.toFixed(2)}`);
+    run(2);
+    const apart = Math.hypot(a.pos.x - b.pos.x, a.pos.z - b.pos.z), off = Math.hypot(c.pos.x - g.pos.x, c.pos.z - g.pos.z);
+    check('two mobs in one place are pushed apart, and one standing in the player out of them', apart > 0.85 && off > 0.7, `apart ${apart.toFixed(2)}, off the player ${off.toFixed(2)}`);
+    check('… and nothing is pushed when nothing stands in anything', em.pushOn(20.5, G, 20.5).x === 0);
 }
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`);

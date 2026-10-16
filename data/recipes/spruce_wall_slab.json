@@ -1,0 +1,14 @@
+{
+  "id": "spruce_wall_slab",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "spruce_wall_slab",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "spruce_planks",
+      "count": 1
+    }
+  ]
+}

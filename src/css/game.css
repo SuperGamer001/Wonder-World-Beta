@@ -894,6 +894,41 @@ kbd.pad { border-radius: 1vw; border-bottom-width: var(--line); background: var(
 }
 
 /* Playing, but the pointer is not the game's yet: what takes it. */
+/* Chat: the lines above the status bars, and the box to type in under them. */
+#chat {
+    position: absolute;
+    left: 1vw; bottom: 9.8vw;
+    width: 34vw;
+    display: flex; flex-direction: column; gap: 0.35vw;
+    pointer-events: none;
+    z-index: 130;
+}
+#chatLog { max-height: 15vw; overflow: hidden; }
+#chat.open #chatLog {
+    overflow-y: auto; pointer-events: auto;
+    background: rgba(26, 27, 30, 0.45);
+    border-radius: 0.45vw;
+    padding: 0.25vw;
+}
+.chatLine {
+    width: fit-content; max-width: 100%;
+    margin-top: 0.14vw;
+    padding: 0.12vw 0.55vw;
+    font-size: 0.98vw; line-height: 1.38;
+    color: #fff;
+    background: rgba(26, 27, 30, 0.62);
+    border-radius: 0.32vw;
+    overflow-wrap: anywhere;
+    transition: opacity 0.6s;
+}
+.chatLine strong { font-weight: 700; }
+.chatLine.sys { color: var(--gold); }
+.chatLine.old { opacity: 0; }
+#chat.open .chatLine.old { opacity: 1; }
+#chat.open .chatLine { background: none; }
+#chatBar { pointer-events: auto; }
+#chatBar input { background: rgba(26, 27, 30, 0.88); }
+
 #clickToPlay {
     position: absolute;
     left: 50%; top: 58%;
@@ -1062,19 +1097,24 @@ body.a11y-reduce .invGridSlot.inv-refuse { animation: none; border-color: var(--
     overflow: hidden;
 }
 #creativeInvFilter { width: 17vw; }
+#creativeInvTabs { margin: 1.1vw 1.2vw 0; align-self: flex-start; }
 #creativeInvGrid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.3vw;
     overflow-y: auto;
-    max-height: 30vw;
-    margin: 1.1vw 1.2vw 0.2vw;
+    max-height: 28vw;
+    margin: 0.7vw 1.2vw 0.2vw;
     padding: 0.5vw;
     background: var(--bg-2);
     border: var(--line) solid var(--edge-soft);
     border-radius: 0.5vw;
-    align-content: flex-start;
 }
+/* A shelf: its name, and what is on it. */
+.creativeShelfName {
+    font-size: 0.95vw; font-weight: 700; color: var(--text-soft);
+    margin: 0.7vw 0 0.3vw; padding-left: 0.55vw;
+    border-left: 0.22vw solid var(--gold);
+}
+.creativeShelfName:first-child { margin-top: 0.1vw; }
+.creativeShelf { display: flex; flex-wrap: wrap; gap: 0.3vw; align-content: flex-start; }
 
 #craftingContainer { display: flex; gap: 1.2vw; padding: 1.1vw 1.2vw; min-height: 22vw; max-height: 34vw; }
 #recipeList {
@@ -1282,7 +1322,43 @@ body.usingPad .padOnly { display: block; }
 .playerNote { color: var(--text-soft); font-size: 0.95vw; }
 /* Online, the host's list has a Remove button on each other player's row. */
 .playerRow .playerNote { margin-left: auto; }
-.playerKick { margin-left: 1vw; }
+.playerKick, .playerOp { margin-left: 0.6vw; }
+.playerOp.on { color: var(--gold); }
+/* The number after the name of the second player of that name: quieter than the name. */
+.dupTag { color: #9a9ca2; font-weight: 400; }
+.settingsToggle.cannot { opacity: 0.45; pointer-events: none; }
+
+/* "Press Start to play": a controller nobody is using has been pressed. */
+#joinPrompt {
+    position: fixed;
+    left: 50%; top: 9vw;
+    transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 0.3vw;
+    padding: 0.8vw 1.6vw;
+    font-size: 1.25vw;
+    border-color: var(--gold-deep);
+    background: rgba(26, 27, 30, 0.9);
+    z-index: 900;
+    pointer-events: none;
+}
+#joinPrompt.hidden { display: none; }
+#joinPromptTitle { color: var(--gold); font-weight: 700; font-size: 1vw; letter-spacing: 0.06vw; text-transform: uppercase; }
+#joinPrompt small { font-size: 0.85vw; font-weight: 400; color: var(--text-soft); }
+
+/* Error reports: one box each, the newest on top. */
+.reportsBody { font-size: 0.95vw; }
+.reportBox { background: var(--bg-2); border-radius: var(--radius, 0.5vw); padding: 0.7vw 1vw; border-left: 0.25vw solid var(--edge); }
+.reportBox.crash { border-left-color: var(--red, #d9534f); }
+.reportHead { color: var(--text-soft); font-size: 0.85vw; margin-bottom: 0.25vw; }
+.reportMessage { font-weight: 600; overflow-wrap: anywhere; }
+.reportBox details { margin-top: 0.35vw; }
+.reportBox summary { cursor: pointer; color: var(--text-soft); font-size: 0.85vw; }
+.reportBox pre {
+    margin: 0.35vw 0 0; padding: 0.5vw 0.7vw; max-height: 14vw; overflow: auto;
+    background: rgba(0, 0, 0, 0.28); border-radius: 0.35vw;
+    font-family: ui-monospace, Consolas, monospace; font-size: 0.8vw; line-height: 1.4;
+    white-space: pre-wrap; overflow-wrap: anywhere;
+}
 #PlayersScreen .settingsSectionTitle, #PlayersScreen .settingsRow { align-self: stretch; }
 .lanAddress {
     display: inline-block; margin-top: 0.3vw; padding: 0.15vw 0.6vw;
@@ -1359,19 +1435,26 @@ body.a11y-reduce #menuCanvas { transition: none; }
 .pauseGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45vw; width: 100%; margin: 0.5vw 0; }
 .pauseGrid .menuButton { min-width: 9.5vw; margin: 0; }
 
-/* Release notes: a long list, scrolled inside its panel. */
+/* Release notes: a long list, scrolled inside its panel — a box a version. */
 .releaseNotesPanel { width: 52vw; max-width: 92vw; }
 .releaseNotesBody {
     width: 100%; max-height: 56vh; overflow-y: auto; text-align: left;
-    background: var(--bg-2); border-radius: var(--radius, 0.5vw);
-    padding: 0.9vw 1.3vw; margin: 0.5vw 0 0.9vw; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 0.7vw;
+    margin: 0.5vw 0 0.9vw; box-sizing: border-box;
     font-size: 1.02vw; line-height: 1.5;
 }
+.releaseNotesBox {
+    background: var(--bg-2); border-radius: var(--radius, 0.5vw);
+    padding: 0.9vw 1.3vw; box-sizing: border-box;
+}
+.releaseNotesBody h2 { font-size: 1.3vw; font-weight: 400; margin: 0 0 0.2vw; }
+.releaseNotesBody h2 strong { font-weight: 700; }
 .releaseNotesBody h3 {
     font-size: 1.15vw; font-weight: 700; margin: 1vw 0 0.35vw; padding-left: 0.7vw;
     border-left: 0.25vw solid var(--gold, #e0b24a);
 }
 .releaseNotesBody h3:first-child { margin-top: 0.1vw; }
+.releaseNotesBody h2 + h3 { margin-top: 0.6vw; }
 .releaseNotesBody ul { margin: 0; padding-left: 1.5vw; }
 .releaseNotesBody li { margin: 0.22vw 0; }
 .releaseNotesBody p { margin: 0.3vw 0; }
@@ -1384,3 +1467,46 @@ body.a11y-reduce #menuCanvas { transition: none; }
 }
 .creditRole { color: var(--text-soft); font-size: 1vw; letter-spacing: 0.08em; text-transform: uppercase; }
 .creditName { font-family: var(--font-head); font-weight: 600; font-size: 1.35vw; }
+
+/* ── The map ─────────────────────────────────────────────────────────────── */
+.mapPanel { width: 38vw; max-width: 92vw; }
+#mapCanvas {
+    display: block;
+    width: 34vw;
+    max-width: 78vh;
+    aspect-ratio: 1;
+    margin: 0.6vw auto;
+    border-radius: var(--radius, 0.4vw);
+    background: #20242b;
+    image-rendering: pixelated;
+}
+.mapPanel .popupButtons { align-items: center; }
+
+/* Asleep in bed: dimmed, and dark for a moment as the clock cuts forward */
+#sleepFade {
+    position: fixed;
+    inset: 0;
+    background: #05060a;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.6s ease;
+    z-index: 4;
+}
+#sleepFade.on { opacity: 0.94; }
+body.a11y-reduce #sleepFade { transition: none; }
+/* Lying in bed: the room dims while sleep comes */
+#sleepFade.drowsy { opacity: 0.45; transition: opacity 2.5s ease; }
+#sleepFade.drowsy.on { opacity: 0.94; transition: opacity 0.6s ease; }
+
+/* A screenshot was taken */
+#shotFlash {
+    position: fixed;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.35s ease;
+    z-index: 4;
+}
+#shotFlash.on { opacity: 0.55; transition: none; }
+body.a11y-reduce #shotFlash { display: none; }

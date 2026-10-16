@@ -1,0 +1,8 @@
+{
+  "id": "campfire",
+  "name": "Campfire",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Tools"
+}

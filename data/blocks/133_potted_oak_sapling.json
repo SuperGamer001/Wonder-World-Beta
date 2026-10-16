@@ -1,0 +1,41 @@
+{
+  "id": 133,
+  "name": "POTTED_OAK_SAPLING",
+  "terrainType": "solid",
+  "model": "pot",
+  "color": [
+    0.62,
+    0.36,
+    0.24
+  ],
+  "hardness": 0.1,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "stone",
+  "shape": {
+    "plant": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "Oak_Sapling.png",
+    "side": "Flower_Pot.png",
+    "bottom": "Dirt.png"
+  },
+  "drops": [
+    {
+      "itemId": "flower_pot",
+      "count": 1
+    },
+    {
+      "itemId": "oak_sapling",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unpot": "oak_sapling",
+    "to": "FLOWER_POT"
+  }
+}

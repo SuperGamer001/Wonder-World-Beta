@@ -1,0 +1,52 @@
+{
+  "id": 614,
+  "name": "YELLOW_BED",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "east",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.9,
+    0.78,
+    0.25
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "yellow_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Yellow.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    1,
+    0,
+    0
+  ],
+  "use": {
+    "sleep": true
+  },
+  "place": {
+    "mode": "bed",
+    "foot": {
+      "east": "YELLOW_BED",
+      "west": "YELLOW_BED_WEST",
+      "south": "YELLOW_BED_SOUTH",
+      "north": "YELLOW_BED_NORTH"
+    },
+    "head": {
+      "east": "YELLOW_BED_HEAD",
+      "west": "YELLOW_BED_HEAD_WEST",
+      "south": "YELLOW_BED_HEAD_SOUTH",
+      "north": "YELLOW_BED_HEAD_NORTH"
+    }
+  }
+}

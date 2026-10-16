@@ -1,0 +1,14 @@
+{
+  "id": "brick_slab",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "brick_slab",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "bricks",
+      "count": 1
+    }
+  ]
+}

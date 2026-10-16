@@ -1,0 +1,41 @@
+{
+  "id": 125,
+  "name": "POTTED_POPPY",
+  "terrainType": "solid",
+  "model": "pot",
+  "color": [
+    0.62,
+    0.36,
+    0.24
+  ],
+  "hardness": 0.1,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "stone",
+  "shape": {
+    "plant": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "Poppy.png",
+    "side": "Flower_Pot.png",
+    "bottom": "Dirt.png"
+  },
+  "drops": [
+    {
+      "itemId": "flower_pot",
+      "count": 1
+    },
+    {
+      "itemId": "poppy",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unpot": "poppy",
+    "to": "FLOWER_POT"
+  }
+}

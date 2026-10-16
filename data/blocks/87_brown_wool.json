@@ -1,0 +1,20 @@
+{
+  "id": 87,
+  "name": "BROWN_WOOL",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.31,
+    0.2
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "brown_wool",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Brown.png",
+  "flammable": 60,
+  "sound": "grass"
+}

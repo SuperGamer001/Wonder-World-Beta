@@ -1,0 +1,46 @@
+{
+  "id": 752,
+  "name": "PAINTING_WIDE_2_0_0_SOUTH",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "south",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting_wide",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_Wide_A.png",
+  "support": [
+    0,
+    0,
+    -1
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      1,
+      0,
+      0
+    ]
+  ],
+  "piece": "PAINTING_WIDE_2",
+  "use": {
+    "toggle": "PAINTING_WIDE_3_0_0_SOUTH"
+  },
+  "variant": true
+}

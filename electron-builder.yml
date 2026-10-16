@@ -23,6 +23,7 @@ asar: false
 files:
   - "**/*"
   - "!user${/*}"                 # local dev world saves — never ship these
+  - "!dist${/*}"                 # earlier builds: left out already when dist is the output, but not when another folder is
   - "!server/node_modules${/*}"  # stale duplicate; deps resolve from root node_modules
   - "!.github${/*}"
   - "!.claude${/*}"
@@ -76,18 +77,30 @@ nsis:
 mac:
   target:
     - target: dmg
-      arch: universal                   # runs on both Apple Silicon and Intel
-    # electron-updater can only apply a macOS update from a zip, never a dmg.
-    # Building it costs nothing and means macOS auto-update works the moment the
-    # app is signed (see MAC_AUTO_UPDATE_SIGNED in electron/main.js). Until then
-    # macOS falls back to the "download it yourself" notice.
-    - target: zip
-      arch: universal
+      arch: universal                   # one app for both Apple Silicon and Intel
+    # Only the dmg. A `zip` target is what electron-updater installs a macOS
+    # update from, and it can only do that for a signed app, which this is not
+    # (see MAC_AUTO_UPDATE_SIGNED in electron/main.js): put it back with signing.
+    # Until then macOS falls back to the "download it yourself" notice.
   icon: build/icon.png
   category: public.app-category.games
-  # No Apple Developer certificate in CI — ship an unsigned (ad-hoc) build.
-  # Set CSC_LINK / CSC_KEY_PASSWORD secrets and remove this to enable signing.
-  identity: null
+  # No Apple Developer certificate, so the app is signed ad hoc ("-"): a
+  # signature with no one behind it, which still seals every binary and file of
+  # the bundle as built. It was `null` — no signing at all — which shipped the
+  # app with Electron's own signatures left in it, broken by every file
+  # electron-builder changes (the name, the Info.plist of the app and of each of
+  # its helpers). Gatekeeper turns a downloaded app with a broken signature away
+  # as "damaged", with no way past it but the Terminal, and a Mac with Apple
+  # silicon runs no code without a valid one.
+  # With a whole signature a downloaded copy is only "from an unidentified
+  # developer", which System Settings → Privacy & Security → Open Anyway lets
+  # through. For a real signature set CSC_LINK / CSC_KEY_PASSWORD secrets and
+  # remove `identity` (and `hardenedRuntime`, which notarising needs on).
+  identity: "-"
+  # The hardened runtime only lets a process load code signed by its own team,
+  # and an ad-hoc signature has no team: Electron's own framework would be
+  # refused and the app could not start.
+  hardenedRuntime: false
 
 dmg:
   title: "Wonder World ${version}"
@@ -112,20 +125,26 @@ dmg:
 # beta.yml forever. To move beta players onto a stable release, keep publishing
 # a beta.yml that points at it.
 #
-# UPLOAD ALL OF THESE for each release, into the directory below:
-#   WonderWorld-${version}-x64.exe
-#   WonderWorld-${version}-x64.exe.blockmap   <- do not skip this
-#   beta.yml                                  (or latest.yml on a stable release)
-#   WonderWorld-${version}-universal-mac.zip  (macOS)
-#   beta-mac.yml                              (macOS)
+# The GitHub Release (.github/workflows/release.yml) carries:
+#   WonderWorld-${version}-Windows-x64.zip      the Windows installer, zipped
+#   WonderWorld-${version}-macOS-universal.zip  the macOS dmg, zipped
+#   WonderWorld-${version}-x64.exe.blockmap     for the Windows updater
+#   latest.yml / beta.yml                       for the Windows updater
+#
+# For Windows auto-update, UPLOAD ALL OF THESE into the directory below:
+#   WonderWorld-${version}-x64.exe             <- taken out of the Windows zip, as it is
+#   WonderWorld-${version}-x64.exe.blockmap    <- do not skip this
+#   beta.yml                                   (or latest.yml on a stable release)
+# The updater fetches the .exe itself, by the name and the sha512 in the feed
+# file — which are the .exe's, not the zip's.
 #
 # The .blockmap is what makes updates cheap: with it present the updater
 # downloads only the changed blocks of the installer instead of all ~110 MB.
 # Omitting it silently falls back to a full download every release.
 #
-# Then update wonderworld-app.json with the new version and links — that file
-# still drives the website's download buttons and the in-app fallback notice on
-# platforms that cannot auto-install.
+# Then update wonderworld-app.json with the new version and links (the zips)
+# — that file still drives the website's download buttons and the in-app
+# fallback notice on platforms that cannot auto-install, macOS among them.
 publish:
   provider: generic
   url: https://alex.planetkodiak.com/Interlinked-Creations/Library/src/installers/wonder-world/

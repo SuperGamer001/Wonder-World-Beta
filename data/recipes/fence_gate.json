@@ -1,0 +1,18 @@
+{
+  "id": "fence_gate",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "fence_gate",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stick",
+      "count": 4
+    },
+    {
+      "itemId": "wooden_planks",
+      "count": 2
+    }
+  ]
+}

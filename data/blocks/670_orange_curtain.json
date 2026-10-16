@@ -1,0 +1,39 @@
+{
+  "id": 670,
+  "name": "ORANGE_CURTAIN",
+  "terrainType": "solid",
+  "model": "curtain",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.86,
+    0.5,
+    0.16
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "orange_curtain",
+      "count": 1
+    }
+  ],
+  "texture": "Curtain_Orange.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "grass",
+  "flammable": 80,
+  "use": {
+    "toggle": "ORANGE_CURTAIN_OPEN"
+  },
+  "placement": {
+    "east": "ORANGE_CURTAIN",
+    "west": "ORANGE_CURTAIN_WEST",
+    "south": "ORANGE_CURTAIN_SOUTH",
+    "north": "ORANGE_CURTAIN_NORTH"
+  }
+}

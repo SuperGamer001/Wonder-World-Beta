@@ -82,6 +82,8 @@ add('mountains', peak, peak && vista(peak, 190, 30, 0.9, 0.02));
 // Views into the distance, where Far Terrain (--far) takes over from the chunks.
 {
     const s = geo.column(spawnXZ.x, spawnXZ.z);
+    // Up at the sky from over the trees, for the clouds (--weather, --clouds).
+    add('sky', { ...spawnXZ, top: s.top, biome: nameOf(s) }, { x: spawnXZ.x + 0.5, y: s.top + 30, z: spawnXZ.z + 0.5, yaw: 2.4, pitch: 0.42 });
     add('panorama', { ...spawnXZ, top: s.top, biome: nameOf(s) }, { x: spawnXZ.x + 0.5, y: s.top + 110, z: spawnXZ.z + 0.5, yaw: 2.4, pitch: -0.16 });
 }
 add('far-range', peak, peak && vista(peak, 620, 25, 2.6, 0.03));
@@ -177,6 +179,7 @@ await send('Page.enable');
 await send('Emulation.setFocusEmulationEnabled', { enabled: true }).catch(() => {});
 // A new data folder has no player yet, and the game would stop to ask for a
 // name (src/players.js). This run is not about that: say who is playing.
+process.env.WW_RELEASE_NOTES = 'none';      // no notes file: "What is New" does not come up over this run
 await fetch(`${base}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Tester' }) });
 await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: 'Tester' }) });
 await send('Page.navigate', { url: `${base}/game.html` });
@@ -208,7 +211,8 @@ const presets = {
     classic: { renderDistance: 8, farTerrain: 0,  fogStart: 0.82, shadows: 'off',    clouds: 'fast',  sky: 'simple', eyeAdaptation: 'off' },
 };
 await dispatch('applySettings', { ...presets[PRESET] ?? presets.normal, particles: 'medium', ...(FAR != null ? { farTerrain: Number(FAR) } : {}) });
-await dispatch('setAtmosphere', { hours: 11, weather: 'sunny', immediate: true, daylightCycle: false });
+await dispatch('setAtmosphere', { hours: Number(arg('hours', 11)), weather: arg('weather', 'sunny'), immediate: true, daylightCycle: false });
+if (arg('clouds', null)) await dispatch('applySettings', { clouds: arg('clouds', 'fast') });
 
 async function settle(label, limitMs = 60000) {
     const t0 = Date.now();
@@ -218,7 +222,8 @@ async function settle(label, limitMs = 60000) {
         s = await evalJs('window.__wwDebug()').catch(() => null);
         // Far terrain done too: every tile of the selection built and on screen.
         const farDone = !s?.far || s.far.extra === 0 || (s.far.inflight === 0 && s.far.shown === s.far.wanted);
-        if (s && s.pending === 0 && s.queued === 0 && farDone) { if (++quiet >= 3) break; } else quiet = 0;
+        // (Chunks there at all: a world that is slow to start has nothing pending yet, and nothing loaded either.)
+        if (s && s.chunks > 0 && s.pending === 0 && s.queued === 0 && farDone) { if (++quiet >= 3) break; } else quiet = 0;
     }
     return { ms: Date.now() - t0, s };
 }
@@ -375,6 +380,22 @@ for (const v of todo) {
             return 1;
         })()`);
         await sleep(2500);
+    }
+    // Asked for again now that the view has loaded: the world's own clock and
+    // weather start when the world has, which is after the first asking.
+    if (arg('weather', null) || arg('hours', null)) {
+        await dispatch('setAtmosphere', { hours: Number(arg('hours', 11)), weather: arg('weather', 'sunny'), immediate: true, daylightCycle: false });
+        await sleep(1500);
+    }
+    // --eval "<js>": something to do in the page before the picture is taken (open a menu, stand a mob there).
+    // --eval-file <path>: the same, from a file.
+    const evalSrc = arg('eval-file', null) ? fs.readFileSync(arg('eval-file', ''), 'utf8') : arg('eval', null);
+    if (evalSrc) {
+        const said = await evalJs(`(async () => { ${evalSrc} })().then(v => typeof v === 'string' ? v : JSON.stringify(v ?? null))`, true).catch(e => 'threw: ' + e.message);
+        if (said && said !== 'null') console.log('  eval:', String(said).slice(0, 6000));
+        // A script of checks (test/decor.live.js) says how it went on its last line.
+        if (/d+ FAILED$|^threw: /.test(String(said).trim())) process.exitCode = 1;
+        await sleep(1500);
     }
     const { data } = await send('Page.captureScreenshot', { format: 'png' });
     const file = path.join(OUT, `${SEED}-${v.name}.png`);

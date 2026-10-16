@@ -1,0 +1,26 @@
+{
+  "id": 350,
+  "name": "POLISHED_GRANITE_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.42,
+    0.36
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Granite.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "polished_granite_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "POLISHED_GRANITE_SLAB",
+    "top": "POLISHED_GRANITE_SLAB_TOP",
+    "full": "POLISHED_GRANITE"
+  }
+}

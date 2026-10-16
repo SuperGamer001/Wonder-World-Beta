@@ -1,0 +1,14 @@
+{
+  "id": "sandstone_stairs",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "sandstone_stairs",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "sandstone",
+      "count": 3
+    }
+  ]
+}

@@ -22,6 +22,10 @@
  *   PUT  /api/worlds/:id/pending-edits   … all of them, replacing what was kept
  *   GET  /api/worlds/:id/containers      what is in the world's chests
  *   PUT  /api/worlds/:id/containers      … all of them, replacing what was kept
+ *   GET  /api/worlds/:id/mobs            the world's mobs, as they were when it was last saved
+ *   PUT  /api/worlds/:id/mobs            … all of them, replacing what was kept
+ *   GET  /api/reports             what went wrong lately (errors and crashes), newest first
+ *   POST /api/reports             … one more;  DELETE … forget them
  *   GET  /api/online/config       where the online token service is (see *Online*)
  *   POST /api/online/auth/host | token, GET …/rooms   … which is this server, on a developer's machine (WW_ABLY_KEY)
  *
@@ -401,7 +405,7 @@ app.use((req, res, next) => {
     const world = `/api/worlds/${lan.worldId}`, get = req.method === 'GET', put = req.method === 'PUT';
     const ok =
         (get && (p === '/' || GUEST_FILES.test(p) || GUEST_DIRS.test(p))) ||
-        (get && ['/api/data/manifest', '/api/lan/info', '/api/settings', '/api/update-status', '/api/online/config', world, `${world}/far-edits`].includes(p)) ||
+        (get && ['/api/data/manifest', '/api/data/bundle', '/api/lan/info', '/api/settings', '/api/update-status', '/api/online/config', world, `${world}/far-edits`].includes(p)) ||
         ((get || put) && p === `${world}/player-state` && typeof req.query.player === 'string' && req.query.player.length > 0) ||
         (put && p === `${world}/far-edits`);
     if (!ok) return res.status(403).json({ error: 'Not for guests' });
@@ -529,7 +533,7 @@ const IMPORT_MAX     = 2 * 1024 * 1024 * 1024 - 1;     // bytes: what one Buffer
 const IMPORT_FILES   = 20000;
 // What a world's folder holds, and so what an import may bring: its own files,
 // one player file each, and regions by their coordinates.
-const WORLD_FILE = /^(world\.json|player\.json|screenshot\.jpg|chunk-index\.json|far-edits\.json|pending-edits\.json|containers\.json|players\/[A-Za-z0-9_-]{1,80}\.json|regions\/-?\d{1,7},-?\d{1,7}\.wwr)$/;
+const WORLD_FILE = /^(world\.json|player\.json|screenshot\.jpg|chunk-index\.json|far-edits\.json|pending-edits\.json|containers\.json|mobs\.json|players\/[A-Za-z0-9_-]{1,80}\.json|regions\/-?\d{1,7},-?\d{1,7}\.wwr)$/;
 
 function worldFiles(dir, rel = '') {
     const out = [];
@@ -729,13 +733,22 @@ app.get('/api/worlds/:id/player-state', (req, res) => {
 app.put('/api/worlds/:id/settings', (req, res) => {
     const meta = readMeta(req.params.id);
     if (!meta) return res.status(404).json({ error: 'Not found' });
-    const { gameMode, difficulty, terrainStyle, daylightCycle, weather } = req.body ?? {};
+    const { gameMode, difficulty, terrainStyle, daylightCycle, weather, ops, pvp } = req.body ?? {};
     if (gameMode && ['SURVIVAL','CREATIVE','SPECTATOR'].includes(gameMode)) meta.gameMode = gameMode;
     if (difficulty && ['PEACEFUL','EASY','NORMAL','HARD'].includes(difficulty)) meta.difficulty = difficulty;
     // Time and weather. `weather` is 'dynamic' or a weather type id held fixed;
     // the client ignores ids it does not know, so only the shape is checked here.
     if (typeof daylightCycle === 'boolean') meta.daylightCycle = daylightCycle;
     if (typeof weather === 'string' && /^[a-z_]{2,32}$/.test(weather)) meta.weather = weather;
+    // Who has operator status besides the owner: each by the key of who they
+    // are (world.js: *Who a player is*), with the name they had when it was given.
+    if (Array.isArray(ops)) {
+        const seen = new Set();
+        meta.ops = ops.filter(o => o && typeof o.key === 'string' && /^[A-Za-z0-9|:_-]{4,120}$/.test(o.key) && !seen.has(o.key) && seen.add(o.key))
+            .slice(0, 64).map(o => ({ key: o.key, name: String(o.name ?? '').replace(/[^\p{L}\p{N} ._'#-]/gu, '').slice(0, 24) }));
+    }
+    // Whether players can hurt each other.
+    if (typeof pvp === 'boolean') meta.pvp = pvp;
     // Hidden — no UI sends this. Takes effect the next time the world loads.
     if (TERRAIN_STYLES.includes(terrainStyle)) meta.terrainStyle = terrainStyle;
     writeMeta(req.params.id, meta);
@@ -835,6 +848,41 @@ app.put('/api/worlds/:id/containers', (req, res) => {
     res.json({ ok: true });
 });
 
+// The world's mobs: a list of [type, x, y, z, yaw, health, look] — those that
+// were asleep where the players had left them, and those up and about when
+// the world was saved (EntityManager: *Mobs that are left behind*). The
+// owner's game sends the whole list with every save; it replaces what was
+// kept. Guests do not come here.
+const MAX_MOBS_KEPT = 20000;
+function mobsPath(id) { return path.join(worldDir(id), 'mobs.json'); }
+
+app.get('/api/worlds/:id/mobs', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    try { res.json(JSON.parse(fs.readFileSync(mobsPath(req.params.id), 'utf8'))); }
+    catch { res.json([]); }
+});
+
+app.put('/api/worlds/:id/mobs', (req, res) => {
+    if (!readMeta(req.params.id)) return res.status(404).json({ error: 'Not found' });
+    const out = [];
+    for (const m of Array.isArray(req.body) ? req.body : []) {
+        if (out.length >= MAX_MOBS_KEPT) break;
+        if (!Array.isArray(m) || typeof m[0] !== 'string' || !/^[A-Za-z0-9_]{1,48}$/.test(m[0])) continue;
+        if (![m[1], m[2], m[3], m[4], m[5]].every(Number.isFinite)) continue;
+        // A look is a choice (a small whole number) for each of a model's variants.
+        let look = null;
+        if (m[6] && typeof m[6] === 'object' && !Array.isArray(m[6])) {
+            look = {};
+            for (const [k, v] of Object.entries(m[6]).slice(0, 24)) if (/^[A-Za-z0-9_]{1,24}$/.test(k) && Number.isInteger(v) && v >= 0 && v < 1000) look[k] = v;
+        }
+        out.push([m[0], m[1], m[2], m[3], m[4], m[5], look]);
+    }
+    const file = mobsPath(req.params.id);
+    if (!out.length) { try { fs.rmSync(file, { force: true }); } catch { /* nothing kept */ } }
+    else fs.writeFileSync(file, JSON.stringify(out));
+    res.json({ ok: true });
+});
+
 // ── Online ────────────────────────────────────────────────────────────────────
 // Playing over the internet goes through Ably (see *Online* in CLAUDE.md), not
 // through this server. All this server has to do with it is tell the page
@@ -901,11 +949,16 @@ app.put('/api/settings', (req, res) => {
     res.json({ ok: true });
 });
 
-// The names used on this machine, each with the look that goes with it
-// (settings.json `profiles`: [{ name, skin }]).
+// The names used on this machine, each with the look that goes with it — and
+// a code of its own, which nobody is shown (settings.json `profiles`:
+// [{ name, skin, code }]). The code is who a player is to a world they are a
+// guest in: their place there, and whether they are an operator, go by it and
+// not by what they are called.
+const PROFILE_CODE = /^[0-9a-f]{16,32}$/;
 function writeProfiles(change) {
     const cur = readSettings();
     cur.profiles = change(Array.isArray(cur.profiles) ? cur.profiles.filter(p => p && typeof p.name === 'string') : []);
+    for (const p of cur.profiles) if (!PROFILE_CODE.test(p.code ?? '')) p.code = crypto.randomBytes(8).toString('hex');
     fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(cur, null, 2));
     return cur.profiles;
@@ -914,14 +967,59 @@ app.post('/api/profiles', (req, res) => {
     const name = String(req.body?.name ?? '').replace(/[^A-Za-z0-9 ._'-]/g, '').trim().slice(0, 16);
     if (!name) return res.status(400).json({ error: 'A name is needed' });
     const skin = req.body?.skin && typeof req.body.skin === 'object' ? req.body.skin : null;
+    // A name the page made up a code for before it could ask (it keeps that one).
+    const code = PROFILE_CODE.test(req.body?.code ?? '') ? req.body.code : null;
     res.json(writeProfiles((list) => {
         const p = list.find(q => q.name === name);
-        if (p) { if (skin) p.skin = skin; } else if (list.length < 32) list.push({ name, skin });
+        if (p) { if (skin) p.skin = skin; if (code && !PROFILE_CODE.test(p.code ?? '')) p.code = code; }
+        else if (list.length < 32) list.push({ name, skin, code });
         return list;
     }));
 });
 app.delete('/api/profiles/:name', (req, res) => {
     res.json(writeProfiles((list) => list.filter(p => p.name !== req.params.name)));
+});
+
+// ── What went wrong ───────────────────────────────────────────────────────────
+// Errors and crashes, kept so that there is something to go on afterwards
+// (user/reports.json, the last REPORTS_KEPT of them, newest first). The page
+// sends what it catches — an error nobody caught, a promise nobody caught, a
+// worker or the graphics giving up (main.js: *REPORTS*) — and the launcher
+// what it sees from outside: the page's process dying, the app's own crash.
+// One that is the same as the last is counted, not added again. The player
+// reads them under Settings → Game. Nothing is sent anywhere.
+const REPORTS_PATH = path.join(DATA_ROOT, 'user', 'reports.json');
+const REPORTS_KEPT = 60;
+function readReports() {
+    try { const r = JSON.parse(fs.readFileSync(REPORTS_PATH, 'utf8')); return Array.isArray(r) ? r : []; }
+    catch { return []; }
+}
+const reportText = (v, max) => String(v ?? '').replace(/[\u0000-\u0008\u000b-\u001f]/g, ' ').slice(0, max);
+/** Keep a report: { kind, message, stack, where, version, at }. Never throws. */
+export function addReport(report) {
+    try {
+        const r = {
+            at: Number.isFinite(report?.at) ? report.at : Date.now(),
+            kind: ['error', 'crash', 'graphics', 'worker', 'app'].includes(report?.kind) ? report.kind : 'error',
+            message: reportText(report?.message, 600) || 'Something went wrong',
+            stack: reportText(report?.stack, 6000),
+            where: reportText(report?.where, 200),
+            version: reportText(report?.version, 40) || _appVersion,
+            count: 1,
+        };
+        const list = readReports(), last = list[0];
+        if (last && last.kind === r.kind && last.message === r.message && last.stack === r.stack) {
+            last.count = Math.min(9999, (last.count | 0) + 1); last.at = r.at; last.where = r.where;
+        } else list.unshift(r);
+        fs.mkdirSync(path.dirname(REPORTS_PATH), { recursive: true });
+        fs.writeFileSync(REPORTS_PATH, JSON.stringify(list.slice(0, REPORTS_KEPT), null, 1));
+    } catch { /* a report that cannot be kept is one less thing to go wrong */ }
+}
+app.get('/api/reports', (_req, res) => res.json(readReports()));
+app.post('/api/reports', (req, res) => { addReport(req.body); res.json({ ok: true }); });
+app.delete('/api/reports', (_req, res) => {
+    try { fs.rmSync(REPORTS_PATH, { force: true }); } catch { /* nothing kept */ }
+    res.json({ ok: true });
 });
 
 // ── Update status bridge ──────────────────────────────────────────────────────
@@ -972,13 +1070,55 @@ app.get('/api/update-status', (_req, res) => res.json(_updateState));
 
 // What this version added and fixed: ReleaseNotes.txt, beside the game, as it
 // is written (a little Markdown: "# title", "### section", "- item",
-// **bold**). `notesVersion` is the version its first line names, so the game
-// can tell notes that are this version's from ones left over from the last.
+// **bold**; a line of "---" between one version's notes and the next, newest
+// first — the game splits them). `notesVersion` is the version its first line
+// names, so the game can tell notes that are this version's from ones left
+// over from the last. WW_RELEASE_NOTES names another file, for a test.
 app.get('/api/release-notes', (_req, res) => {
     let text = '';
-    try { text = fs.readFileSync(path.join(ROOT, 'ReleaseNotes.txt'), 'utf8'); } catch { /* none shipped */ }
+    try { text = fs.readFileSync(process.env.WW_RELEASE_NOTES || path.join(ROOT, 'ReleaseNotes.txt'), 'utf8'); } catch { /* none shipped */ }
     const named = text.split(/\r?\n/, 1)[0].match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/);
     res.json({ version: _appVersion, notesVersion: named ? named[0] : null, text });
+});
+
+// ── Screenshots ──────────────────────────────────────────────────────────────
+// F2 in a game (or Screenshot in the pause menu) sends the frame here as a PNG,
+// to keep in user/screenshots/ under the data directory. The desktop app can
+// open that folder (`setShellHandlers`: the launcher's shell); a page with no
+// launcher behind it is told where the folder is.
+const SCREENSHOTS_DIR = path.join(DATA_ROOT, 'user', 'screenshots');
+let _openFolder = null;
+
+/** Called by the launcher: how to show a folder on this machine. */
+export function setShellHandlers({ openFolder }) { _openFolder = openFolder ?? null; }
+
+app.post('/api/screenshots', express.raw({ type: 'image/png', limit: '96mb' }), (req, res) => {
+    const png = req.body;
+    if (!Buffer.isBuffer(png) || png.length < 8 || png.readUInt32BE(0) !== 0x89504e47) return res.status(400).json({ error: 'Not a PNG' });
+    // A name of the world's and the time's, in letters a file name can have.
+    const world = String(req.query.world ?? '').replace(/[^\w\- ]+/g, '').trim().slice(0, 40) || 'Wonder World';
+    const d = new Date(), two = (n) => String(n).padStart(2, '0');
+    const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}.${two(d.getMinutes())}.${two(d.getSeconds())}`;
+    try {
+        fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+        let file = `${world} ${stamp}.png`, n = 2;
+        while (fs.existsSync(path.join(SCREENSHOTS_DIR, file))) file = `${world} ${stamp} (${n++}).png`;
+        fs.writeFileSync(path.join(SCREENSHOTS_DIR, file), png);
+        res.json({ ok: true, file, dir: SCREENSHOTS_DIR, canOpen: !!_openFolder });
+    } catch (err) {
+        res.status(500).json({ error: String(err?.message ?? err) });
+    }
+});
+
+app.get('/api/screenshots', (_req, res) => res.json({ dir: SCREENSHOTS_DIR, canOpen: !!_openFolder }));
+
+app.post('/api/screenshots/open', async (_req, res) => {
+    if (!_openFolder) return res.status(409).json({ error: 'No way to open a folder here', dir: SCREENSHOTS_DIR });
+    try {
+        fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+        await _openFolder(SCREENSHOTS_DIR);
+        res.json({ ok: true });
+    } catch (err) { res.status(500).json({ error: String(err?.message ?? err) }); }
 });
 
 app.post('/api/update-check', async (_req, res) => {
@@ -1026,6 +1166,26 @@ app.get('/api/data/manifest', (_req, res) => {
     res.json(manifest);
 });
 
+// Every definition at once — blocks, items, biomes, entities, recipes, terrain —
+// in the manifest's order, each file's JSON as it is (one that does not parse
+// is left out). There are well over a thousand files, a file a block, and the
+// game asked for them one by one; a browser asks a server for six at a time.
+// Read afresh each time: the tools write these files while the server runs.
+app.get('/api/data/bundle', (_req, res) => {
+    const dataDir = path.join(ROOT, 'data');
+    const out = {};
+    for (const cat of ['blocks', 'items', 'biomes', 'entities', 'recipes', 'terrain']) {
+        const dir = path.join(dataDir, cat);
+        out[cat] = [];
+        if (!fs.existsSync(dir)) continue;
+        for (const f of fs.readdirSync(dir)) {
+            if (!f.endsWith('.json')) continue;
+            try { out[cat].push(JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))); } catch { /* skip a bad file */ }
+        }
+    }
+    res.json(out);
+});
+
 // ── Multiplayer and the network ───────────────────────────────────────────────
 
 const hub = new MultiplayerHub((id) => !!readMeta(id));
@@ -1057,6 +1217,8 @@ function lanStatus() {
         open, worldId: lan.worldId, port: open ? lan.port : 0,
         addresses: open ? lanAddresses().map(a => `${a.address}:${lan.port}`) : [],
         players: open ? hub.count(lan.worldId) : 0,
+        // … and how many of them came in from the network (while any is here, the world stays open to it).
+        guests: open ? hub.count(lan.worldId, (ws) => !!ws.lan) : 0,
     };
 }
 

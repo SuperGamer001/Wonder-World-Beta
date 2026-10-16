@@ -1,0 +1,46 @@
+{
+  "id": 764,
+  "name": "PAINTING_WIDE_4_0_0",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "east",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting_wide",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_Wide_B.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      0,
+      0,
+      -1
+    ]
+  ],
+  "piece": "PAINTING_WIDE_4",
+  "use": {
+    "toggle": "PAINTING_WIDE"
+  },
+  "variant": true
+}

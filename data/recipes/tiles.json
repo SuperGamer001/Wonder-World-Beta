@@ -1,0 +1,18 @@
+{
+  "id": "tiles",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "tiles",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "polished_diorite",
+      "count": 2
+    },
+    {
+      "itemId": "polished_granite",
+      "count": 2
+    }
+  ]
+}

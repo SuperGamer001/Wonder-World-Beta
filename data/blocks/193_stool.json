@@ -1,0 +1,25 @@
+{
+  "id": 193,
+  "name": "STOOL",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "stool",
+  "drops": [
+    {
+      "itemId": "stool",
+      "count": 1
+    }
+  ],
+  "texture": "Wooden_Planks.png",
+  "use": {
+    "sit": true
+  }
+}

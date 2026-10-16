@@ -1,0 +1,24 @@
+{
+  "id": 319,
+  "name": "BRICK_SLAB_TOP",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.27,
+    0.22
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Bricks.png",
+  "model": "slab",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "brick_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

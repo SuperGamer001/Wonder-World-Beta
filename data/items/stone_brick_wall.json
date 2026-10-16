@@ -1,0 +1,8 @@
+{
+  "id": "stone_brick_wall",
+  "name": "Stone Brick Wall",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

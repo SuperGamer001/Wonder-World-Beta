@@ -1,0 +1,8 @@
+{
+  "id": "blue_curtain",
+  "name": "Blue Curtain",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

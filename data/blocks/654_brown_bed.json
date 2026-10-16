@@ -1,0 +1,52 @@
+{
+  "id": 654,
+  "name": "BROWN_BED",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "east",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.45,
+    0.31,
+    0.2
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "brown_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Brown.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    1,
+    0,
+    0
+  ],
+  "use": {
+    "sleep": true
+  },
+  "place": {
+    "mode": "bed",
+    "foot": {
+      "east": "BROWN_BED",
+      "west": "BROWN_BED_WEST",
+      "south": "BROWN_BED_SOUTH",
+      "north": "BROWN_BED_NORTH"
+    },
+    "head": {
+      "east": "BROWN_BED_HEAD",
+      "west": "BROWN_BED_HEAD_WEST",
+      "south": "BROWN_BED_HEAD_SOUTH",
+      "north": "BROWN_BED_HEAD_NORTH"
+    }
+  }
+}

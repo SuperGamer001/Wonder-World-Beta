@@ -1,0 +1,31 @@
+{
+  "id": 244,
+  "name": "PAINTING_1_SOUTH",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "south",
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_2.png",
+  "support": [
+    0,
+    0,
+    -1
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "use": {
+    "toggle": "PAINTING_2_SOUTH"
+  },
+  "variant": true
+}

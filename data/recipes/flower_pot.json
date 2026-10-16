@@ -1,0 +1,14 @@
+{
+  "id": "flower_pot",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "flower_pot",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "clay_ball",
+      "count": 3
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "birch_log",
+  "name": "Birch Log",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Natural",
+  "group": "log"
+}

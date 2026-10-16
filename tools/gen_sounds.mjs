@@ -449,6 +449,63 @@ function place(name, r) {
     return [out];
 }
 
+/**
+ * Doors and gates, opened and shut. What each is meant to be:
+ *   door_open   the latch lifting (a small, dull metal tick), then the hinges
+ *               turning — friction sticking and slipping, each slip setting
+ *               the door's wood ringing low: a short, soft creak, not a squeal
+ *   door_close  the door swinging to (a breath of air), the slab of it meeting
+ *               the frame — a hollow wooden knock, the deepest of these — and
+ *               the latch dropping into its catch just after
+ *   gate_open   a lighter thing: the bolt of a metal latch drawn, a little
+ *               creak of thinner wood
+ *   gate_close  the rails knocking against the post (higher and shorter than
+ *               a door) and the latch falling with a small clank
+ */
+const DOOR = [[118, 0.05, 1], [196, 0.042, 0.8], [310, 0.032, 0.55], [495, 0.022, 0.32], [790, 0.013, 0.16]];
+const GATE = [[240, 0.03, 1], [385, 0.024, 0.7], [610, 0.016, 0.45], [980, 0.01, 0.2]];
+
+/** Hinges turning: `rate` slips a second (from, to), each ringing what it turns in. */
+function creak(out, r, at, dur, rate0, rate1, modes, gain) {
+    let t = 0;
+    while (t < dur) {
+        const k = t / dur, env = Math.sin(Math.PI * k) ** 0.8;
+        ring(out, at + t, modes.map(([f, d, a]) => [f * r.range(0.97, 1.03), d, a]), gain * env * r.range(0.55, 1), r, 0.65);
+        t += 1 / (lerp(rate0, rate1, k) * r.range(0.8, 1.2));
+    }
+}
+/** A latch: a short knock of metal, dull, on a few notes of its own. */
+function latch(out, r, at, f, gain) {
+    ring(out, at, [[f, 0.006, 1], [f * 1.53, 0.0045, 0.55], [f * 2.31, 0.003, 0.3]], gain, r, 0.55);
+    hiss(out, r, at, 1500, 4200, 0.0008, 0.004, gain * 0.25);
+}
+function doorSound(kind, r) {
+    const out = zeros(1.0), k = r.range(0.94, 1.06);
+    const wood = (set, s = 1) => set.map(([f, d, a]) => [f * k * s, d, a]);
+    if (kind === 'door_open') {
+        latch(out, r, 0.004, 1650 * k, 0.32);
+        creak(out, r, 0.05, r.range(0.32, 0.45), r.range(48, 60), r.range(80, 105), wood(DOOR, 2.1), 0.075);
+        hiss(out, r, 0.08, 180, 900, 0.12, 0.12, 0.05);            // the air it moves
+    } else if (kind === 'door_close') {
+        hiss(out, r, 0.003, 160, 800, 0.06, 0.05, 0.08);
+        const at = 0.07;
+        body(out, r, at, 72 * k, 0.03, 1);                             // the slab of it, against the frame
+        ring(out, at, wood(DOOR), 0.85, r, 0.85);
+        latch(out, r, at + r.range(0.022, 0.035), 1450 * k, 0.4);
+        ring(out, at + 0.04, wood(DOOR, 1.04), 0.12, r, 0.85);        // a little rattle in the frame after
+    } else if (kind === 'gate_open') {
+        latch(out, r, 0.004, 1700 * k, 0.36);
+        latch(out, r, 0.02, 1550 * k, 0.2);
+        creak(out, r, 0.04, r.range(0.22, 0.3), r.range(60, 72), r.range(95, 120), wood(GATE, 1.5), 0.05);
+    } else {
+        body(out, r, 0.004, 105 * k, 0.018, 0.6);
+        ring(out, 0.004, wood(GATE), 0.75, r, 0.85);
+        latch(out, r, 0.018, 1800 * k, 0.45);
+        ring(out, 0.05, wood(GATE, 1.06), 0.14, r, 0.85);
+    }
+    return [out];
+}
+
 /** A bubble: a short note that rises as the bubble shrinks. */
 function bubble(out, at, f, dur, gain) {
     const n = secs(dur), o = Math.round(at * SR);
@@ -1160,6 +1217,9 @@ for (const g of Object.keys(GROUND)) {
     for (let i = 1; i <= 3; i++) emit('blocks', `${g}_hit_${i}`, (r) => hit(g, r), { level: 0.48 * k, top });
     for (let i = 1; i <= 2; i++) emit('blocks', `${g}_break_${i}`, (r) => breakUp(g, r), { level: 0.58 * k, top });
     for (let i = 1; i <= 2; i++) emit('blocks', `${g}_place_${i}`, (r) => place(g, r), { level: 0.48 * k, top });
+}
+for (const kind of ['door_open', 'door_close', 'gate_open', 'gate_close']) {
+    for (let i = 1; i <= 2; i++) emit('blocks', `${kind}_${i}`, (r) => doorSound(kind, r), { level: kind.endsWith('close') ? 0.5 : 0.4, top: 4500, air: 0.3, room: 0.35 });
 }
 for (let i = 1; i <= 2; i++) emit('blocks', `water_splash_${i}`, (r) => splash(r, true), { level: 0.6, top: 5000 });
 for (let i = 1; i <= 3; i++) emit('blocks', `water_swim_${i}`, (r) => splash(r, false), { level: 0.4, top: 4500 });

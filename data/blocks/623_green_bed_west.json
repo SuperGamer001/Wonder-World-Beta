@@ -1,0 +1,38 @@
+{
+  "id": 623,
+  "name": "GREEN_BED_WEST",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "west",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.36,
+    0.55,
+    0.24
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "green_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Green.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    -1,
+    0,
+    0
+  ],
+  "use": {
+    "sleep": true
+  },
+  "variant": true
+}

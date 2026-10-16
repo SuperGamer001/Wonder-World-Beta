@@ -1,0 +1,14 @@
+{
+  "id": "polished_diorite_stairs",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "polished_diorite_stairs",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "polished_diorite",
+      "count": 3
+    }
+  ]
+}

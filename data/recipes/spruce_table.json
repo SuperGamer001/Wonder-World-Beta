@@ -1,0 +1,18 @@
+{
+  "id": "spruce_table",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "spruce_table",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "spruce_planks",
+      "count": 3
+    },
+    {
+      "itemId": "stick",
+      "count": 4
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "id": 606,
+  "name": "ORANGE_BED",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "east",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.86,
+    0.5,
+    0.16
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "orange_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Orange.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    1,
+    0,
+    0
+  ],
+  "use": {
+    "sleep": true
+  },
+  "place": {
+    "mode": "bed",
+    "foot": {
+      "east": "ORANGE_BED",
+      "west": "ORANGE_BED_WEST",
+      "south": "ORANGE_BED_SOUTH",
+      "north": "ORANGE_BED_NORTH"
+    },
+    "head": {
+      "east": "ORANGE_BED_HEAD",
+      "west": "ORANGE_BED_HEAD_WEST",
+      "south": "ORANGE_BED_HEAD_SOUTH",
+      "north": "ORANGE_BED_HEAD_NORTH"
+    }
+  }
+}

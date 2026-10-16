@@ -1,0 +1,38 @@
+{
+  "id": 420,
+  "name": "BIRCH_STAIRS",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Birch_Planks.png",
+  "model": "stairs",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "birch_stairs",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "stairs",
+    "up": {
+      "east": "BIRCH_STAIRS",
+      "west": "BIRCH_STAIRS_WEST",
+      "south": "BIRCH_STAIRS_SOUTH",
+      "north": "BIRCH_STAIRS_NORTH"
+    },
+    "down": {
+      "east": "BIRCH_STAIRS_TOP",
+      "west": "BIRCH_STAIRS_TOP_WEST",
+      "south": "BIRCH_STAIRS_TOP_SOUTH",
+      "north": "BIRCH_STAIRS_TOP_NORTH"
+    }
+  }
+}

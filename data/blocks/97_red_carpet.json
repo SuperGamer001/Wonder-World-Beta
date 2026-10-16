@@ -1,0 +1,26 @@
+{
+  "id": 97,
+  "name": "RED_CARPET",
+  "terrainType": "solid",
+  "model": "carpet",
+  "color": [
+    0.72,
+    0.2,
+    0.18
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "red_carpet",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Red.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 60,
+  "sound": "grass"
+}

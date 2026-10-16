@@ -1,0 +1,18 @@
+{
+  "id": "orange_wool",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "orange_wool",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wool_block",
+      "count": 1
+    },
+    {
+      "itemId": "tulip",
+      "count": 1
+    }
+  ]
+}

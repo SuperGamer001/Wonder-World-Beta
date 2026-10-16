@@ -1,0 +1,8 @@
+{
+  "id": "bookshelf",
+  "name": "Bookshelf",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

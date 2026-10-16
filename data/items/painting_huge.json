@@ -1,0 +1,8 @@
+{
+  "id": "painting_huge",
+  "name": "Huge Painting",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

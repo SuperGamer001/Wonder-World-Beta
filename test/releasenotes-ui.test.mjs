@@ -17,14 +17,27 @@ const BROWSERS = [
 const BROWSER = BROWSERS.find(p => { try { return fs.existsSync(p); } catch { return false; } });
 if (!BROWSER) { console.error('No Chromium-family browser found. Set BROWSER=<path>.'); process.exit(2); }
 
-// What the notes file says, read the way the game is meant to show it.
-const NOTES = fs.readFileSync(new URL('../ReleaseNotes.txt', import.meta.url), 'utf8');
-const VERSION = NOTES.split(/\r?\n/, 1)[0].match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/)[0];
-const SECTIONS = NOTES.split(/\r?\n/).filter(l => /^#{2,}\s/.test(l.trim())).map(l => l.trim().replace(/^#+\s*/, ''));
-const ITEMS = NOTES.split(/\r?\n/).filter(l => /^[-*]\s/.test(l.trim())).length;
-process.env.WW_APP_VERSION = VERSION;          // this run is the version the notes are for
+// A notes file of the test's own (the game's may be half written between
+// releases): three versions with "---" between them, the oldest with nothing
+// under its title. The first is the version this run is.
+const VERSION = '9.9.9';
+const NOTES = [
+    '# **Wonder World 9.9.9** Release Notes:', '',
+    '### Added', '- One thing', '- Another **bold** thing', '  carried on', '',
+    '### Fixed', '- A bug', '',
+    '---', '',
+    '# **Wonder World 9.9.8** Release Notes:', '',
+    '### Older', '- Old news', '',
+    '---', '',
+    '# **Wonder World 9.9.7** Release Notes:', '',
+].join('\r\n');
+const SECTIONS = ['Added', 'Fixed'];           // this version's
+const ITEMS = 3, ALL_ITEMS = 4;
+process.env.WW_APP_VERSION = VERSION;
 
 process.env.WONDER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-notes-ui-'));
+process.env.WW_RELEASE_NOTES = path.join(process.env.WONDER_DATA_DIR, 'ReleaseNotes.txt');
+fs.writeFileSync(process.env.WW_RELEASE_NOTES, NOTES);
 const server = await import('../server/server.js');
 const { port, host } = await server.serverReady;
 const base = `http://${host}:${port}`;
@@ -112,9 +125,10 @@ const text = (id) => ev(`document.getElementById('${id}').textContent.replace(/\
 ck('the title is up', await until(titleUp, 30000));
 ck('a newer version than was played last shows what is new', await until(() => up('ReleaseNotesScreen'), 6000));
 ck('… as "What\'s New", naming the version', (await text('releaseNotesTitle')) === "What's New" && (await text('releaseNotesSub')).includes(VERSION), await text('releaseNotesSub'));
-const shape = await ev(`(() => { const b = document.getElementById('releaseNotesBody'); return { h: [...b.querySelectorAll('h3')].map(e => e.textContent), items: b.querySelectorAll('li').length, raw: /[#*]{2}|^- /m.test(b.textContent), title: /Release Notes:/.test(b.textContent) }; })()`);
-ck('… with the file\'s sections and items', shape.h.length === SECTIONS.length && shape.h.every((h, i) => h === SECTIONS[i]) && shape.items === ITEMS, `${shape.h.join(' | ')} — ${shape.items} items`);
-ck('… drawn, not as marks', !shape.raw && !shape.title);
+const shape = await ev(`(() => { const b = document.getElementById('releaseNotesBody'); return { h: [...b.querySelectorAll('h3')].map(e => e.textContent), items: b.querySelectorAll('li').length, boxes: b.querySelectorAll('.releaseNotesBox').length, raw: /[#*]{2}|^- |---/m.test(b.textContent), title: /Release Notes/.test(b.textContent), old: /Old news|9\\.9\\.8/.test(b.textContent), bold: b.querySelector('li strong')?.textContent, carried: /thing carried on/.test(b.textContent) }; })()`);
+ck('… with this version\'s sections and items, in one box', shape.boxes === 1 && shape.h.length === SECTIONS.length && shape.h.every((h, i) => h === SECTIONS[i]) && shape.items === ITEMS, `${shape.h.join(' | ')} — ${shape.items} items, ${shape.boxes} box(es)`);
+ck('… and nothing of an older version\'s', !shape.old);
+ck('… drawn, not as marks', !shape.raw && !shape.title && shape.bold === 'bold' && shape.carried);
 ck('… over the title, with Continue', (await titleUp()) && (await text('releaseNotesCloseBtn')) === 'Continue');
 await press('releaseNotesCloseBtn');
 ck('Continue puts it away', (await up('ReleaseNotesScreen')) === false);
@@ -143,8 +157,18 @@ ck('… but is recorded', await until(async () => (await settings()).lastVersion
 await press('settingReleaseNotes');
 ck('Settings opens the release notes', await until(() => up('ReleaseNotesScreen'), 4000));
 ck('… as "Release Notes", with Close', (await text('releaseNotesTitle')) === 'Release Notes' && (await text('releaseNotesCloseBtn')) === 'Close', await text('releaseNotesSub'));
-ck('… the same notes', (await ev(`document.querySelectorAll('#releaseNotesBody li').length`)) === ITEMS);
+const hist = await ev(`(() => { const b = document.getElementById('releaseNotesBody'); return { heads: [...b.querySelectorAll('.releaseNotesBox > h2')].map(e => e.textContent), boxes: [...b.querySelectorAll('.releaseNotesBox')].map(e => e.querySelectorAll('li').length), raw: /[#*]{2}|---|Notes:/.test(b.textContent) }; })()`);
+ck('… the whole history, a box a version, newest first', hist.boxes.length === 2 && hist.boxes[0] === ITEMS && hist.boxes[0] + hist.boxes[1] === ALL_ITEMS, hist.boxes.join(' + '));
+ck('… each under its version, a version with nothing written left out', hist.heads.length === 2 && hist.heads[0] === 'Wonder World 9.9.9 Release Notes' && hist.heads[1].includes('9.9.8') && !hist.raw, hist.heads.join(' | '));
 await press('releaseNotesCloseBtn');
+
+// ── This version's notes not written yet (only older ones in the file) ───────
+fs.writeFileSync(process.env.WW_RELEASE_NOTES, NOTES.replace('9.9.9', '9.9.10').replace(/### Added[\s\S]*?---/, '---'));
+await putSettings({ lastVersion: '0.0.9' });
+await reload();
+await sleep(1500);
+ck('a version whose notes are not written shows nothing by itself', (await up('ReleaseNotesScreen')) === false);
+fs.writeFileSync(process.env.WW_RELEASE_NOTES, NOTES);
 
 // ── Which version is newer ───────────────────────────────────────────────────
 const newer = (a, b) => ev(`versionNewer('${a}', '${b}')`);

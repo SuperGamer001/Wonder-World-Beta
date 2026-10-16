@@ -1,0 +1,18 @@
+{
+  "id": "purple_wool",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "purple_wool",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wool_block",
+      "count": 1
+    },
+    {
+      "itemId": "violet",
+      "count": 1
+    }
+  ]
+}

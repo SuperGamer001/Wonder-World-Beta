@@ -16,5 +16,18 @@
       "itemId": "anvil",
       "count": 1
     }
-  ]
+  ],
+  "model": "anvil",
+  "facing": "east",
+  "texture": "Anvil.png",
+  "sound": "stone",
+  "place": {
+    "mode": "look",
+    "names": {
+      "east": "ANVIL",
+      "west": "ANVIL_WEST",
+      "south": "ANVIL_SOUTH",
+      "north": "ANVIL_NORTH"
+    }
+  }
 }

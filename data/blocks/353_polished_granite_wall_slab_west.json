@@ -1,0 +1,22 @@
+{
+  "id": 353,
+  "name": "POLISHED_GRANITE_WALL_SLAB_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.42,
+    0.36
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Granite.png",
+  "model": "vslab",
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "polished_granite_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

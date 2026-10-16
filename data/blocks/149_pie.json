@@ -1,0 +1,40 @@
+{
+  "id": 149,
+  "name": "PIE",
+  "terrainType": "solid",
+  "model": "pie",
+  "shape": {
+    "stage": 0
+  },
+  "color": [
+    0.8,
+    0.55,
+    0.25
+  ],
+  "hardness": 0.2,
+  "drops": [
+    {
+      "itemId": "pie",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Pie_Top.png",
+    "side": "Pie_Side.png",
+    "bottom": "Pie_Inside.png"
+  },
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "grass",
+  "use": {
+    "eat": {
+      "hunger": 12,
+      "energy": 8,
+      "health": 4,
+      "to": "PIE_1"
+    }
+  }
+}

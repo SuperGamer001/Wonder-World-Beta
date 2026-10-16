@@ -325,6 +325,22 @@ export class PostFX {
         return { luminance: +Math.pow(2, f(px[0])).toFixed(5), exposure: +f(px[1]).toFixed(3) };
     }
 
+    /** Every pass's shader made ready in the background (world load): warm() then has nothing to wait for. */
+    compileAsync() {
+        if (!this.active) return Promise.resolve();
+        this._fit();
+        const r = this.renderer, prev = r.getRenderTarget(), material = this._quad.material, jobs = [];
+        for (const [m, target] of [[this._downFirst, this._mips[0]], [this._down, this._mips[1]], [this._meter, this._lum[0]],
+                                   [this._up, this._mips[0]], [this._composite, null]]) {
+            this._quad.material = m;
+            r.setRenderTarget(target);
+            jobs.push(r.compileAsync(this._scene, this._camera));
+        }
+        this._quad.material = material;
+        r.setRenderTarget(prev);
+        return Promise.all(jobs);
+    }
+
     /** Run every pass once while the loading screen is up, so no shader compiles mid-game. */
     warm() {
         if (!this.active) return;

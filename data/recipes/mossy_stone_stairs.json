@@ -1,0 +1,14 @@
+{
+  "id": "mossy_stone_stairs",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "mossy_stone_stairs",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "mossy_stone",
+      "count": 3
+    }
+  ]
+}

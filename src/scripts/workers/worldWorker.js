@@ -224,7 +224,7 @@ const _lightScan  = new Array(9).fill(false);   // may hold light sources (palet
  * — null unless one of the nine chunks' palettes has a light source, which
  * natural terrain never does.
  */
-function _light(voxelView, chunk, neighbors, diagonals, neighbourViews) {
+function _light(voxelView, chunk, neighbors, diagonals, neighbourViews, diagonalViews = null) {
     for (let k = 0; k < 9; k++) { _lightViews[k] = null; _lightScan[k] = false; }
     let anyLight = false;
     const put = (key, view, snap) => {
@@ -240,11 +240,12 @@ function _light(voxelView, chunk, neighbors, diagonals, neighbourViews) {
     for (const key of Object.keys(neighbourViews)) put(key, neighbourViews[key], neighbors[key]);
     for (const key of Object.keys(diagonals ?? {})) {
         const snap = diagonals[key], buf = _nbrVoxels[key];
-        if (snap && buf) put(key, _expand(snap, buf), snap);
+        if (snap && buf) put(key, diagonalViews?.[key] ?? _expand(snap, buf), snap);
     }
-    const light = computeSkylight(_lightViews, _lightMinY, _lightMaxY, mesher._solid);
+    // What stops light: every opaque cube, and the shapes that count as one (slabs, stairs).
+    const light = computeSkylight(_lightViews, _lightMinY, _lightMaxY, mesher._shade);
     light.block = anyLight
-        ? computeBlocklight(_lightViews, _lightMinY, _lightMaxY, mesher._solid, mesher._light, _lightScan)
+        ? computeBlocklight(_lightViews, _lightMinY, _lightMaxY, mesher._shade, mesher._light, _lightScan)
         : null;
     return light;
 }
@@ -264,7 +265,7 @@ function _expandNeighbours(neighbors) {
 /**
  * Where rain stops in each column, for the render thread's RainHeightmap
  * (Precipitation.js): the world Y of the top of the highest non-air block
- * (torches and lanterns do not count), or,
+ * (torches, plants and the like do not count; a slab stops it at its own top), or,
  * for a deformed Mesh voxel in a smooth world, of its surface at the column
  * centre. NaN for an empty column; x fastest.
  *
@@ -281,8 +282,9 @@ function _rainHeights(voxels, yRange) {
             let i = lx + yRange.max * CHUNK_SIZE + lz * SZ;
             for (let ly = yRange.max; ly >= yRange.min; ly--, i -= CHUNK_SIZE) {
                 const id = voxels[i];
-                if (id === 0 || mesher._model[id] === 1) continue;   // rain falls past a torch
-                h = WORLD_MIN_Y + ly + (smoother?.isMesh(id) ? smoother.topHeight(lx, ly, lz) : 1);
+                const top = mesher._rain[id];                        // sixteenths; 0: rain falls past (air, a torch)
+                if (top === 0) continue;
+                h = WORLD_MIN_Y + ly + (smoother?.isMesh(id) ? smoother.topHeight(lx, ly, lz) : top / 16);
                 break;
             }
             out[lx + lz * CHUNK_SIZE] = h;
@@ -330,7 +332,18 @@ function handleMesh({ taskId, cx, cz, chunk, neighbors, diagonals, corners }) {
 
     // Torches and lanterns are drawn from their models, if the palette has any.
     const models = mesher.hasModels(chunk.palette);
-    const geo   = mesher.meshGroup(voxelView, neighbourViews, ALL_FACES, yRange, smoothCtx, models);
+    // Flowing water slopes, and its corners read the chunks at this one's
+    // corners too: those are expanded here (the light wants them anyway).
+    const fluids = mesher.hasFluids(chunk.palette);
+    let diagonalViews = null;
+    if (fluids) {
+        diagonalViews = {};
+        for (const key of Object.keys(diagonals ?? {})) {
+            const snap = diagonals[key], buf = _nbrVoxels[key];
+            if (snap && buf) diagonalViews[key] = _expand(snap, buf);
+        }
+    }
+    const geo   = mesher.meshGroup(voxelView, neighbourViews, ALL_FACES, yRange, smoothCtx, models, fluids ? { fluids, diagonals: diagonalViews } : null);
     geo.rain    = _rainHeights(voxelView, yRange);
     // Which faces of each section open space joins, for the render thread to
     // work out what the camera cannot see (engine/Visibility.js). Sight passes
@@ -338,7 +351,7 @@ function handleMesh({ taskId, cx, cz, chunk, neighbors, diagonals, corners }) {
     // through the Mesh voxels that are cut to a shape too. The mesher knows
     // which cells those are from meshing the chunk.
     geo.conn    = connectivityOfRows(mesher.closedRows(), yRange.min, yRange.max);
-    const light = _light(voxelView, chunk, neighbors, diagonals, neighbourViews);
+    const light = _light(voxelView, chunk, neighbors, diagonals, neighbourViews, diagonalViews);
     self.postMessage(
         { type: 'chunkMeshed', taskId, cx, cz, geo, light },
         [..._geoTransferList(geo), ..._lightTransferList(light)],

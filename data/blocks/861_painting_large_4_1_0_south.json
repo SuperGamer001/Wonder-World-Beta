@@ -1,0 +1,51 @@
+{
+  "id": 861,
+  "name": "PAINTING_LARGE_4_1_0_SOUTH",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "south",
+  "shape": {
+    "tile": [
+      0.5,
+      0.5,
+      0
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [],
+  "texture": "Painting_Large_4.png",
+  "support": [
+    0,
+    0,
+    -1
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      -1,
+      0,
+      0
+    ],
+    [
+      -1,
+      1,
+      0
+    ],
+    [
+      0,
+      1,
+      0
+    ]
+  ],
+  "piece": "PAINTING_LARGE_4",
+  "use": {
+    "toggle": "PAINTING_LARGE_1_1_0_SOUTH"
+  },
+  "variant": true
+}

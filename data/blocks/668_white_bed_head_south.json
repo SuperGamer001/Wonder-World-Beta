@@ -1,0 +1,33 @@
+{
+  "id": 668,
+  "name": "WHITE_BED_HEAD_SOUTH",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "south",
+  "shape": {
+    "part": "head"
+  },
+  "color": [
+    0.94,
+    0.94,
+    0.92
+  ],
+  "hardness": 0.4,
+  "drops": [],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Block.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    0,
+    0,
+    -1
+  ],
+  "use": {
+    "sleep": true
+  },
+  "variant": true
+}

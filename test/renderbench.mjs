@@ -163,6 +163,7 @@ if (process.env.BENCH_UNMIN) {
 }
 // A new data folder has no player yet, and the game would stop to ask for a
 // name (src/players.js). This run is not about that: say who is playing.
+process.env.WW_RELEASE_NOTES = 'none';      // no notes file: "What is New" does not come up over this run
 await fetch(`${base}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Tester' }) });
 await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: 'Tester' }) });
 await send('Page.navigate', { url: `${base}/game.html` });
@@ -545,6 +546,51 @@ for (const w of want.length ? want.filter(w => w === 'mobs' || w.startsWith('mob
     await sleep(1500);
     results[w] = await measure(MEASURE_MS);
     report(w.replace(/^mobs/, 'normal-mobs'), results[w]);
+}
+
+// On foot: walking in a slow circle at the Normal preset, in Survival and first
+// person, with a dozen mobs about — the physics, the player's own body and
+// hands, and the mobs a player has, which a spectator does not. A made-up
+// controller does the walking (it needs no pointer lock). "walk+key=value"
+// changes a setting for it.
+for (const w of want.length ? want.filter(w => w === 'walk' || w.startsWith('walk+')) : ['walk']) {
+    const p = { ...PRESETS.normal };
+    for (const m of w.split('+').slice(1)) {
+        const [k, v] = m.split('=');
+        p[k] = v === undefined ? true : isNaN(+v) ? v : +v;
+    }
+    await dispatch('applySettings', p);
+    await dispatch('setGameMode', { gameMode: 'SURVIVAL' });
+    await evalJs(`(async () => {
+        const frames = (n) => new Promise(r => { let k = 0; const f = () => (++k >= n ? r() : requestAnimationFrame(f)); requestAnimationFrame(f); });
+        const pad = { connected: true, mapping: 'standard', id: 'Bench pad', index: 0, axes: [0, 0, 0, 0], buttons: Array.from({ length: 17 }, () => ({ pressed: false, value: 0 })) };
+        navigator.getGamepads = () => [pad];
+        window.__benchPad = pad;
+        window.dispatchEvent(new Event('gamepadconnected'));
+        // On the ground.
+        const q = window.me.position;
+        let y = Math.floor(q.y);
+        while (y > -120 && window.__wwBlockAt(q.x, y, q.z) === 0) y--;
+        window.me.position = { x: q.x, y: y + 1.05, z: q.z };
+        pad.axes[2] = 0.4; await frames(5); pad.axes[2] = 0; await frames(3);
+        if (typeof paused !== 'undefined' && paused) { pad.buttons[0].pressed = true; pad.buttons[0].value = 1; await frames(5); pad.buttons[0].pressed = false; pad.buttons[0].value = 0; await frames(5); }
+        if (window.__wwDebug().mobs < 12) {
+            const kinds = ['cow', 'pig', 'sheep', 'chicken', 'quiddle'];
+            for (let i = 0; i < 12; i++) {
+                const a = i / 12 * Math.PI * 2, r = 5 + (i % 3) * 4, x = q.x + Math.cos(a) * r, z = q.z + Math.sin(a) * r;
+                let h = y + 6;
+                while (h > -120 && window.__wwBlockAt(x, h, z) === 0) h--;
+                window.__wwSpawnMob(kinds[i % kinds.length], x, h + 1.1, z);
+            }
+        }
+        return 1;
+    })()`, true);
+    await settle();
+    await sleep(1000);
+    results[w] = await measure(MEASURE_MS, `(() => (t) => { const pad = window.__benchPad; if (pad) { pad.axes[1] = -1; pad.axes[2] = 0.22; } })()`);
+    await evalJs(`(() => { const pad = window.__benchPad; if (pad) pad.axes = [0, 0, 0, 0]; return 1; })()`);
+    report(w.replace(/^walk/, 'walk-normal'), results[w]);
+    await dispatch('setGameMode', { gameMode: 'SPECTATOR' });
 }
 
 // Stream new terrain in: fly along +X at 40 blocks/s at the Normal preset.

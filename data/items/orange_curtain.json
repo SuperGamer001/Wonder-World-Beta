@@ -1,0 +1,8 @@
+{
+  "id": "orange_curtain",
+  "name": "Orange Curtain",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

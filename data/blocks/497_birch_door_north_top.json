@@ -1,0 +1,32 @@
+{
+  "id": 497,
+  "name": "BIRCH_DOOR_NORTH_TOP",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "north",
+  "shape": {
+    "open": false,
+    "part": "upper"
+  },
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [],
+  "texture": "Birch_Door_Top.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "BIRCH_DOOR_NORTH_OPEN_TOP",
+    "sound": "door"
+  },
+  "variant": true
+}

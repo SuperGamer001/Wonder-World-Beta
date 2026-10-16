@@ -1,0 +1,33 @@
+{
+  "id": 483,
+  "name": "SPRUCE_DOOR_NORTH_RIGHT_OPEN_TOP",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "north",
+  "shape": {
+    "open": true,
+    "part": "upper",
+    "hinge": "right"
+  },
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [],
+  "texture": "Spruce_Door_Top.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "SPRUCE_DOOR_NORTH_RIGHT_TOP",
+    "sound": "door"
+  },
+  "variant": true
+}

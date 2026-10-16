@@ -1,0 +1,8 @@
+{
+  "id": "black_wool",
+  "name": "Black Wool",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

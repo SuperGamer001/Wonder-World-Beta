@@ -1,0 +1,30 @@
+{
+  "id": 205,
+  "name": "CABINET_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 2,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "cabinet",
+  "interactable": true,
+  "interactType": "chest",
+  "textures": {
+    "top": "Cabinet_Front.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "facing": "north",
+  "drops": [
+    {
+      "itemId": "cabinet",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

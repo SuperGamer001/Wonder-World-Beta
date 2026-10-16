@@ -1,0 +1,33 @@
+{
+  "id": 613,
+  "name": "ORANGE_BED_HEAD_NORTH",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "north",
+  "shape": {
+    "part": "head"
+  },
+  "color": [
+    0.86,
+    0.5,
+    0.16
+  ],
+  "hardness": 0.4,
+  "drops": [],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Orange.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    0,
+    0,
+    1
+  ],
+  "use": {
+    "sleep": true
+  },
+  "variant": true
+}

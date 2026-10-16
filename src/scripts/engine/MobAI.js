@@ -35,6 +35,8 @@ const TURN_RATE = 9;                             // rad/s the body turns toward 
 const ACCEL = 10;                                // 1/s: how quickly it reaches the speed it wants
 const SEARCHES_PER_FRAME = 2;                    // path searches, across all mobs
 const LOOK_RANGE = 8;                            // blocks: notices the player this close
+const SAFE_MARGIN = 0.5;                         // blocks past its own deepest drop before a fall hurts (_landed)
+const FALL_HURT = 1;                             // health a block past that
 const MELEE_RANGE = 1.9;
 
 const MOVING = 0, ARRIVED = 1, STUCK = 2;
@@ -378,6 +380,8 @@ export class MobAI {
     _physics(mob, dt) {
         const def = mob.def, pos = mob.pos, vel = mob.vel, nav = this.nav;
         const hw = (def.width ?? 0.8) / 2, h = def.height ?? 1.4;
+        // A door or a gate that has shut on it where it stands is walked out of (PlayerPhysics._shutOn).
+        this._shutOn(pos, hw, h);
         const cx = Math.floor(pos.x), cz = Math.floor(pos.z);
         const feetWet = nav.liquid(cx, Math.floor(pos.y + 0.15), cz);
         mob.inWater = feetWet;
@@ -399,23 +403,28 @@ export class MobAI {
         const wasGround = mob.onGround;
         mob.blocked = false;
 
-        // Never off an edge deeper than it would drop.
-        const sp = Math.hypot(vel.x, vel.z);
+        // Pushed by the bodies it stands in (EntityManager._push): a velocity
+        // on top of the one it walks with, for this step only.
+        let mx = vel.x + (mob.pushX || 0), mz = vel.z + (mob.pushZ || 0);
+        mob.pushX = mob.pushZ = 0;
+
+        // Never off an edge deeper than it would drop — walking, or pushed.
+        const sp = Math.hypot(mx, mz);
         if (wasGround && !feetWet && sp > 0.05) {
-            const ax = Math.floor(pos.x + vel.x / sp * (hw + 0.3)), az = Math.floor(pos.z + vel.z / sp * (hw + 0.3));
+            const ax = Math.floor(pos.x + mx / sp * (hw + 0.3)), az = Math.floor(pos.z + mz / sp * (hw + 0.3));
             if (nav.dropBelow(ax, Math.ceil(pos.y - 0.01), az, mob.body.maxDrop + 1) > mob.body.maxDrop) {
-                vel.x = 0; vel.z = 0; mob.blocked = true;
+                vel.x = 0; vel.z = 0; mx = 0; mz = 0; mob.blocked = true;
             }
         }
 
         // Horizontal, an axis at a time.
-        const nx = pos.x + vel.x * dt;
-        if (vel.x !== 0) {
+        const nx = pos.x + mx * dt;
+        if (mx !== 0) {
             if (!this._collides(nx, pos.y, pos.z, hw, h)) pos.x = nx;
             else if (!this._stepUp(mob, nx, pos.z, hw, h)) { vel.x = 0; mob.blocked = true; }
         }
-        const nz = pos.z + vel.z * dt;
-        if (vel.z !== 0) {
+        const nz = pos.z + mz * dt;
+        if (mz !== 0) {
             if (!this._collides(pos.x, pos.y, nz, hw, h)) pos.z = nz;
             else if (!this._stepUp(mob, pos.x, nz, hw, h)) { vel.z = 0; mob.blocked = true; }
         }
@@ -427,6 +436,7 @@ export class MobAI {
             mob.onGround = false;
         } else {
             mob.onGround = vel.y <= 0;
+            if (mob.onGround && !wasGround && !feetWet && vel.y < 0) this._landed(mob, -vel.y);
             vel.y = 0;
         }
 
@@ -443,11 +453,26 @@ export class MobAI {
         }
 
         mob.blockedT = mob.blocked && (mob.wantSpeed ?? 0) > 0.05 ? mob.blockedT + dt : 0;
+        this._through.length = 0;          // (it was this mob's: no other collision test goes by it)
     }
 
-    /** Smooth worlds: climb a grounded mob onto a slope (see PlayerPhysics._stepUp). */
+    /**
+     * It has come down onto the ground at `speed` (m/s). A fall from higher
+     * than it would ever drop on purpose hurts it: a point of health for every
+     * block more than that (`mob.fallHurt`, which EntityManager takes). Not a
+     * kind that says `"fallDamage": false` — a hen flutters down, a fish does
+     * not fall.
+     */
+    _landed(mob, speed) {
+        if (mob.def.fallDamage === false) return;
+        const fell = speed * speed / (2 * -MOB_GRAVITY);
+        const over = fell - (mob.body.maxDrop + SAFE_MARGIN);
+        if (over > 0) mob.fallHurt = (mob.fallHurt ?? 0) + over * FALL_HURT;
+    }
+
+    /** Climb a grounded mob onto a slope, a stair or a slab (see PlayerPhysics._stepUp). */
     _stepUp(mob, nx, nz, hw, h) {
-        if (!this.smooth || !mob.onGround) return false;
+        if (!mob.onGround) return false;
         const pos = mob.pos, top = pos.y + STEP_HEIGHT;
         if (this._collides(pos.x, top, pos.z, hw, h) || this._collides(nx, top, nz, hw, h)) return false;
         let lo = pos.y, hi = top;
@@ -460,21 +485,54 @@ export class MobAI {
     }
 
     _collides(x, y, z, hw, h) {
-        const smooth = this.smooth, world = this.world, reg = this.reg;
+        const smooth = this.smooth, world = this.world, reg = this.reg, shapes = reg.shapes ?? null;
         const x0 = x - hw, x1 = x + hw - 0.001;
         const y0 = y,      y1 = y + h  - 0.001;
         const z0 = z - hw, z1 = z + hw - 0.001;
+        const yLo = Math.floor(y0);
         for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
-            for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
+            // (From one block lower: a fence stands half a block above its own.)
+            for (let by = yLo - 1; by <= Math.floor(y1); by++) {
                 for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
                     const id = world.getBlock(bx, by, bz);
                     if (id === 0 || reg.isNoCollision(id)) continue;
+                    // A block that is not a cube stops a body with its own boxes.
+                    const sh = shapes?.of(id);
+                    if (sh) {
+                        if (sh.closes && this._isThrough(bx, by, bz)) continue;
+                        if ((by >= yLo || sh.tall) && shapes.boxHits(sh, world, bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
+                        continue;
+                    }
+                    if (by < yLo) continue;
                     // Mesh blocks collide with their rendered shape, not their cube.
                     if (!smooth || !smooth.isMesh(id)) return true;
                     if (smooth.cellBlocks(bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
                 }
             }
         }
+        return false;
+    }
+
+    /** The doors and gates the mob being moved is inside now (x, y, z of each): walked through until it is out of them. */
+    _shutOn(pos, hw, h) {
+        const t = this._through ?? (this._through = []), shapes = this.reg.shapes ?? null, world = this.world;
+        t.length = 0;
+        if (!shapes) return;
+        const x0 = pos.x - hw, x1 = pos.x + hw - 0.001, y0 = pos.y, y1 = pos.y + h - 0.001, z0 = pos.z - hw, z1 = pos.z + hw - 0.001;
+        for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
+            for (let by = Math.floor(y0) - 1; by <= Math.floor(y1); by++) {
+                for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
+                    const sh = shapes.of(world.getBlock(bx, by, bz));
+                    if (sh?.closes && shapes.boxHits(sh, world, bx, by, bz, x0, y0, z0, x1, y1, z1)) t.push(bx, by, bz);
+                }
+            }
+        }
+    }
+
+    _isThrough(bx, by, bz) {
+        const t = this._through;
+        if (!t) return false;
+        for (let i = 0; i < t.length; i += 3) if (t[i] === bx && t[i + 1] === by && t[i + 2] === bz) return true;
         return false;
     }
 }

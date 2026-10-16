@@ -1,0 +1,26 @@
+{
+  "id": 100,
+  "name": "GREEN_CARPET",
+  "terrainType": "solid",
+  "model": "carpet",
+  "color": [
+    0.36,
+    0.55,
+    0.24
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "green_carpet",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Green.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 60,
+  "sound": "grass"
+}

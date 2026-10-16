@@ -1,0 +1,33 @@
+{
+  "id": 400,
+  "name": "SPRUCE_WALL_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Spruce_Planks.png",
+  "model": "vslab",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "spruce_wall_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "wallslab",
+    "names": {
+      "east": "SPRUCE_WALL_SLAB",
+      "west": "SPRUCE_WALL_SLAB_WEST",
+      "south": "SPRUCE_WALL_SLAB_SOUTH",
+      "north": "SPRUCE_WALL_SLAB_NORTH"
+    },
+    "full": "SPRUCE_PLANKS"
+  }
+}

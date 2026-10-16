@@ -1,0 +1,32 @@
+{
+  "id": 182,
+  "name": "FENCE_GATE_WEST",
+  "terrainType": "solid",
+  "model": "gate",
+  "facing": "west",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "fence_gate",
+      "count": 1
+    }
+  ],
+  "texture": "Wooden_Planks.png",
+  "sound": "wood",
+  "flammable": 20,
+  "use": {
+    "toggle": "FENCE_GATE_WEST_OPEN",
+    "away": "FENCE_GATE_WEST_OPEN_BACK",
+    "sound": "gate"
+  },
+  "variant": true
+}

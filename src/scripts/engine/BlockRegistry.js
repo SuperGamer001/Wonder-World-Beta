@@ -1,3 +1,5 @@
+import { shapeFlags, ShapeSet } from './BlockShapes.js';
+
 // Block flag bitmasks
 export const BLOCK_FLAGS = {
     TRANSPARENT:  1 << 0,
@@ -47,13 +49,30 @@ function resolveRender(src, seeThrough) {
 // Directional models face one of these ways (the way a wall torch leans).
 export const FACINGS = ['east', 'west', 'south', 'north'];   // +X -X +Z -Z
 
+// How much water a liquid block is (`fluid`): 1 … 7 a flow of that level
+// (7 beside its source, 1 at the end of its reach), FLUID_FALL water coming
+// down from the block above, FLUID_SOURCE a block of standing water — any
+// liquid that does not say. 0: not water at all. See WaterSimulator.js.
+export const FLUID_FALL = 8, FLUID_SOURCE = 9;
+
+function resolveFluid(src) {
+    if (!src.liquid) return 0;
+    const f = src.fluid;
+    if (f === 'fall') return FLUID_FALL;
+    return Number.isInteger(f) && f >= 1 && f <= 7 ? f : FLUID_SOURCE;
+}
+
 function makeDef(src) {
     let flags = 0;
+    // What the block's model (BlockShapes.js) says of it: whether it stops a
+    // body, is climbed, is washed away … Null for a cube.
+    const shaped = src.model ? shapeFlags({ model: src.model, facing: src.facing, shape: src.shape ?? {} }) : null;
     // A model block (torch, lantern) never fills its voxel, so it can never
     // hide a face behind it or stop light: it is see-through by definition.
     if (src.transparent || src.model) flags |= BLOCK_FLAGS.TRANSPARENT;
     if (src.liquid)       flags |= BLOCK_FLAGS.LIQUID;
-    if (src.noCollision)  flags |= BLOCK_FLAGS.NO_COLLISION;
+    // A model with nothing in it to walk into is walked through, whatever its file says.
+    if (src.noCollision || (shaped && !shaped.collides)) flags |= BLOCK_FLAGS.NO_COLLISION;
     if (src.interactable) flags |= BLOCK_FLAGS.INTERACTABLE;
     return {
         id:           src.id,
@@ -78,6 +97,8 @@ function makeDef(src) {
         tool:         src.tool ?? src.requiresTool ?? null,
         drops:        src.drops        ?? null,   // [{ item, count, chance }] on break
         interactType: src.interactType ?? null,   // 'chest' | 'crafting' | 'oven' | 'smelter' | 'anvil'
+        // Which sounds it makes (Sound.js: blockSoundFamily); else guessed from its name.
+        sound:        typeof src.sound === 'string' ? src.sound : null,
         terrainType:  resolveTerrainType({ ...src, transparent: !!(flags & BLOCK_FLAGS.TRANSPARENT) }),
         // Light the block gives off, 0..15 on the sky-light scale (Blocklight.js).
         light:        Math.max(0, Math.min(15, Math.round(src.light ?? 0))),
@@ -90,6 +111,51 @@ function makeDef(src) {
         // greedy-meshed and never hide their neighbours' faces.
         model:        src.model        ?? null,
         facing:       FACINGS.includes(src.facing) ? src.facing : null,   // directional models
+        // What else changes the model: { half, open, part, stage, plant, lit … } (BlockShapes.js).
+        shape:        src.shape && typeof src.shape === 'object' ? src.shape : null,
+        // From the model: it stops a body with its own boxes (`shaped`), which
+        // may stand above its voxel (`tall`); it is climbed; water takes it
+        // away; the ground beside it takes no notice of it and it stands on
+        // the ground's own surface (`soft`, smooth worlds); it stops light and
+        // rain as a cube does (`shade`); fences reach out to it (`joins`); its
+        // own shape depends on its neighbours (`connect`); and where rain
+        // stops on it, in sixteenths (0: it falls through).
+        shaped:       !!shaped?.collides,
+        tall:         !!shaped?.tall,
+        climb:        !!shaped?.climb,
+        wash:         !!shaped?.wash,
+        soft:         !!shaped?.soft,
+        shade:        !!shaped?.shade,
+        joins:        !!shaped?.joins,
+        connect:      !!shaped?.connect,
+        rain:         shaped ? shaped.rain : 16,
+        // It can shut on whoever is in it (a door, a gate), who may then walk on out of it.
+        closes:       !!shaped?.closes,
+        // Sixteenths up to where someone sits on it (a chair) or lies on it (a bed); 0: nobody does.
+        seat:         shaped?.seat ?? 0,
+        lie:          shaped?.lie ?? 0,
+        // Water: see resolveFluid.
+        fluid:        resolveFluid(src),
+        // One of several blocks an item puts down (a stair turned another
+        // way, a door standing open): it has no entry of its own in the
+        // creative inventory, and no item of its own.
+        variant:      !!src.variant,
+        // Which of them goes down, and how: { mode, … } (world.js: _placementFor).
+        place:        src.place && typeof src.place === 'object' ? src.place : null,
+        // What using it (the right button) does: { toggle | eat | sleep | … } (world.js: _useBlock).
+        use:          src.use && typeof src.use === 'object' ? src.use : null,
+        // [dx, dy, dz] of its other half (a door's top, a bed's head): the two are used and broken as one.
+        twin:         Array.isArray(src.twin) && src.twin.length === 3 ? src.twin.map(Number) : null,
+        // A thing of many blocks (a painting several blocks across): [[dx, dy, dz], …] of its other
+        // pieces, and its name (`piece`), which every one of them has. Used and broken as one.
+        group:        Array.isArray(src.group) ? src.group.filter(o => Array.isArray(o) && o.length === 3).map(o => o.map(Number)) : null,
+        piece:        typeof src.piece === 'string' ? src.piece : null,
+        // How readily it catches fire, 0 (never) … 100.
+        flammable:    Math.max(0, Math.min(100, +src.flammable || 0)),
+        // What it does by itself in time: 'fire' | 'sapling' | 'bomb' (world.js: *Things that happen by themselves*).
+        tick:         typeof src.tick === 'string' ? src.tick : null,
+        // What grows from a sapling (a StructurePlacer tree type).
+        grows:        typeof src.grows === 'string' ? src.grows : null,
         // Which block goes down for the face that was clicked, by block name:
         // { floor, ceiling, east, west, south, north } (the clicked face's
         // direction; "floor" is the top of a block). A face with no entry
@@ -137,6 +203,13 @@ export class BlockRegistry {
     }
 
     get(id)      { return this._byId[id]        ?? this._byId[0]; }
+
+    /**
+     * The shapes of the blocks that are not cubes, for collision and the
+     * crosshair (BlockShapes.ShapeSet). Made when first asked for: register
+     * every block first.
+     */
+    get shapes() { return this._shapes ?? (this._shapes = new ShapeSet(this)); }
     getByName(n) { return this._byName.get(n);                     }
 
     isTransparent(id)  { return id === 0 || !!(this._byId[id]?.flags & BLOCK_FLAGS.TRANSPARENT); }
@@ -145,6 +218,12 @@ export class BlockRegistry {
     isSolid(id)        { return id !== 0    && !this.isTransparent(id);                           }
     isMesh(id)         { return              this._byId[id]?.terrainType === 'mesh';              }
     hasModel(id)       { return              !!this._byId[id]?.model;                            }
+    /** How much water block `id` is: 0 none, 1 … 7 a flow, FLUID_FALL, FLUID_SOURCE. */
+    fluidOf(id)        { return              this._byId[id]?.fluid ?? 0;                          }
+    /** How high the water stands in a block of it, 0 … 1. */
+    fluidHeight(id)    { const f = this._byId[id]?.fluid ?? 0; return f >= FLUID_FALL ? 1 : f / 8; }
+    isClimb(id)        { return              !!this._byId[id]?.climb;                            }
+    isTall(id)         { return              !!this._byId[id]?.tall;                             }
     lightOf(id)        { return              this._byId[id]?.light ?? 0;                         }
 
     /**

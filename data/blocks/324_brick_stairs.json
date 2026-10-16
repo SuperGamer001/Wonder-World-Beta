@@ -1,0 +1,36 @@
+{
+  "id": 324,
+  "name": "BRICK_STAIRS",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.27,
+    0.22
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Bricks.png",
+  "model": "stairs",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "brick_stairs",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "stairs",
+    "up": {
+      "east": "BRICK_STAIRS",
+      "west": "BRICK_STAIRS_WEST",
+      "south": "BRICK_STAIRS_SOUTH",
+      "north": "BRICK_STAIRS_NORTH"
+    },
+    "down": {
+      "east": "BRICK_STAIRS_TOP",
+      "west": "BRICK_STAIRS_TOP_WEST",
+      "south": "BRICK_STAIRS_TOP_SOUTH",
+      "north": "BRICK_STAIRS_TOP_NORTH"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": 338,
+  "name": "SANDSTONE_WALL_SLAB_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.85,
+    0.78,
+    0.55
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "texture": "Sandstone.png",
+  "model": "vslab",
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "sandstone_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

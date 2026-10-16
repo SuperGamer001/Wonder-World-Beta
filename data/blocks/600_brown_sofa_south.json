@@ -1,0 +1,31 @@
+{
+  "id": 600,
+  "name": "BROWN_SOFA_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.31,
+    0.2
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Brown.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "brown_sofa",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

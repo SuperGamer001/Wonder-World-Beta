@@ -1,0 +1,19 @@
+{
+  "id": 91,
+  "name": "TILES",
+  "terrainType": "solid",
+  "color": [
+    0.7,
+    0.68,
+    0.64
+  ],
+  "hardness": 2,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "tiles",
+      "count": 1
+    }
+  ],
+  "texture": "Tiles.png"
+}

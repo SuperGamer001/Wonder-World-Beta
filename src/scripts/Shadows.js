@@ -260,6 +260,17 @@ export class ShadowMapper {
 
     get enabled() { return !!this.config; }
 
+    /** The depth shader made ready in the background (world load), so the first shadow pass has nothing to wait for. */
+    compileAsync() {
+        if (!this.config) return Promise.resolve();
+        const r = this.renderer, prev = r.getRenderTarget(), scene = new THREE.Scene();
+        scene.add(new THREE.Mesh(new THREE.BufferGeometry(), this.depthMaterial));
+        r.setRenderTarget(this.terrain);
+        const p = r.compileAsync(scene, this.camera);
+        r.setRenderTarget(prev);
+        return p;
+    }
+
     /** Box geometry for the current level: half-width, texel and step, in blocks. */
     _box() {
         const { size, radius } = this.config;

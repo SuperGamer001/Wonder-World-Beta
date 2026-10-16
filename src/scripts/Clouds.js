@@ -9,11 +9,19 @@
  * flat bottoms, domed tops that rise with thickness. Each frame they are drawn
  * once, off screen, by following every line of sight through the slab:
  *
- *   fast  — 6 steps, shaded by thickness alone: thin edges bright, thick cores
- *           dark, thin edges glowing when backlit
- *   fancy — 14 steps, with the light falling off through the cloud above each
- *           point (bright tops, grey undersides) and forward scattering around
- *           the sun
+ *   fast  — "Simple": 8 steps through the cloud field as it is, shaded by
+ *           thickness alone: thin edges bright, thick cores dark, thin edges
+ *           glowing when backlit
+ *   fancy — "Detailed": 18 steps through heaps with a shape — the field read
+ *           soft, domed, and eaten into by billows that change with height —
+ *           lit from the side the sun is on as well as from above (bright
+ *           sunward sides, grey hollows and undersides), with forward
+ *           scattering around the sun
+ *
+ * Neither is grainy: where a pixel samples along its steps comes from a
+ * pattern that neighbouring pixels share out evenly, and the backdrop reads
+ * the picture through a small blur. (It was a random number a pixel, shown as
+ * it fell: the sky looked like a noisy photograph.)
  *
  * That picture (uCloudRT) is at half resolution — a soft cloud looks the same
  * from a quarter of the pixels, and the march was the most expensive thing on
@@ -39,11 +47,11 @@
 
 import * as THREE from 'three';
 import { ATMOS_GLSL } from './AtmosGLSL.js';
-import { CLOUD_TEX } from './engine/CloudField.js';
+import { CLOUD_TEX, CLOUD_PERIOD_A, CLOUD_PERIOD_B, CLOUD_MIX_A, DETAIL_SHIFT, COVER_SOFT, THICK_GAIN } from './engine/CloudField.js';
 
 export const CLOUD_LEVELS = ['fast', 'fancy'];
-const STEPS = { fast: 6, fancy: 14 };
-const MAX_STEPS = 14;
+const STEPS = { fast: 8, fancy: 16 };
+const MAX_STEPS = 18;
 
 // One triangle over the whole screen, and the direction each pixel looks in.
 const MARCH_VERT = `
@@ -69,15 +77,59 @@ uniform float uFlashAmt;
 in vec3 vRay;
 out vec4 fragColor;
 
-float hash12(vec2 p) {
-    vec3 q = fract(vec3(p.xyx) * 0.1031);
-    q += dot(q, q.yzx + 33.33);
-    return fract((q.x + q.y) * q.z);
+// Where along its step each pixel samples. Not a random number a pixel (that
+// is grain, and at half resolution it is coarse grain: the clouds looked like
+// a noisy photograph): a pattern in which any few neighbouring pixels between
+// them cover the step evenly, so the backdrop's small blur takes it out.
+float stepOffset(vec2 px) {
+    return fract(52.9829189 * fract(dot(px, vec2(0.06711056, 0.00583715))));
 }
 
 vec3 flashGlow(vec3 p) {
     vec2 d = p.xz - uFlashPos.xz;
     return vec3(0.75, 0.8, 1.0) * uFlashAmt * exp(-dot(d, d) / 30000.0);
+}
+
+// ── Fancy ────────────────────────────────────────────────────────────────────
+// The cloud field read soft (the map's smaller levels): the same clouds in
+// the same places as cloudNoise() — the ones that rain and cast the shadows —
+// without the finest of its grain, which on a cloud's edge is a ragged line.
+float softNoise(vec2 xz) {
+    float a = textureLod(uCloudMap, (xz + uCloudOffA) * ${(1 / CLOUD_PERIOD_A).toFixed(8)}, 1.6).r;
+    float b = textureLod(uCloudMap, (xz + uCloudOffB) * ${(1 / CLOUD_PERIOD_B).toFixed(8)} + vec2(${DETAIL_SHIFT[0].toFixed(4)}, ${DETAIL_SHIFT[1].toFixed(4)}), 3.4).r;
+    return a * ${CLOUD_MIX_A.toFixed(4)} + b * ${(1 - CLOUD_MIX_A).toFixed(4)};
+}
+
+// How much cloud is at p, and (top) how high the cloud over p's column stands,
+// as a share of the layer. A cloud is a flat-bottomed heap: tall where the
+// field is thick and rounded off toward its edges. With detail it billows:
+// the map again, small, and slid sideways with height so that it differs from
+// level to level, pushes the field about (so the outline of a heap is lobes,
+// and a different outline higher up — its side is not a wall) and eats into
+// it, most near its top, where a real one is wispy. Without, it is the plain
+// heap: enough to ask how much cloud the light has come through.
+float fancyDensity(vec3 p, float height, bool detail, out float top) {
+    top = 0.0;
+    float nz = softNoise(p.xz);
+    // Nowhere near a cloud: most of the sky, most of the time.
+    if (nz < uCloudThresh - 0.11) return 0.0;
+    float eat = 0.0;
+    if (detail) {
+        vec2 q = (p.xz + uCloudOffB) * ${(1 / 170).toFixed(6)} + p.y * vec2(0.0113, 0.0071);
+        vec2 w = vec2(textureLod(uCloudMap, q, 1.0).r, textureLod(uCloudMap, q + vec2(0.37, 0.59), 1.0).r);
+        nz = softNoise(p.xz + (w - 0.5) * 70.0);
+        eat = 1.0 - smoothstep(0.3, 0.7, textureLod(uCloudMap, q * 2.9 + 0.31, 0.0).r * 0.5 + w.y * 0.5);
+    }
+    float c = smoothstep(uCloudThresh - 0.03, uCloudThresh + ${(COVER_SOFT * 1.4).toFixed(4)}, nz);
+    if (c < 0.004) return 0.0;
+    float th = clamp((nz - uCloudThresh + 0.02) * ${THICK_GAIN.toFixed(3)}, 0.0, 1.0);
+    float hgt = (p.y - uCloudBase) / height;
+    top = 0.16 + 0.84 * sqrt(th);                       // a dome: steep at the rim, level on top
+    float bot = 0.05 * (1.0 - th);
+    float d = c * smoothstep(bot, bot + 0.07, hgt) * smoothstep(0.0, 0.04 + 0.3 * top, top - hgt);
+    if (d <= 0.0 || !detail) return d;
+    float e = eat * (0.14 + 0.6 * hgt / max(top, 0.2)) * (1.0 - 0.45 * uCloudDark);
+    return clamp((d - e) / (1.0 - e), 0.0, 1.0);
 }
 
 void main() {
@@ -91,7 +143,10 @@ void main() {
     float height = uCloudTop - uCloudBase;
     float mu = max(dot(rd, uSkySunDir), 0.0);
     float scatter = pow(mu, uFancy == 1 ? 8.0 : 6.0);
-    float jitter = hash12(gl_FragCoord.xy);      // dithered steps hide banding
+    float jitter = stepOffset(gl_FragCoord.xy);
+    // What lights the cloud: the sun, or by night the moon.
+    vec3 L = uSkySunDir.y > -0.05 ? uSkySunDir : uMoonDir;
+    L = normalize(vec3(L.x, max(L.y, 0.12), L.z));
     // From inside the layer the cloud begins at the camera, and what is near
     // matters most: the steps start short and lengthen. The change-over is
     // gradual, so flying into the layer shifts nothing.
@@ -107,26 +162,39 @@ void main() {
         vec3 p = ro + rd * t;
         float fade = 1.0 - smoothstep(uCloudFade * 0.55, uCloudFade, length(p.xz - ro.xz));
         if (fade <= 0.0) break;
-        float nz = cloudNoise(p.xz);
-        float c = cloudCover(nz);
-        if (c < 0.01) continue;
-        float th = cloudThick(nz);
-        float hgt = (p.y - uCloudBase) / height;
-        float top = 0.22 + 0.78 * th;
-        float bot = 0.06 * (1.0 - th);
-        float dens = c * fade * smoothstep(bot, bot + 0.1, hgt) * (1.0 - smoothstep(top - 0.3, top, hgt));
-        if (dens <= 0.0) continue;
+        float dens;
         vec3 lc;
         if (uFancy == 1) {
-            // Light reaching p has come down through the cloud above it.
-            float light = exp(-max(top - hgt, 0.0) * height * (0.05 + 0.05 * uCloudDark));
-            lc = mix(uCloudShade, uCloudLit, light) + uSilver * scatter * light * 0.8;
+            float top, topL;
+            dens = fancyDensity(p, height, true, top) * fade;
+            if (dens <= 0.0) continue;
+            float hgt = (p.y - uCloudBase) / height;
+            // The light has come down through the cloud above p, and in from
+            // the side the sun is on: one look that way says how much cloud it
+            // crossed. So the sunward side of a heap is bright and its far
+            // side and its hollows are grey — which is what gives it a shape.
+            float above = exp(-max(top - hgt, 0.0) * height * (0.016 + 0.05 * uCloudDark));
+            float toward = fancyDensity(p + L * 30.0, height, false, topL);
+            float light = above * mix(1.0, 0.45 - 0.15 * uCloudDark, toward);
+            // Thin cloud at an edge lets more through than the middle of a heap.
+            light = mix(light, 1.0, (1.0 - dens) * 0.22 * (1.0 - uCloudDark));
+            vec3 under = uCloudShade * (0.86 + 0.14 * hgt);
+            lc = mix(under, uCloudLit, light) + uSilver * scatter * light * (0.5 + 0.9 * (1.0 - dens));
         } else {
+            float nz = cloudNoise(p.xz);
+            float c = cloudCover(nz);
+            if (c < 0.01) continue;
+            float th = cloudThick(nz);
+            float hgt = (p.y - uCloudBase) / height;
+            float top = 0.22 + 0.78 * th;
+            float bot = 0.06 * (1.0 - th);
+            dens = c * fade * smoothstep(bot, bot + 0.1, hgt) * (1.0 - smoothstep(top - 0.3, top, hgt));
+            if (dens <= 0.0) continue;
             lc = mix(uCloudLit, uCloudShade, clamp(th * (0.45 + 0.55 * uCloudDark), 0.0, 1.0))
                + uSilver * scatter * (1.0 - th) * 1.4;
         }
         lc += flashGlow(p);
-        float a = 1.0 - exp(-dens * dt * (0.09 + 0.06 * uCloudDark));
+        float a = 1.0 - exp(-dens * dt * (uFancy == 1 ? 0.3 + 0.1 * uCloudDark : 0.09 + 0.06 * uCloudDark));
         acc += T * a * lc;
         tSum += T * a * t;
         T *= 1.0 - a;
@@ -160,7 +228,16 @@ uniform vec2 uCloudPx;
 uniform bool uLinearOut;
 out vec4 fragColor;
 void main() {
-    fragColor = texture(uCloudRT, gl_FragCoord.xy * uCloudPx);
+    // Eight reads round the pixel, in two rings (the picture is at half
+    // resolution, and each read is already the mean of four of its pixels):
+    // together they even out the pattern the march sampled along its steps
+    // with, which at a low angle — long steps — is otherwise a hatching.
+    vec2 uv = gl_FragCoord.xy * uCloudPx, o = uCloudPx * 2.0, w = uCloudPx * 6.0;
+    fragColor = 0.125 * (
+        texture(uCloudRT, uv + vec2(o.x, o.y * 0.4)) + texture(uCloudRT, uv + vec2(-o.x * 0.4, o.y)) +
+        texture(uCloudRT, uv - vec2(o.x, o.y * 0.4)) + texture(uCloudRT, uv - vec2(-o.x * 0.4, o.y)) +
+        texture(uCloudRT, uv + vec2(w.x * 0.7, -w.y * 0.7)) + texture(uCloudRT, uv + vec2(w.x * 0.7, w.y * 0.7)) +
+        texture(uCloudRT, uv - vec2(w.x * 0.7, -w.y * 0.7)) + texture(uCloudRT, uv - vec2(w.x * 0.7, w.y * 0.7)));
     if (fragColor.a < 0.002) discard;
     if (uLinearOut) fragColor.rgb = sRGBTransferEOTF(vec4(fragColor.rgb / fragColor.a, 1.0)).rgb * fragColor.a;
 }
@@ -186,8 +263,11 @@ export class Clouds {
 
         this.texture = new THREE.DataTexture(field.data, CLOUD_TEX, CLOUD_TEX, THREE.RedFormat, THREE.UnsignedByteType);
         this.texture.wrapS = this.texture.wrapT = THREE.RepeatWrapping;
-        this.texture.magFilter = this.texture.minFilter = THREE.LinearFilter;
-        this.texture.generateMipmaps = false;
+        // Smaller levels too: the fancy march reads the field soft (softNoise).
+        // Everything else names level 0 (textureLod), which is the field itself.
+        this.texture.magFilter = THREE.LinearFilter;
+        this.texture.minFilter = THREE.LinearMipmapLinearFilter;
+        this.texture.generateMipmaps = true;
         this.texture.unpackAlignment = 1;
         this.texture.needsUpdate = true;
         atmos.uCloudMap.value = this.texture;
@@ -305,6 +385,16 @@ export class Clouds {
      * before the first cloudy frame. It draws into its own target, so it is
      * not covered by the scene's warm-up render. The backdrop is.
      */
+    /** The march's shader made ready in the background (world load): warm() then has nothing to wait for. */
+    compileAsync(renderer, camera) {
+        this._fitTarget(renderer);
+        const prev = renderer.getRenderTarget();
+        renderer.setRenderTarget(this._target);
+        const p = renderer.compileAsync(this._marchScene, camera);
+        renderer.setRenderTarget(prev);
+        return p;
+    }
+
     warm(renderer, camera) {
         this._fitTarget(renderer);
         this.uniforms.uProjInv.value.copy(camera.projectionMatrixInverse);

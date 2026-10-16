@@ -1,0 +1,20 @@
+{
+  "id": 84,
+  "name": "BLUE_WOOL",
+  "terrainType": "solid",
+  "color": [
+    0.25,
+    0.38,
+    0.72
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "blue_wool",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Blue.png",
+  "flammable": 60,
+  "sound": "grass"
+}

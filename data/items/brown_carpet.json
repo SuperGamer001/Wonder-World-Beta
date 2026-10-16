@@ -1,0 +1,8 @@
+{
+  "id": "brown_carpet",
+  "name": "Brown Carpet",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

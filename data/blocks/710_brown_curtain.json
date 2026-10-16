@@ -1,0 +1,39 @@
+{
+  "id": 710,
+  "name": "BROWN_CURTAIN",
+  "terrainType": "solid",
+  "model": "curtain",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.45,
+    0.31,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "brown_curtain",
+      "count": 1
+    }
+  ],
+  "texture": "Curtain_Brown.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "grass",
+  "flammable": 80,
+  "use": {
+    "toggle": "BROWN_CURTAIN_OPEN"
+  },
+  "placement": {
+    "east": "BROWN_CURTAIN",
+    "west": "BROWN_CURTAIN_WEST",
+    "south": "BROWN_CURTAIN_SOUTH",
+    "north": "BROWN_CURTAIN_NORTH"
+  }
+}

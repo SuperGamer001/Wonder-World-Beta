@@ -1,0 +1,14 @@
+{
+  "id": "plate",
+  "station": "oven",
+  "result": {
+    "itemId": "plate",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "clay_ball",
+      "count": 3
+    }
+  ]
+}

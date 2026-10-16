@@ -1,0 +1,38 @@
+{
+  "id": 404,
+  "name": "SPRUCE_STAIRS",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Spruce_Planks.png",
+  "model": "stairs",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "spruce_stairs",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "stairs",
+    "up": {
+      "east": "SPRUCE_STAIRS",
+      "west": "SPRUCE_STAIRS_WEST",
+      "south": "SPRUCE_STAIRS_SOUTH",
+      "north": "SPRUCE_STAIRS_NORTH"
+    },
+    "down": {
+      "east": "SPRUCE_STAIRS_TOP",
+      "west": "SPRUCE_STAIRS_TOP_WEST",
+      "south": "SPRUCE_STAIRS_TOP_SOUTH",
+      "north": "SPRUCE_STAIRS_TOP_NORTH"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "id": "spruce_log",
+  "name": "Spruce Log",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Natural",
+  "group": "log"
+}

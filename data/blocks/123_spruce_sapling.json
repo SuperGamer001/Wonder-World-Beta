@@ -1,0 +1,31 @@
+{
+  "id": 123,
+  "name": "SPRUCE_SAPLING",
+  "terrainType": "solid",
+  "model": "cross",
+  "shape": {
+    "pick": 13
+  },
+  "color": [
+    0.18,
+    0.4,
+    0.24
+  ],
+  "hardness": 0.02,
+  "drops": [
+    {
+      "itemId": "spruce_sapling",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Sapling.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 70,
+  "sound": "grass",
+  "tick": "sapling",
+  "grows": "spruce_tree"
+}

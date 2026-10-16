@@ -1,0 +1,41 @@
+{
+  "id": 132,
+  "name": "POTTED_DEAD_BUSH",
+  "terrainType": "solid",
+  "model": "pot",
+  "color": [
+    0.62,
+    0.36,
+    0.24
+  ],
+  "hardness": 0.1,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "stone",
+  "shape": {
+    "plant": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "Dead_Bush.png",
+    "side": "Flower_Pot.png",
+    "bottom": "Dirt.png"
+  },
+  "drops": [
+    {
+      "itemId": "flower_pot",
+      "count": 1
+    },
+    {
+      "itemId": "dead_bush",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unpot": "dead_bush",
+    "to": "FLOWER_POT"
+  }
+}

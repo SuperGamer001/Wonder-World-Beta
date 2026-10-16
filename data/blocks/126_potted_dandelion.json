@@ -1,0 +1,41 @@
+{
+  "id": 126,
+  "name": "POTTED_DANDELION",
+  "terrainType": "solid",
+  "model": "pot",
+  "color": [
+    0.62,
+    0.36,
+    0.24
+  ],
+  "hardness": 0.1,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "stone",
+  "shape": {
+    "plant": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "Dandelion.png",
+    "side": "Flower_Pot.png",
+    "bottom": "Dirt.png"
+  },
+  "drops": [
+    {
+      "itemId": "flower_pot",
+      "count": 1
+    },
+    {
+      "itemId": "dandelion",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unpot": "dandelion",
+    "to": "FLOWER_POT"
+  }
+}

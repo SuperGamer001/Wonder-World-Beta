@@ -1,0 +1,8 @@
+{
+  "id": "blue_sofa",
+  "name": "Blue Sofa",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

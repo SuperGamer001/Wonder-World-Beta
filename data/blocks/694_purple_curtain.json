@@ -1,0 +1,39 @@
+{
+  "id": 694,
+  "name": "PURPLE_CURTAIN",
+  "terrainType": "solid",
+  "model": "curtain",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.5,
+    0.3,
+    0.66
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "purple_curtain",
+      "count": 1
+    }
+  ],
+  "texture": "Curtain_Purple.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "grass",
+  "flammable": 80,
+  "use": {
+    "toggle": "PURPLE_CURTAIN_OPEN"
+  },
+  "placement": {
+    "east": "PURPLE_CURTAIN",
+    "west": "PURPLE_CURTAIN_WEST",
+    "south": "PURPLE_CURTAIN_SOUTH",
+    "north": "PURPLE_CURTAIN_NORTH"
+  }
+}

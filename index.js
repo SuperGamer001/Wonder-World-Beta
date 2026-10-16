@@ -30,6 +30,8 @@
     // The panes after the first: { id, frame, pad, name }.
     const panes = [];
     let nextId = 1;
+    // Controllers whose player is being asked whether they want to join (players.js): the first player's game leaves them be.
+    const held = new Set();
 
     function layout() {
         stage.className = `panes-${1 + panes.length}`;
@@ -52,7 +54,9 @@
         max: MAX,
         /** How many are playing on this screen, the first included. */
         count: () => 1 + panes.filter(p => !p.going).length,
-        padTaken: (i) => panes.some(p => p.pad === i && !p.going),
+        padTaken: (i) => held.has(i) || panes.some(p => p.pad === i && !p.going),
+        hold: (i) => { held.add(i); },
+        release: (i) => { held.delete(i); },
         names: () => panes.filter(p => !p.going).map(p => p.name).filter(Boolean),
 
         /**

@@ -1,0 +1,39 @@
+{
+  "id": 562,
+  "name": "BIRCH_CABINET",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 2,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "cabinet",
+  "interactable": true,
+  "interactType": "chest",
+  "textures": {
+    "top": "Birch_Cabinet_Front.png",
+    "side": "Birch_Planks.png",
+    "bottom": "Birch_Planks.png"
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "birch_cabinet",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "BIRCH_CABINET",
+      "west": "BIRCH_CABINET_WEST",
+      "south": "BIRCH_CABINET_SOUTH",
+      "north": "BIRCH_CABINET_NORTH"
+    }
+  }
+}

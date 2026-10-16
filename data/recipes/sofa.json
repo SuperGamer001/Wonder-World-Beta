@@ -1,0 +1,19 @@
+{
+  "id": "sofa",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "sofa",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "red_wool",
+      "count": 3
+    },
+    {
+      "itemId": "wooden_planks",
+      "count": 2,
+      "any": "planks"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "id": 559,
+  "name": "SPRUCE_CABINET_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 2,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "cabinet",
+  "interactable": true,
+  "interactType": "chest",
+  "textures": {
+    "top": "Spruce_Cabinet_Front.png",
+    "side": "Spruce_Planks.png",
+    "bottom": "Spruce_Planks.png"
+  },
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "spruce_cabinet",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

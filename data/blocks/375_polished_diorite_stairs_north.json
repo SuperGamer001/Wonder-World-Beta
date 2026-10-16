@@ -1,0 +1,22 @@
+{
+  "id": 375,
+  "name": "POLISHED_DIORITE_STAIRS_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.88,
+    0.88,
+    0.9
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Diorite.png",
+  "model": "stairs",
+  "facing": "north",
+  "drops": [
+    {
+      "itemId": "polished_diorite_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

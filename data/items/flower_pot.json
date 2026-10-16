@@ -1,0 +1,8 @@
+{
+  "id": "flower_pot",
+  "name": "Flower Pot",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

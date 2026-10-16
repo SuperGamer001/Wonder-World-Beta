@@ -1,0 +1,40 @@
+{
+  "id": 520,
+  "name": "SPRUCE_FENCE_GATE",
+  "terrainType": "solid",
+  "model": "gate",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "spruce_fence_gate",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Planks.png",
+  "sound": "wood",
+  "flammable": 20,
+  "use": {
+    "toggle": "SPRUCE_FENCE_GATE_OPEN",
+    "away": "SPRUCE_FENCE_GATE_OPEN_BACK",
+    "sound": "gate"
+  },
+  "place": {
+    "mode": "look",
+    "names": {
+      "east": "SPRUCE_FENCE_GATE",
+      "west": "SPRUCE_FENCE_GATE_WEST",
+      "south": "SPRUCE_FENCE_GATE_SOUTH",
+      "north": "SPRUCE_FENCE_GATE_NORTH"
+    }
+  }
+}

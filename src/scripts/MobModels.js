@@ -224,6 +224,7 @@ export class MobModels {
             anim: makeAnimState(),
             death: 0,           // 0 alive … 1 lying on its side
             tint: [1, 1, 1],
+            glow: 0,            // light of its own, added to every vertex (the mob under the crosshair)
         };
         this.pose(inst, 1, null);
         return inst;
@@ -239,6 +240,8 @@ export class MobModels {
         const { model, st, pose } = inst;
         resetPose(pose);
         ANIMATORS[inst.name]?.(pose, inst.anim);
+        // A pose of the caller's own on top (Hands.js: arms held out in front of the eyes).
+        inst.after?.(pose, inst.anim);
         if (inst.death > 0) {
             // Keel over sideways about the feet, and settle onto the ground.
             const k = inst.death * inst.death * (3 - 2 * inst.death);
@@ -253,7 +256,9 @@ export class MobModels {
         const lit = Math.pow(Math.max(0, light), GAMMA);
         const tr = lit * inst.tint[0], tg = lit * inst.tint[1], tb = lit * inst.tint[2];
         const base = SHADE_AMBIENT - SHADE_SKY;
-        const rest = st.rest, nrm = st.normal, runs = st.runs, share = st.share, out = inst.buffer.array;
+        const gr = inst.glow, gg = inst.glow * 0.96, gb = inst.glow * 0.82;
+        // `inst.runs`: only some of the vertices are wanted (Hands.js: the arms).
+        const rest = st.rest, nrm = st.normal, runs = inst.runs ?? st.runs, share = st.share, out = inst.buffer.array;
         for (let r = 0; r < runs.length; r += 4) {
             const m = runs[r] * 12, second = runs[r + 1], n = second * 12;
             const m0 = M[m], m1 = M[m + 1], m2 = M[m + 2], m3 = M[m + 3];
@@ -292,10 +297,44 @@ export class MobModels {
                 let s = base + SHADE_SKY * wy + (facing > 0 ? SHADE_DIRECT * facing : 0);
                 s = s > 1 ? 1 : s < 0 ? 0 : s;
                 const c = SHADE_LUT[(s * SHADE_STEPS + 0.5) | 0];
-                out[o + 3] = c * tr; out[o + 4] = c * tg; out[o + 5] = c * tb;
+                out[o + 3] = c * tr + gr; out[o + 4] = c * tg + gg; out[o + 5] = c * tb + gb;
             }
         }
         inst.buffer.needsUpdate = true;
+    }
+
+    /**
+     * Where a ray meets the mob as it is posed: its skin, triangle by
+     * triangle — not a box round it, so the ray goes between a cow's legs and
+     * over its back, and the shape turns and moves as the mob does. The ray is
+     * in the model's own space (the mob's place taken off, turned by
+     * toModelSpace), from (ox, oy, oz) along the unit vector (dx, dy, dz).
+     * Returns how far along it the nearest hit is, or -1 for none within `max`.
+     * A mob out of sight is not posed, and is met as it last was.
+     */
+    rayHit(inst, ox, oy, oz, dx, dy, dz, max) {
+        const idx = inst.st.index.array, p = inst.buffer.array;
+        let best = -1;
+        for (let i = 0; i < idx.length; i += 3) {
+            const a = idx[i] * STRIDE, b = idx[i + 1] * STRIDE, c = idx[i + 2] * STRIDE;
+            const ax = p[a], ay = p[a + 1], az = p[a + 2];
+            const e1x = p[b] - ax, e1y = p[b + 1] - ay, e1z = p[b + 2] - az;
+            const e2x = p[c] - ax, e2y = p[c + 1] - ay, e2z = p[c + 2] - az;
+            // Möller–Trumbore, from either side.
+            const px = dy * e2z - dz * e2y, py = dz * e2x - dx * e2z, pz = dx * e2y - dy * e2x;
+            const det = e1x * px + e1y * py + e1z * pz;
+            if (det > -1e-10 && det < 1e-10) continue;
+            const inv = 1 / det;
+            const tx = ox - ax, ty = oy - ay, tz = oz - az;
+            const u = (tx * px + ty * py + tz * pz) * inv;
+            if (u < 0 || u > 1) continue;
+            const qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+            const v = (dx * qx + dy * qy + dz * qz) * inv;
+            if (v < 0 || u + v > 1) continue;
+            const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+            if (t >= 0 && t <= max && (best < 0 || t < best)) best = t;
+        }
+        return best;
     }
 
     /** A world-space direction turned into the space of a model facing `yaw`. */

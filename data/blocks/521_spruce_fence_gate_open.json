@@ -1,0 +1,31 @@
+{
+  "id": 521,
+  "name": "SPRUCE_FENCE_GATE_OPEN",
+  "terrainType": "solid",
+  "model": "gate",
+  "facing": "east",
+  "shape": {
+    "open": true
+  },
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "spruce_fence_gate",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Planks.png",
+  "sound": "wood",
+  "flammable": 20,
+  "use": {
+    "toggle": "SPRUCE_FENCE_GATE",
+    "sound": "gate"
+  },
+  "variant": true
+}

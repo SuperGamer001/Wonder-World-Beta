@@ -1,0 +1,8 @@
+{
+  "id": "brown_mushroom",
+  "name": "Brown Mushroom",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Natural"
+}

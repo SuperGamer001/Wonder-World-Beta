@@ -311,6 +311,21 @@ const BLOCKS = ['WOOD', 'LEAVES', 'BIRCH_LOG', 'BIRCH_LEAVES', 'SPRUCE_LOG', 'SP
     'JUNGLE_LEAVES', 'CACTUS', 'MUSHROOM_STEM', 'RED_MUSHROOM_BLOCK', 'BROWN_MUSHROOM_BLOCK', 'MOSSY_STONE',
     'ANDESITE', 'STONE', 'WOODEN_PLANKS', 'GLASS'];
 
+/**
+ * The blocks of one tree of `type` ("oak_tree", "birch_tree", …) as the
+ * generator builds them, for what grows one where a sapling stood (world.js):
+ * [dx, dy, dz, id, rule, …] with dy 0 the sapling's own block, or null for a
+ * type there is none of. `rule` is what a block may take the place of:
+ * TREE_INTO_AIR (leaves) or TREE_OVER_LEAVES (the trunk).
+ */
+export function treeBlocks(type, reg, seed) {
+    if (!Object.prototype.hasOwnProperty.call(BUILDERS, type) || !/_tree$/.test(type)) return null;
+    const b = {};
+    for (const name of BLOCKS) b[name] = blockIdOf(reg, name);
+    return BUILDERS[type](rngFor(seed >>> 0), b).list();
+}
+export const TREE_INTO_AIR = INTO_AIR, TREE_OVER_LEAVES = OVER_LEAVES;
+
 export class StructurePlacer {
     /**
      * @param {number}        seed

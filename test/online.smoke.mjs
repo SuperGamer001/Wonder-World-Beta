@@ -175,7 +175,7 @@ function ablyShim(url) {
 function gameServer(port, dir) {
     return run(process.execPath, ['server/server.js'], {
         cwd: ROOT,
-        env: { ...process.env, PORT: String(port), WONDER_DATA_DIR: dir, WW_ABLY_KEY: KEY, WW_ABLY_REST: `http://127.0.0.1:${P}`, WW_LAN_PORT: '0', WW_BEACON_PORT: String(port + 200) },
+        env: { ...process.env, PORT: String(port), WONDER_DATA_DIR: dir, WW_RELEASE_NOTES: 'none', WW_ABLY_KEY: KEY, WW_ABLY_REST: `http://127.0.0.1:${P}`, WW_LAN_PORT: '0', WW_BEACON_PORT: String(port + 200) },
     });
 }
 const hostDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-online-host-')), guestDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ww-online-guest-'));
@@ -313,11 +313,78 @@ await guestPage.eval(`window.__wwSetBlock(${gx}, ${gy}, ${gz}, 'WOODEN_PLANKS')`
 check('what the guest builds reaches the host',
     await hostPage.until(`window.__wwBlockAt(${gx}, ${gy}, ${gz}) === ${PLANKS}`, 'the planks', 20000).then(() => true, () => false));
 
+// ── Chat, and commands ───────────────────────────────────────────────────────
+// What is said is seen by both; a command is run by the host's game, for whoever
+// may; and what it does to a player is done in that player's own game.
+const chat = (page) => page.eval("[...document.querySelectorAll('#chatLog .chatLine')].map(e => (e.classList.contains('sys') ? '* ' : '') + e.textContent).join(' | ')");
+const said = (page, re, what) => page.until(`${re}.test([...document.querySelectorAll('#chatLog .chatLine')].map(e => e.textContent).join(' | '))`, what, 15000).then(() => true, () => false);
+await guestPage.eval("window.__wwChat.send('hello from Gus')");
+check('what a guest says is shown to the host, under their name', await said(hostPage, '/\\(Gus\\) hello from Gus/', 'the guest\'s line'), await chat(hostPage));
+await hostPage.eval("window.__wwChat.send('and hello back')");
+check('… and what the host says, to the guest', await said(guestPage, '/\\(Hana\\) and hello back/', 'the host\'s line'), await chat(guestPage));
+check('… each seeing their own line too', /\(Gus\) hello from Gus/.test(await chat(guestPage)) && /\(Hana\) and hello back/.test(await chat(hostPage)));
+
+const hoursOf = (page) => page.eval('window.__wwAtmos().day.hours');
+await guestPage.eval("window.__wwChat.send('/time set midnight')");
+check('a guest who is not an operator is told so — alone', await said(guestPage, '/needs operator status/', 'the refusal'), await chat(guestPage));
+check('… and the time has not changed', Math.abs(await hoursOf(hostPage)) > 0.5 && !/operator status/.test(await chat(hostPage)), String(await hoursOf(hostPage)));
+await hostPage.eval("window.__wwChat.send('/op Gus')");
+check('the host makes the guest an operator, and everyone is told', await said(guestPage, '/Hana made Gus an operator/', 'the news'), await chat(guestPage));
+await guestPage.eval("window.__wwChat.send('/time set noon')");
+check('the guest\'s command is then run by the host\'s game', await hostPage.until('Math.abs(window.__wwAtmos().day.hours - 12) < 0.2', 'noon on the host', 15000).then(() => true, () => false), String(await hoursOf(hostPage)));
+check('… and its clock is the guest\'s clock', await guestPage.until('Math.abs(window.__wwAtmos().day.hours - 12) < 0.3', 'noon for the guest', 15000).then(() => true, () => false), String(await hoursOf(guestPage)));
+await hostPage.eval("window.__wwChat.send('/gamemode spectator Gus')");
+check('a command about a player is done in that player\'s game', await guestPage.until("activeWorld.gameMode === 'SPECTATOR'", 'the guest a spectator', 15000).then(() => true, () => false));
+await hostPage.eval("window.__wwChat.send('/gamemode creative Gus')");
+await guestPage.until("activeWorld.gameMode === 'CREATIVE'", 'the guest in creative again', 15000).catch(() => {});
+await guestPage.eval("window.__wwChat.send('/give torch 3')");
+check('… and what a guest gives themselves is in their own hands', await guestPage.until("JSON.stringify(window.me.inventory.hotbar).includes('torch')", 'the torches', 15000).then(() => true, () => false));
+check('the host\'s list of operators is kept with the world', await hostPage.eval("window.__wwChat.ops().join()") === 'Gus');
+
+// ── The storm is one storm ───────────────────────────────────────────────────
+// The host's lightning comes down in the same place in the guest's game, and its tornado stands where the host's does.
+const boltAt = { x: Math.round(at.x) + 31, z: Math.round(at.z) - 17 };
+await hostPage.eval(`(() => { const a = window.__wwAtmos(); a.onBolt(${boltAt.x}, ${boltAt.z}, false, 12345); })()`);
+check('lightning that strikes in the host\'s game strikes the same place in the guest\'s',
+    await guestPage.until(`window.__wwAtmos().lightning.bolts.some(b => Math.abs(b.x - ${boltAt.x}) < 0.2 && Math.abs(b.z - ${boltAt.z}) < 0.2)`, 'the bolt', 8000).then(() => true, () => false));
+check('… and the guest\'s game makes none of its own', await guestPage.eval('window.__wwAtmos().guest === true') && await hostPage.eval('window.__wwAtmos().guest === false'));
+await hostPage.eval("window.__wwChat.send('/weather tornado')");
+const torOk = await guestPage.until('window.__wwAtmos()._tor.on === true', 'the tornado in the guest\'s game', 15000).then(() => true, () => false);
+await sleep(1200);
+const torH = await hostPage.eval('(() => { const t = window.__wwAtmos()._tor; return { x: t.x, z: t.z, on: t.on }; })()');
+const torG = await guestPage.eval('(() => { const t = window.__wwAtmos()._tor; return { x: t.x, z: t.z, on: t.on }; })()');
+check('a tornado in the host\'s game is the same tornado in the guest\'s', torOk && torH.on && Math.hypot(torH.x - torG.x, torH.z - torG.z) < 25, JSON.stringify({ torH, torG, host: await hostPage.eval('({ state: window.__wwAtmos().tornadoState(), weather: window.__wwAtmos().weather.local })'), guest: await guestPage.eval('({ net: window.__wwAtmos()._torNet, guest: window.__wwAtmos().guest, weather: window.__wwAtmos().weather.local, active: window.__wwAtmos().active })') }));
+await hostPage.eval("window.__wwChat.send('/weather sunny')");
+await guestPage.until('window.__wwAtmos()._torNet === null', 'the tornado to be over for the guest', 15000).catch(() => {});
+
+// ── Players against players ──────────────────────────────────────────────────
+await hostPage.eval("window.__wwChat.send('/gamemode survival Gus'); window.__wwChat.send('/heal Gus'); window.__wwChat.send('/tp Gus')");
+await guestPage.until("activeWorld.gameMode === 'SURVIVAL'", 'the guest in survival', 15000).catch(() => {});
+await sleep(1200);                                                           // each has heard where the other now stands
+const gusId = await hostPage.eval('window.__wwPlayers().find(p => !p.you).id');
+check('PvP is on in a world unless it is turned off', await hostPage.eval('window.__wwWorld.pvp()') === true);
+await hostPage.eval(`window.__wwStrike(${gusId}, 6)`);
+check('a blow from one player lands on the other, in their own game', await guestPage.until('window.me.health < 99', 'the guest to be hurt', 10000).then(() => true, () => false), String(await guestPage.eval('window.me.health')));
+await hostPage.eval("window.__wwChat.send('/pvp off')");
+check('turned off by the host, it is off for everyone', await guestPage.until('window.__wwWorld.pvp() === false', 'the guest to hear PvP is off', 10000).then(() => true, () => false));
+await hostPage.eval("window.__wwChat.send('/heal Gus')");
+await guestPage.until('window.me.health >= 100', 'the guest healed', 10000).catch(() => {});
+check('… and no blow is struck', await hostPage.eval(`window.__wwStrike(${gusId}, 6)`) === false && (await sleep(800), await guestPage.eval('window.me.health')) >= 100);
+await hostPage.eval("window.__wwChat.send('/pvp on'); window.__wwChat.send('/gamemode creative Gus')");
+await guestPage.until("activeWorld.gameMode === 'CREATIVE'", 'the guest in creative again', 15000).catch(() => {});
+
+// ── The Players panel: who is who ────────────────────────────────────────────
+const asHost = await hostPage.eval('window.__wwPlayers()'), asGuest = await guestPage.eval('window.__wwPlayers()');
+check('each game knows who the operators are', asHost.find(q => !q.you)?.op === true && asGuest.find(q => q.you)?.op === true && asGuest.find(q => !q.you)?.op === true,
+    JSON.stringify(asGuest));
+
 // A block far out of the guest's reach: the host's game will not have it, and says what is there instead.
 const far = { x: gx + 40, y: gy, z: gz };
 const before = await guestPage.eval(`window.__wwBlockAt(${far.x}, ${far.y}, ${far.z})`);
 await guestPage.eval(`window.__wwSetBlock(${far.x}, ${far.y}, ${far.z}, 'BRICKS')`);
 await sleep(1500);
+// (As long again, on a machine with its hands full, for the host's answer to have come.)
+await guestPage.until(`window.__wwBlockAt(${far.x}, ${far.y}, ${far.z}) === ${before}`, 'the block to be put back', 8000).catch(() => {});
 check('a block out of reach is refused: the host never has it, and the guest\'s is put back',
     await hostPage.eval(`window.__wwBlockAt(${far.x}, ${far.y}, ${far.z})`) !== BRICKS && await guestPage.eval(`window.__wwBlockAt(${far.x}, ${far.y}, ${far.z})`) === before,
     `was ${before}, guest now ${await guestPage.eval(`window.__wwBlockAt(${far.x}, ${far.y}, ${far.z})`)}`);
@@ -335,7 +402,9 @@ for (let i = 0, last = NaN; i < 60; i++) {
     last = y;
 }
 const farBlock = { x: away.x + 1, y: Math.floor(rest ?? 200) + 2, z: away.z };
-await sleep(800);                                                            // the host has heard where the guest now stands
+// The host has heard where the guest now stands: one standing still says so every two seconds
+// (RATE.STATE_IDLE), and the last word while falling can be blocks above where they came to rest.
+await sleep(2600);
 await guestPage.eval(`window.__wwSetBlock(${farBlock.x}, ${farBlock.y}, ${farBlock.z}, 'BRICKS')`);
 await sleep(1500);
 check('the host is not there', await hostPage.eval(`window.__wwBlockAt(${away.x}, 0, ${away.z})`) === 0);

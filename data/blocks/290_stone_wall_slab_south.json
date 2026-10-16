@@ -1,0 +1,22 @@
+{
+  "id": 290,
+  "name": "STONE_WALL_SLAB_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "hardness": 2,
+  "requiresTool": "pickaxe",
+  "texture": "Stone.png",
+  "model": "vslab",
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "stone_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

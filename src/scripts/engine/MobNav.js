@@ -42,7 +42,9 @@ export class MobNav {
 
     solid(x, y, z) {
         const id = this.world.getBlock(x, y, z);
-        return id !== 0 && !this.reg.isNoCollision(id);
+        if (id !== 0 && !this.reg.isNoCollision(id)) return true;
+        // Over a fence there is no going: it stands half a block above its own.
+        return !!this.reg.isTall && this.reg.isTall(this.world.getBlock(x, y - 1, z));
     }
 
     liquid(x, y, z) {

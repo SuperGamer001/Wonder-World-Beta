@@ -1,0 +1,26 @@
+{
+  "id": 366,
+  "name": "POLISHED_DIORITE_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.88,
+    0.88,
+    0.9
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Diorite.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "polished_diorite_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "POLISHED_DIORITE_SLAB",
+    "top": "POLISHED_DIORITE_SLAB_TOP",
+    "full": "POLISHED_DIORITE"
+  }
+}

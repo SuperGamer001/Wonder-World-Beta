@@ -1,0 +1,40 @@
+{
+  "id": 532,
+  "name": "BIRCH_FENCE_GATE",
+  "terrainType": "solid",
+  "model": "gate",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "birch_fence_gate",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Planks.png",
+  "sound": "wood",
+  "flammable": 20,
+  "use": {
+    "toggle": "BIRCH_FENCE_GATE_OPEN",
+    "away": "BIRCH_FENCE_GATE_OPEN_BACK",
+    "sound": "gate"
+  },
+  "place": {
+    "mode": "look",
+    "names": {
+      "east": "BIRCH_FENCE_GATE",
+      "west": "BIRCH_FENCE_GATE_WEST",
+      "south": "BIRCH_FENCE_GATE_SOUTH",
+      "north": "BIRCH_FENCE_GATE_NORTH"
+    }
+  }
+}

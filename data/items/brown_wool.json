@@ -1,0 +1,8 @@
+{
+  "id": "brown_wool",
+  "name": "Brown Wool",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

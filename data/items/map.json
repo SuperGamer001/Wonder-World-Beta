@@ -1,0 +1,10 @@
+{
+  "id": "map",
+  "name": "Map",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 1,
+  "category": "Tools",
+  "use": "map",
+  "icon": "data/textures/items/map.png"
+}

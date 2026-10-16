@@ -1,0 +1,25 @@
+{
+  "id": 736,
+  "name": "ANVIL_WEST",
+  "terrainType": "solid",
+  "model": "anvil",
+  "facing": "west",
+  "color": [
+    0.35,
+    0.35,
+    0.35
+  ],
+  "texture": "Anvil.png",
+  "interactable": true,
+  "interactType": "anvil",
+  "hardness": 5,
+  "tool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "anvil",
+      "count": 1
+    }
+  ],
+  "sound": "stone",
+  "variant": true
+}

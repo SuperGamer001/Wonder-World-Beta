@@ -1,0 +1,31 @@
+{
+  "id": 595,
+  "name": "BLACK_SOFA_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.14,
+    0.14,
+    0.16
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Black.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "black_sofa",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

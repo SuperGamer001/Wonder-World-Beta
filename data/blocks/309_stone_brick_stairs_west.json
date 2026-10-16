@@ -1,0 +1,22 @@
+{
+  "id": 309,
+  "name": "STONE_BRICK_STAIRS_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.5,
+    0.5,
+    0.52
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Stone_Bricks.png",
+  "model": "stairs",
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "stone_brick_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

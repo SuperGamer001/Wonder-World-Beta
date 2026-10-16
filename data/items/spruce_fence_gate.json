@@ -1,0 +1,8 @@
+{
+  "id": "spruce_fence_gate",
+  "name": "Spruce Fence Gate",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

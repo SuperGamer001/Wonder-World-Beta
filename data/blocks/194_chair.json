@@ -1,0 +1,36 @@
+{
+  "id": 194,
+  "name": "CHAIR",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "chair",
+  "texture": "Wooden_Planks.png",
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "chair",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "CHAIR",
+      "west": "CHAIR_WEST",
+      "south": "CHAIR_SOUTH",
+      "north": "CHAIR_NORTH"
+    }
+  }
+}

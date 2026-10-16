@@ -1,0 +1,22 @@
+{
+  "id": "pie",
+  "station": "oven",
+  "result": {
+    "itemId": "pie",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "bread",
+      "count": 1
+    },
+    {
+      "itemId": "apple",
+      "count": 3
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

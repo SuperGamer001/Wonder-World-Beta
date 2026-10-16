@@ -1,0 +1,14 @@
+{
+  "id": "ladder",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "ladder",
+    "count": 3
+  },
+  "ingredients": [
+    {
+      "itemId": "stick",
+      "count": 7
+    }
+  ]
+}

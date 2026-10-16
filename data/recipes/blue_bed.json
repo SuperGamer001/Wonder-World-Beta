@@ -1,0 +1,23 @@
+{
+  "id": "blue_bed",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "blue_bed",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wool_block",
+      "count": 2
+    },
+    {
+      "itemId": "blue_wool",
+      "count": 1
+    },
+    {
+      "itemId": "wooden_planks",
+      "count": 3,
+      "any": "planks"
+    }
+  ]
+}

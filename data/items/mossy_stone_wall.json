@@ -1,0 +1,8 @@
+{
+  "id": "mossy_stone_wall",
+  "name": "Mossy Stone Wall",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

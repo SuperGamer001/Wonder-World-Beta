@@ -1,0 +1,14 @@
+{
+  "id": "wooden_door",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "wooden_door",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wooden_planks",
+      "count": 6
+    }
+  ]
+}

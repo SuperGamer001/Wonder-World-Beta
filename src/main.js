@@ -91,6 +91,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     await Promise.all([loadAllGamePacks(), loadSettings()]);
     _buildBlockColorIcons();
+    _buildShapeIcons();
     applyLoadedAssets();
     applyPlayerSettings(getSettings());   // apply accessibility/HUD prefs from the start
 
@@ -303,6 +304,7 @@ function bindEvents() {
 
     // World events from world.js
     window.addEventListener('ww_playerDied', () => {
+        if (_mapOpen) closeMap(false);
         // Whatever menu was up goes away, and what was in hand falls with the rest.
         if (_invCursor) { callWorldJS("dropItem", { itemId: _invCursor.itemId, count: _invCursor.count }); _invCursor = null; _hideCursorItem(); }
         _chest = null;
@@ -317,6 +319,31 @@ function bindEvents() {
         DOM.deathScreen?.classList.remove("hidden");
         if (document.pointerLockElement) document.exitPointerLock();
     });
+
+    // A map in hand, used (world.js); and the dark of going to bed at night.
+    window.addEventListener('ww_openMap', () => openMap());
+    window.addEventListener('ww_mapTile', (e) => _mapTile(e.detail));
+    document.getElementById('mapCloseBtn')?.addEventListener('click', () => closeMap());
+    document.getElementById('mapZoom')?.addEventListener('change', () => _mapDraw(true));
+    // Lying in bed, the room dims while sleep comes (world.js) …
+    window.addEventListener('ww_drowsy', (e) => document.getElementById('sleepFade')?.classList.toggle('drowsy', !!e.detail?.on));
+    // … and goes dark for a moment each time the clock cuts forward.
+    window.addEventListener('ww_sleepCut', () => {
+        const el = document.getElementById('sleepFade');
+        if (!el) return;
+        el.classList.add('on');
+        setTimeout(() => el.classList.remove('on'), 700);
+    });
+
+    // Screenshots (world.js: F2): a flash when one is taken; the pause menu takes one, and shows where they are kept.
+    window.addEventListener('ww_screenshotTaken', () => {
+        const el = document.getElementById('shotFlash');
+        if (!el) return;
+        el.classList.add('on');
+        requestAnimationFrame(() => requestAnimationFrame(() => el.classList.remove('on')));
+    });
+    document.getElementById('pauseScreenshotBtn')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('ww_screenshot')));
+    document.getElementById('pauseShotsFolderBtn')?.addEventListener('click', () => openScreenshotsFolder());
 
     window.addEventListener('ww_respawned', () => {
         _dead = false;
@@ -559,6 +586,7 @@ window.addEventListener('ww_saving', (e) => {
 
 window.addEventListener('ww_fatalError', (e) => {
     const { title = 'Error', message = '' } = e.detail ?? {};
+    reportProblem('graphics', `${title}: ${message}`);
     document.getElementById('appLoadingContainer')?.classList.add('hidden');
     document.getElementById('loadingContainer')?.classList.add('hidden');
     openConfirm(title, message, () => {});
@@ -578,6 +606,127 @@ window.addEventListener('ww_gpuWarning', (e) => {
         // Self-dismiss — this is advisory, not something to block play on.
         setTimeout(() => el.classList.add('hidden'), 15000);
     }
+});
+
+/* =========================================================
+   REPORTS
+   When something goes wrong it is written down, so that afterwards there is
+   something to go on: an error nobody caught, a promise nobody caught, the
+   graphics giving up. The server keeps them (user/reports.json: the last
+   sixty, the same one in a row counted and not repeated), with what the
+   launcher sees from outside — the page's process dying, the app itself
+   crashing. Settings → Game → Error Reports shows them, newest first, to read
+   or copy. Nothing is sent anywhere: they are the player's to pass on.
+========================================================= */
+
+const REPORTS_LOCAL = 'ww_reports';       // where a page with no server to tell keeps them (a guest's)
+const REPORTS_MOST = 40;                  // reports sent in one sitting: an error every frame is not sixty a second
+let _reportsSent = 0, _reportLast = '';
+
+function reportProblem(kind, message, stack = '') {
+    message = String(message ?? '').trim().slice(0, 600);
+    stack = String(stack ?? '').slice(0, 6000);
+    if (!message) return;
+    const sig = `${kind}|${message}|${stack}`;
+    if (sig !== _reportLast) _reportLast = sig; else if (_reportsSent > 3) return;       // the same again: a few are counted, the rest let go
+    if (++_reportsSent > REPORTS_MOST) return;
+    let where = 'in the menus';
+    try {
+        if (gameStarted) where = `in a world (${String(activeWorld?.gameMode ?? '').toLowerCase() || 'playing'}${typeof isGuest === 'function' && (isGuest() || _onlineGuest) ? ', as a guest' : ''})`;
+        else if (_loadingActive) where = 'loading a world';
+    } catch { /* early: the menus it is */ }
+    const report = { at: Date.now(), kind, message, stack, where };
+    const keepHere = () => {
+        try {
+            const list = JSON.parse(localStorage.getItem(REPORTS_LOCAL) ?? '[]');
+            list.unshift({ ...report, count: 1 });
+            localStorage.setItem(REPORTS_LOCAL, JSON.stringify(list.slice(0, 30)));
+        } catch { /* nowhere to keep it */ }
+    };
+    try {
+        fetch(`${SERVER_URL}/api/reports`, { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(report) })
+            .then((r) => { if (!r.ok) keepHere(); }, keepHere);
+    } catch { keepHere(); }
+}
+
+window.addEventListener('error', (e) => {
+    // (A picture or a sound that failed to load is not one of these: that event does not come here.)
+    const at = e.filename ? `\n    at ${String(e.filename).replace(location.origin, '')}:${e.lineno}:${e.colno}` : '';
+    reportProblem('error', e.message || String(e.error ?? 'Error'), e.error?.stack ?? at);
+});
+window.addEventListener('unhandledrejection', (e) => {
+    const r = e.reason;
+    reportProblem('error', `Unhandled: ${r?.message ?? String(r)}`, r?.stack ?? '');
+});
+// The graphics card (or its driver) took the picture away.
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('gameCanvas')?.addEventListener('webglcontextlost', () => reportProblem('graphics', 'The graphics context was lost'));
+});
+
+async function fetchReports() {
+    let list = [];
+    try { const r = await fetch(`${SERVER_URL}/api/reports`, { cache: 'no-store' }); if (r.ok) list = await r.json(); } catch { /* none to ask */ }
+    try { list = list.concat(JSON.parse(localStorage.getItem(REPORTS_LOCAL) ?? '[]')); } catch { /* none kept here */ }
+    return (Array.isArray(list) ? list : []).filter(r => r && typeof r.message === 'string').sort((a, b) => (b.at | 0) - (a.at | 0) || b.at - a.at);
+}
+
+const REPORT_KINDS = { error: 'Error', crash: 'Crash', graphics: 'Graphics', worker: 'Error', app: 'Crash' };
+/** A report as plain text, to copy. */
+function reportText(r) {
+    return `[${new Date(r.at).toISOString()}] ${REPORT_KINDS[r.kind] ?? 'Error'}${r.count > 1 ? ` ×${r.count}` : ''} — version ${r.version || '?'}, ${r.where || ''}\n${r.message}${r.stack ? '\n' + r.stack : ''}`;
+}
+
+/** Settings → Game → Error Reports. Everything in a report goes on the page as text. */
+async function showReports() {
+    const screen = document.getElementById('ReportsScreen'), body = document.getElementById('reportsBody');
+    if (!screen || !body) return;
+    const list = await fetchReports();
+    body.textContent = '';
+    for (const r of list) {
+        const box = document.createElement('div');
+        box.className = 'reportBox' + (r.kind === 'crash' || r.kind === 'app' ? ' crash' : '');
+        const head = document.createElement('div');
+        head.className = 'reportHead';
+        const when = new Date(r.at);
+        head.textContent = `${REPORT_KINDS[r.kind] ?? 'Error'}${r.count > 1 ? ` ×${r.count}` : ''} · ${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · version ${r.version || '?'}${r.where ? ' · ' + r.where : ''}`;
+        const msg = document.createElement('div');
+        msg.className = 'reportMessage';
+        msg.textContent = r.message;
+        box.append(head, msg);
+        if (r.stack) {
+            const more = document.createElement('details'), sum = document.createElement('summary'), pre = document.createElement('pre');
+            sum.textContent = 'Details';
+            pre.textContent = r.stack;
+            more.append(sum, pre);
+            box.appendChild(more);
+        }
+        body.appendChild(box);
+    }
+    if (!list.length) {
+        const none = document.createElement('div');
+        none.className = 'formNote';
+        none.textContent = 'Nothing has gone wrong. If the game crashes or hits an error, what happened will be listed here.';
+        body.appendChild(none);
+    }
+    document.getElementById('reportsSub').textContent = list.length ? `The last ${list.length}, newest first. They stay on this computer unless you copy them to someone.` : '';
+    for (const id of ['reportsCopyBtn', 'reportsClearBtn']) document.getElementById(id)?.classList.toggle('hidden', !list.length);
+    screen._list = list;
+    body.scrollTop = 0;
+    screen.classList.remove('hidden');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('settingReports')?.addEventListener('click', () => showReports());
+    document.getElementById('reportsCloseBtn')?.addEventListener('click', () => document.getElementById('ReportsScreen')?.classList.add('hidden'));
+    document.getElementById('reportsCopyBtn')?.addEventListener('click', async () => {
+        const text = (document.getElementById('ReportsScreen')._list ?? []).map(reportText).join('\n\n');
+        try { await navigator.clipboard.writeText(text); showNotice('Copied'); } catch { showNotice('Could not copy'); }
+    });
+    document.getElementById('reportsClearBtn')?.addEventListener('click', async () => {
+        try { await fetch(`${SERVER_URL}/api/reports`, { method: 'DELETE' }); } catch { /* none kept there */ }
+        try { localStorage.removeItem(REPORTS_LOCAL); } catch { /* none kept here */ }
+        showReports();
+    });
 });
 
 /* =========================================================
@@ -770,22 +919,55 @@ async function fetchReleaseNotes() {
 }
 
 /**
- * The notes as a page: "### a section", "- an item" (a line that follows
- * without a dash carries it on), **bold**; the "# title" line is the popup's
- * own title and is left out. Built as elements, never as markup: the file's
- * text is only ever text.
+ * The file is every version's notes, newest first, with a line of three
+ * dashes ("---") between one version's and the next. Each part's "# title"
+ * line names its version. A part with nothing under its title (the next
+ * release, not written yet) is left out.
+ */
+function splitReleaseNotes(text) {
+    const parts = [];
+    let lines = [];
+    const end = () => {
+        const title = lines.find(l => /^#\s/.test(l.trim()))?.trim() ?? '';
+        const body = lines.filter(l => !/^#\s/.test(l.trim()));
+        if (body.some(l => l.trim())) parts.push({
+            title: title.replace(/^#\s*/, '').replace(/\s*:\s*$/, ''),
+            version: title.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?/)?.[0] ?? null,
+            text: body.join('\n'),
+        });
+        lines = [];
+    };
+    for (const raw of String(text ?? '').split(/\r?\n/)) {
+        if (/^-{3,}$/.test(raw.trim())) end(); else lines.push(raw);
+    }
+    end();
+    return parts;
+}
+
+/** The part of the notes that is about the version running, or null: a file still describing the last release says nothing about this one. */
+function notesForThisVersion(notes) {
+    const parts = splitReleaseNotes(notes?.text);
+    return parts.find(p => p.version && p.version === notes?.version) ?? (notes?.notesVersion ? null : parts[0] ?? null);
+}
+
+/** A line of the notes into an element, **bold** as <strong>. Built as nodes, never as markup: the file's text is only ever text. */
+function _notesLine(el, line) {
+    line.split(/(\*\*[^*]+\*\*)/).forEach((part) => {
+        const bold = /^\*\*[^*]+\*\*$/.test(part);
+        const node = bold ? document.createElement('strong') : document.createTextNode(part);
+        if (bold) node.textContent = part.slice(2, -2);
+        el.appendChild(node);
+    });
+    return el;
+}
+
+/**
+ * One version's notes, added to `into`: "### a section", "- an item" (a line
+ * that follows without a dash carries it on), **bold**; a "# title" line is
+ * left out (the box's heading is made from it).
  */
 function renderReleaseNotes(text, into) {
-    into.textContent = '';
-    const rich = (el, line) => {
-        line.split(/(\*\*[^*]+\*\*)/).forEach((part) => {
-            const bold = /^\*\*[^*]+\*\*$/.test(part);
-            const node = bold ? document.createElement('strong') : document.createTextNode(part);
-            if (bold) node.textContent = part.slice(2, -2);
-            el.appendChild(node);
-        });
-        return el;
-    };
+    const rich = _notesLine;
     let list = null, item = null;
     for (const raw of String(text ?? '').split(/\r?\n/)) {
         const line = raw.trim();
@@ -804,19 +986,36 @@ function renderReleaseNotes(text, into) {
     }
 }
 
-/** Show the release notes. `fresh`: they are coming up by themselves, for a version just arrived at. */
+/**
+ * Show the release notes. `fresh`: they are coming up by themselves, for a
+ * version just arrived at — then only that version's are shown. From Settings
+ * it is the whole history, a box a version, newest first.
+ */
 async function showReleaseNotes(notes = null, fresh = false) {
     const screen = document.getElementById('ReleaseNotesScreen'), body = document.getElementById('releaseNotesBody');
     if (!screen || !body) return;
     notes = notes ?? await fetchReleaseNotes();
-    const version = notes?.notesVersion ?? notes?.version ?? '';
+    const version = notes?.version ?? notes?.notesVersion ?? '';
+    const parts = fresh ? [notesForThisVersion(notes)].filter(Boolean) : splitReleaseNotes(notes?.text);
     document.getElementById('releaseNotesTitle').textContent = fresh ? "What's New" : 'Release Notes';
     document.getElementById('releaseNotesSub').textContent = fresh
         ? `Wonder World has been updated to version ${version}. Here is what it added and fixed.`
         : version ? `Wonder World ${version}` : '';
     document.getElementById('releaseNotesCloseBtn').textContent = fresh ? 'Continue' : 'Close';
-    if (notes?.text?.trim()) renderReleaseNotes(notes.text, body);
-    else body.textContent = 'There are no release notes with this copy of the game.';
+    body.textContent = '';
+    for (const part of parts) {
+        const box = document.createElement('div');
+        box.className = 'releaseNotesBox';
+        if (!fresh && part.title) box.appendChild(_notesLine(document.createElement('h2'), part.title));
+        renderReleaseNotes(part.text, box);
+        body.appendChild(box);
+    }
+    if (!parts.length) {
+        const box = document.createElement('div');
+        box.className = 'releaseNotesBox';
+        box.textContent = 'There are no release notes with this copy of the game.';
+        body.appendChild(box);
+    }
     body.scrollTop = 0;
     screen.classList.remove('hidden');
 }
@@ -827,8 +1026,8 @@ async function showReleaseNotes(notes = null, fresh = false) {
  * last — shows what it brought. `returning`: this player was here before the
  * game kept track (an update from a version that did not), so they are shown
  * it too; someone starting for the first time is not.
- * The notes are only shown when they are this version's: a file still
- * describing the last release says nothing about this one.
+ * Only this version's part of the notes is shown, and only if the file has
+ * one: a file still describing the last release says nothing about this one.
  */
 async function maybeShowWhatsNew(returning) {
     const notes = await fetchReleaseNotes();
@@ -837,8 +1036,7 @@ async function maybeShowWhatsNew(returning) {
     if (last === notes.version) return;
     saveSettings({ ...s, lastVersion: notes.version });
     const newer = last ? versionNewer(notes.version, last) : returning;
-    if (!newer || !notes.text?.trim()) return;
-    if (notes.notesVersion && notes.notesVersion !== notes.version) return;
+    if (!newer || !notesForThisVersion(notes)) return;
     showReleaseNotes(notes, true);
 }
 
@@ -870,6 +1068,8 @@ async function checkForUpdatesNow() {
 // `later`: do not take the pointer yet — the Esc key is still down (see above).
 function closeAnyMenu(later = false) {
     if (_dead) return;                 // the death screen is not one of them
+    if (typeof _chatOpen !== 'undefined' && _chatOpen) { closeChat(!later); return; }      // the chat box (chat.js)
+    if (_mapOpen) { closeMap(!later); return; }
     if (DOM.inventoryScreen && !DOM.inventoryScreen.classList.contains('hidden'))   { closeInventory(later);          return; }
     if (DOM.creativeInvPanel && !DOM.creativeInvPanel.classList.contains('hidden')) { closeCreativeInventory(!later); return; }
     if (DOM.interactivePanel && !DOM.interactivePanel.classList.contains('hidden')) { closeInteractivePanel(!later);  return; }
@@ -1164,6 +1364,7 @@ function applyPlayerSettings(s) {
     window.__wwMenuScene?.setSkin(s.skin ?? null);
 
     callWorldJS('applySettings', {
+        playerKey:       typeof currentPlayerKey === 'function' ? currentPlayerKey() : '',
         sensitivity:     s.sensitivity,
         invertY:         s.invertY,
         fov:             s.fov,
@@ -1370,6 +1571,8 @@ function _populateAtmosphereControls(prefix, world) {
     if (weather) weather.value = world.weather ?? 'dynamic';
     const time = document.getElementById(prefix + 'TimeOfDay');
     if (time) time.value = '';
+    const pvp = document.getElementById(prefix + 'Pvp');
+    if (pvp) pvp.checked = world.pvp !== false;
     syncSegments();
 }
 
@@ -1377,6 +1580,7 @@ function _readAtmosphereControls(prefix) {
     return {
         daylightCycle: document.getElementById(prefix + 'DaylightCycle')?.checked ?? true,
         weather: document.getElementById(prefix + 'Weather')?.value || 'dynamic',
+        pvp: document.getElementById(prefix + 'Pvp')?.checked ?? true,
     };
 }
 
@@ -1398,7 +1602,9 @@ async function saveWorldSettingsFor(world, changes) {
     } catch { /* offline */ }
     return changed;
 }
-const WORLD_SETTING_DEFAULTS = { gameMode: 'SURVIVAL', difficulty: 'NORMAL', daylightCycle: true, weather: 'dynamic' };
+const WORLD_SETTING_DEFAULTS = { gameMode: 'SURVIVAL', difficulty: 'NORMAL', daylightCycle: true, weather: 'dynamic', pvp: true };
+// A command changed a rule of the running world (/pvp), or its host did: the settings screen shows it.
+window.addEventListener('ww_rules', (e) => { if (activeWorld && typeof e.detail?.pvp === 'boolean') activeWorld.pvp = e.detail.pvp; });
 
 /**
  * The World tab of the in-game settings, applied to the running world. There
@@ -1417,6 +1623,7 @@ async function applyWorldSettings() {
     if (time) time.value = '';   // a one-shot jump, not a setting
     const changed = await saveWorldSettingsFor(world, changes);
     if (changed.includes('gameMode')) callWorldJS("setGameMode", { gameMode: changes.gameMode });
+    if (changed.includes('pvp')) callWorldJS("setRules", { pvp: changes.pvp });
     if (timeRaw !== '' || changed.includes('daylightCycle') || changed.includes('weather')) {
         callWorldJS("setAtmosphere", {
             daylightCycle: changes.daylightCycle,
@@ -1882,6 +2089,7 @@ function startWorld(world) {
     callWorldJS("startWorldLoad", {
         gamepackData: mergedGamePackData,
         worldId:   world.id,
+        worldName: world.name ?? '',
         worldSeed: world.seed,
         playerPos: world.playerPos ?? { x: 0, y: 100, z: 0 },
         gameMode:  world.gameMode  ?? 'SURVIVAL',
@@ -1896,7 +2104,10 @@ function startWorld(world) {
         flat: world.worldType === 'flat' ? (world.flat ?? {}) : null,
         // Not this player's world (a further pane, a guest from the network):
         // their place in it is kept under their own name.
-        guest: isGuest() || _onlineGuest, stateKey: isGuest() ? guestStateKey() : '',
+        // … found by who they are (the code kept with their name), and, for one kept before that, by the name.
+        guest: isGuest() || _onlineGuest, stateKey: isGuest() ? guestStateKey() : '', stateKeyOld: isGuest() ? guestStateKeyOld() : '',
+        // Whether players can hurt each other (World Settings → PvP).
+        pvp: world.pvp !== false,
         // An online game (src/scripts/Online.js holds its room): the session, and for a guest the world itself, come through it.
         online: !!world.online,
         workers: PANE > 0 ? Math.max(2, Math.floor(((navigator.hardwareConcurrency || 4) - 1) / (parseInt(PARAMS.get('of')) || 2))) : 0,
@@ -1980,18 +2191,19 @@ const ITEM_TEXTURES = {
     wood_log:     'data/textures/blocks/Log_Side.png',
     leaves:       'data/textures/blocks/leaves.png',
     sandstone:    'data/textures/blocks/Sandstone.png',
-    clay_ball:    'data/textures/blocks/Clay.png',
+    // … and the blocks those come out of, as themselves (the creative inventory lists them).
+    // (Coal, raw iron and gold, and a ball of clay are pictures of their own: data/textures/items.)
+    clay:         'data/textures/blocks/Clay.png',
+    coal_ore:     'data/textures/blocks/Coal_Ore.png',
+    iron_ore:     'data/textures/blocks/Iron_Ore.png',
+    gold_ore:     'data/textures/blocks/Gold_Ore.png',
     granite:      'data/textures/blocks/Granite.png',
     diorite:      'data/textures/blocks/Diorite.png',
     bedrock:      'data/textures/blocks/Bedrock.png',
     ice:          'data/textures/blocks/Ice.png',
     snow:         'data/textures/blocks/snow.png',
     snow_dirt:    'data/textures/blocks/SnowDirt.png',
-    water_bucket: 'data/textures/blocks/Water.png',
     water:        'data/textures/blocks/Water.png',
-    coal:         'data/textures/blocks/Coal_Ore.png',
-    raw_iron:     'data/textures/blocks/Iron_Ore.png',
-    raw_gold:     'data/textures/blocks/Gold_Ore.png',
 };
 
 function itemTextureSrc(itemId) {
@@ -2017,6 +2229,20 @@ function _buildBlockColorIcons() {
         _blockColorIcons[def.name.toLowerCase()] = _makeColorSwatch(def.color);
     }
 }
+/**
+ * The blocks that are not cubes — a slab, a stair, a chair — are shown as they
+ * stand, not as their texture (scripts/BlockIcons.js draws them, from the same
+ * boxes the game does). They come a moment after the rest: the textures they
+ * are drawn from have to load.
+ */
+function _buildShapeIcons(again = true) {
+    if (!window.__wwBlockIcons) { if (again) setTimeout(() => _buildShapeIcons(false), 800); return; }
+    window.__wwBlockIcons(mergedGamePackData.blocks ?? []).then((icons) => {
+        for (const [id, url] of Object.entries(icons)) if (!mergedGamePackData.items?.find(it => it.id === id)?.icon) _itemIcons[id] = url;
+        refreshHotbarUI();
+    }).catch(() => { /* their textures will do */ });
+}
+
 function _makeColorSwatch([r, g, b]) {
     const c = document.createElement('canvas');
     c.width = c.height = 16;
@@ -2072,6 +2298,22 @@ function _setSlotCount(el, slot) {
     } else {
         countEl.style.display = 'none';
     }
+}
+
+/* =========================================================
+   SCREENSHOTS
+   Taken in world.js (F2) and kept by the server, in user/screenshots/ under
+   the data folder. The desktop app opens that folder; a browser is told where
+   it is.
+========================================================= */
+
+async function openScreenshotsFolder() {
+    try {
+        const res = await fetch(`${SERVER_URL}/api/screenshots/open`, { method: 'POST' });
+        if (res.ok) return;
+        const r = await res.json().catch(() => ({}));
+        showNotice(r.dir ? `Screenshots are kept in ${r.dir}` : 'The screenshots folder could not be opened.');
+    } catch { showNotice('The screenshots folder could not be opened.'); }
 }
 
 /* =========================================================
@@ -2159,6 +2401,121 @@ window.addEventListener('ww_chestChanged', (e) => {
 });
 
 /* =========================================================
+   THE MAP
+========================================================= */
+// A map in hand, used, shows the land from above: the sheet of it the player
+// is on — a square of the world, 128 samples a side, at the scale chosen — as
+// the seed has it (world.js has a worker sample the generator, the way far
+// terrain is made: no chunk has to be loaded, and what players have built is
+// not on it). North is up. The player, the others in the world, the world's
+// spawn and the player's bed are marked, and move while it is open.
+
+const MAP_CELLS = 64;               // samples a side in one piece of a sheet (a far-terrain tile)
+const MAP_PIECES = 2;               // pieces a side
+let _mapOpen = false, _mapTimer = null;
+let _mapSheet = null;               // { x0, z0, step, canvas }: the sheet being shown
+
+function openMap() {
+    const screen = document.getElementById('MapScreen');
+    if (!screen || !gameStarted || _dead || _menuOpen) return;
+    _menuOpen = true;               // before the pointer is let go, so that is not a pause
+    _mapOpen = true;
+    if (document.pointerLockElement) document.exitPointerLock();
+    screen.classList.remove('hidden');
+    _mapDraw(true);
+    _mapTimer = setInterval(() => _mapDraw(false), 250);
+}
+
+function closeMap(lock = true) {
+    document.getElementById('MapScreen')?.classList.add('hidden');
+    clearInterval(_mapTimer);
+    _mapTimer = null;
+    _mapOpen = false;
+    _menuOpen = false;
+    if (lock) requestGameLock();
+}
+
+/** Draw the map: the sheet (asked for afresh when the player has walked off it, or `fresh`), then who is where. */
+function _mapDraw(fresh) {
+    const canvas = document.getElementById('mapCanvas'), info = window.__wwMapInfo?.();
+    if (!canvas || !info) return;
+    const step = Number(document.getElementById('mapZoom')?.value) || 8;
+    const size = MAP_CELLS * MAP_PIECES * step;
+    const x0 = Math.floor(info.x / size) * size, z0 = Math.floor(info.z / size) * size;
+    if (fresh || !_mapSheet || _mapSheet.x0 !== x0 || _mapSheet.z0 !== z0 || _mapSheet.step !== step) {
+        const sheet = document.createElement('canvas');
+        sheet.width = sheet.height = MAP_CELLS * MAP_PIECES;
+        _mapSheet = { x0, z0, step, canvas: sheet };
+        for (let i = 0; i < MAP_PIECES; i++) for (let k = 0; k < MAP_PIECES; k++) {
+            callWorldJS('mapTile', { x0: x0 + i * MAP_CELLS * step, z0: z0 + k * MAP_CELLS * step, step });
+        }
+    }
+    const ctx = canvas.getContext('2d'), W = canvas.width, px = W / size;
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = '#20242b';
+    ctx.fillRect(0, 0, W, W);
+    ctx.drawImage(_mapSheet.canvas, 0, 0, W, W);
+    const on = (x, z) => [(x - x0) * px, (z - z0) * px];
+    const dot = (x, z, colour, r = W / 90) => {
+        const [mx, my] = on(x, z);
+        if (mx < 0 || my < 0 || mx > W || my > W) return false;
+        ctx.beginPath(); ctx.arc(mx, my, r, 0, Math.PI * 2);
+        ctx.fillStyle = colour; ctx.fill();
+        ctx.lineWidth = W / 300; ctx.strokeStyle = '#14161a'; ctx.stroke();
+        return [mx, my];
+    };
+    if (info.spawn) dot(info.spawn.x + 0.5, info.spawn.z + 0.5, '#ffd76a');
+    if (info.bed) dot(info.bed.x + 0.5, info.bed.z + 0.5, '#e0564e');
+    ctx.font = `${Math.round(W / 38)}px sans-serif`;
+    ctx.textAlign = 'center';
+    for (const o of info.others ?? []) {
+        const at = dot(o.x, o.z, '#7fd1ff');
+        if (!at) continue;
+        ctx.fillStyle = '#fff'; ctx.strokeStyle = '#14161a'; ctx.lineWidth = W / 170;
+        ctx.strokeText(String(o.name), at[0], at[1] - W / 60); ctx.fillText(String(o.name), at[0], at[1] - W / 60);
+    }
+    // The player: an arrow the way they look (north is up: −z).
+    const [mx, my] = on(info.x, info.z), a = Math.atan2(-Math.sin(info.yaw), Math.cos(info.yaw)), r = W / 42;
+    ctx.save();
+    ctx.translate(mx, my); ctx.rotate(a);
+    ctx.beginPath(); ctx.moveTo(0, -r * 1.3); ctx.lineTo(r * 0.85, r); ctx.lineTo(0, r * 0.45); ctx.lineTo(-r * 0.85, r); ctx.closePath();
+    ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = W / 220; ctx.strokeStyle = '#14161a'; ctx.stroke();
+    ctx.restore();
+    const note = document.getElementById('mapNote');
+    if (note) note.textContent = `You are at ${Math.floor(info.x)}, ${Math.floor(info.z)}. This sheet is ${size} blocks across; north is up.`;
+}
+
+/** A piece of the sheet has come from the generator: paint it in. */
+function _mapTile(t) {
+    const m = _mapSheet;
+    if (!m || !t || t.step !== m.step) return;
+    const ox = Math.round((t.x0 - m.x0) / m.step), oz = Math.round((t.z0 - m.z0) / m.step), n = MAP_CELLS + 1;
+    if (ox < 0 || oz < 0 || ox >= MAP_CELLS * MAP_PIECES || oz >= MAP_CELLS * MAP_PIECES) return;
+    const ctx = m.canvas.getContext('2d'), img = ctx.createImageData(MAP_CELLS, MAP_CELLS);
+    const pos = t.positions, col = t.colors;
+    // The piece's samples by where they are (they come with their own positions), so the order they are in does not matter.
+    const at = new Int32Array(n * n).fill(-1);
+    for (let v = 0; v < n * n; v++) {
+        const i = Math.round(pos[v * 3] / m.step), k = Math.round(pos[v * 3 + 2] / m.step);
+        if (i >= 0 && k >= 0 && i < n && k < n) at[i + k * n] = v;
+    }
+    for (let k = 0; k < MAP_CELLS; k++) for (let i = 0; i < MAP_CELLS; i++) {
+        const v = at[i + k * n], o = (i + k * MAP_CELLS) * 4;
+        if (v < 0) continue;
+        // Lit from the north-west: a slope facing that way is lighter, one facing away darker.
+        const e = at[i + 1 + k * n], s = at[i + (k + 1) * n];
+        const h = pos[v * 3 + 1], dx = e >= 0 ? pos[e * 3 + 1] - h : 0, dz = s >= 0 ? pos[s * 3 + 1] - h : 0;
+        const shade = Math.max(0.55, Math.min(1.35, 1 + (dx + dz) * 0.5 / m.step * 1.6));
+        img.data[o] = Math.min(255, col[v * 4] * shade);
+        img.data[o + 1] = Math.min(255, col[v * 4 + 1] * shade);
+        img.data[o + 2] = Math.min(255, col[v * 4 + 2] * shade);
+        img.data[o + 3] = 255;
+    }
+    ctx.putImageData(img, ox, oz);
+    if (_mapOpen) _mapDraw(false);
+}
+
+/* =========================================================
    INVENTORY SCREEN
 ========================================================= */
 
@@ -2233,17 +2590,40 @@ function closeCreativeInventory(lock = true) {
 // that has no (non-food) item representing it — so grass, snow, ice, leaves,
 // bedrock, water, etc. can still be placed. Block entries use the block's
 // lowercased name as their id, which the placement resolver maps back to it.
+//
+// Each is put in a category and given its place in it (`_creativeSort`), so
+// the screen is a set of shelves and not one heap in the order the files
+// happened to load. (It was: stone beside a gold sword beside raw pork.)
+// Worked out once for a set of definitions: there are about a thousand blocks,
+// and it took longer than a frame each time the screen was opened.
+let _creativeCache = null;   // { items, blocks, n, entries }
 function _creativeEntries() {
     const items  = mergedGamePackData.items  ?? [];
     const blocks = mergedGamePackData.blocks ?? [];
+    const n = items.length * 65536 + blocks.length;
+    const c = _creativeCache;
+    if (c && c.items === items && c.blocks === blocks && c.n === n) return c.entries;
+    const entries = _workOutCreativeEntries(items, blocks);
+    _creativeCache = { items, blocks, n, entries };
+    return entries;
+}
+function _workOutCreativeEntries(items, blocks) {
     const byNameLower = new Map(blocks.map(b => [b.name.toLowerCase(), b]));
 
-    const covered = new Set();   // block ids already reachable via a non-food item
+    // The block an item is, as a thing to hold: the one of its own name — or,
+    // for an item that says which shelf it belongs on ("category": a log is
+    // the wood block, whatever it is called), the first block that drops it.
+    // Such a block has no entry of its own. What merely comes out of a block
+    // (coal from its ore, a ball of clay) is a material, and the block is
+    // listed as itself. (The ores and clay used to be left out: coal stood in
+    // for coal ore.)
+    const covered = new Set();   // block ids an item already stands for
+    const blockOf = new Map();   // item id → the block it is
     for (const it of items) {
         if (it.type === 'food') continue;
         let blk = byNameLower.get(it.id);
-        if (!blk) blk = blocks.find(b => (b.drops || []).some(d => (d.itemId ?? d.item) === it.id));
-        if (blk) covered.add(blk.id);
+        if (!blk && it.category) blk = blocks.filter(b => (b.drops || []).some(d => (d.itemId ?? d.item) === it.id)).sort((x, y) => x.id - y.id)[0];
+        if (blk) { covered.add(blk.id); blockOf.set(it.id, blk); }
     }
 
     // A block another one places for a particular face (a wall torch, a hanging
@@ -2253,11 +2633,72 @@ function _creativeEntries() {
         for (const name of Object.values(b.placement ?? {})) if (name && name !== b.name) variants.add(name);
     }
 
+    // (Nor is one of several an item puts down: a stair turned another way, a door standing open, water on its way.)
     const blockEntries = blocks
-        .filter(b => b.id !== 0 && !covered.has(b.id) && !variants.has(b.name))
-        .map(b => ({ id: b.name.toLowerCase(), name: _titleCaseName(b.name) }));
+        .filter(b => b.id !== 0 && !covered.has(b.id) && !variants.has(b.name) && !b.variant)
+        .map(b => ({ id: b.name.toLowerCase(), name: _titleCaseName(b.name), _block: b }));
 
-    return [...items, ...blockEntries];
+    return [...items.map(it => ({ ...it, _block: blockOf.get(it.id) ?? null })), ...blockEntries]
+        .map(e => ({ ...e, ..._creativeSort(e) }))
+        .sort((x, y) => x.shelf - y.shelf || x.rank - y.rank || (x.key ?? x.id).localeCompare(y.key ?? y.id));
+}
+
+// The shelves, in the order they are shown. (There were eight: Building and
+// Decoration are one now, and Tools, Useful and Combat another.) An item that
+// names a shelf there is no longer goes on the one it became part of.
+const CREATIVE_SHELVES = ['Natural', 'Building', 'Tools', 'Food', 'Materials'];
+const CREATIVE_MERGED = { decoration: 'Building', useful: 'Tools', combat: 'Tools' };
+// What things are made of, cheapest first: the order of a row of tools or armor.
+const CREATIVE_TIERS = ['wooden', 'leather', 'stone', 'iron', 'gold'];
+// Natural blocks, by what they are: earth, sand, rock, ore, the cold, wood, leaves, what grows, the rest.
+const CREATIVE_NATURE = [
+    /GRASS|DIRT|PODZOL|MUD|MOSS$|MYCELIUM|CLAY/, /SAND$|GRAVEL/, /STONE|GRANITE|DIORITE|ANDESITE|SLATE|TERRACOTTA|BEDROCK/, /_ORE$/,
+    /SNOW|ICE/, /LOG$|^WOOD$|STEM/, /LEAVES/, /CACTUS|MUSHROOM/, /./,
+];
+const CREATIVE_TOOLS  = ['pickaxe', 'axe', 'shovel'];
+const CREATIVE_ARMS   = ['sword', 'spear', 'bow', 'shield'];
+const CREATIVE_WORN   = ['head', 'chest', 'legs', 'feet', 'quiver'];
+
+/**
+ * Which shelf an entry is on (an index into CREATIVE_SHELVES) and where on it.
+ * An item may say for itself: "category" in its JSON (a shelf's name).
+ */
+function _creativeSort(e) {
+    const tier = (() => { const i = CREATIVE_TIERS.findIndex(t => e.id.startsWith(t + '_')); return i < 0 ? CREATIVE_TIERS.length : i; })();
+    const shelf = (name) => CREATIVE_SHELVES.indexOf(name);
+    const named = String(e.category ?? '').toLowerCase();
+    const said = CREATIVE_SHELVES.findIndex(n => n.toLowerCase() === (CREATIVE_MERGED[named]?.toLowerCase() ?? named));
+    // Tools come first on their shelf, then the things with a use (a bucket, a
+    // map), the workstations and lights, the weapons, and what is worn; on
+    // Building, the blocks, then what is put about a house.
+    let out;
+    if (e.type === 'food') {
+        // A meat raw and then cooked, side by side.
+        const base = e.id.replace(/^(raw|cooked)_/, '');
+        out = { shelf: shelf('Food'), rank: base === e.id ? 0 : 1, key: base + (e.id.startsWith('cooked_') ? ' 1' : ' 0') };
+    } else if (e.type === 'tool') {
+        const k = CREATIVE_TOOLS.indexOf(e.subtype);
+        out = { shelf: shelf('Tools'), rank: (k < 0 ? 9 : k) * 10 + tier };
+    } else if (e.type === 'weapon' || e.type === 'ammo') {
+        const k = e.type === 'ammo' ? 2.5 : CREATIVE_ARMS.indexOf(e.subtype);
+        out = { shelf: shelf('Tools'), rank: 5000 + (k < 0 ? 9 : k) * 10 + tier };
+    } else if (e.type === 'armor' || e.type === 'quiver') {
+        const k = CREATIVE_WORN.indexOf(e.slot ?? (e.type === 'quiver' ? 'quiver' : ''));
+        out = { shelf: shelf('Tools'), rank: 6000 + tier * 10 + (k < 0 ? 9 : k) };
+    } else {
+        const blk = e._block;
+        if (!blk) out = { shelf: shelf(e.use ? 'Tools' : 'Materials'), rank: e.use ? 900 : 0 };
+        else if (blk.interactType || blk.light) out = { shelf: shelf('Tools'), rank: 2000 + (blk.interactType ? blk.id : 1000 + blk.id) };
+        else if (blk.blend || blk.terrainType === 'mesh' || blk.liquid || /LOG$|^WOOD$|LEAVES|CACTUS|MUSHROOM|_ORE$|ICE$|BEDROCK|^SNOW/.test(blk.name)) {
+            out = { shelf: shelf('Natural'), rank: CREATIVE_NATURE.findIndex(re => re.test(blk.name)) * 1000 + blk.id };
+        } else out = { shelf: shelf('Building'), rank: blk.model ? 10000 + blk.id : blk.id };
+    }
+    if (said >= 0) {
+        // An item that says which shelf: where the things like it are on that shelf.
+        if (said !== out.shelf) out.rank = said === shelf('Tools') ? (e.use ? 900 : 2000) + (out.rank % 1000) : said === shelf('Building') ? 10000 + (e._block?.id ?? out.rank) : out.rank;
+        out.shelf = said;
+    }
+    return out;
 }
 
 function _titleCaseName(s) {
@@ -2265,22 +2706,73 @@ function _titleCaseName(s) {
         .map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
 }
 
+let _creativeShelf = -1;        // the shelf being looked at; -1: all of them
+
+/** The row of shelves to pick from: All, then each that has something on it. */
+function _renderCreativeTabs(entries) {
+    const row = document.getElementById('creativeInvTabs');
+    if (!row) return;
+    row.textContent = '';
+    const used = new Set(entries.map(e => e.shelf));
+    if (_creativeShelf >= 0 && !used.has(_creativeShelf)) _creativeShelf = -1;
+    for (const [i, name] of [[-1, 'All'], ...CREATIVE_SHELVES.map((n, k) => [k, n])]) {
+        if (i >= 0 && !used.has(i)) continue;
+        const b = document.createElement('div');
+        b.className = 'segBtn' + (i === _creativeShelf ? ' on' : '');
+        b.textContent = name;
+        b.addEventListener('click', () => {
+            _creativeShelf = i;
+            _populateCreativeGrid(DOM.creativeInvFilter?.value.trim().toLowerCase() ?? '');
+        });
+        row.appendChild(b);
+    }
+}
+
 function _populateCreativeGrid(filter) {
     if (!DOM.creativeInvGrid) return;
-    DOM.creativeInvGrid.innerHTML = '';
+    const grid = DOM.creativeInvGrid;
+    grid.textContent = '';
 
     const allItems = _creativeEntries();
-    const shown = filter
-        ? allItems.filter(it => it.id.toLowerCase().includes(filter) || (it.name ?? '').toLowerCase().includes(filter))
-        : allItems;
+    _renderCreativeTabs(allItems);
+    // A search looks on every shelf: what is wanted may not be where one thought.
+    const shown = allItems.filter(it => filter
+        ? it.id.toLowerCase().includes(filter) || (it.name ?? '').toLowerCase().includes(filter)
+        : _creativeShelf < 0 || it.shelf === _creativeShelf);
+    if (!shown.length) {
+        const none = document.createElement('div');
+        none.className = 'formNote';
+        none.textContent = 'Nothing by that name.';
+        grid.appendChild(none);
+        return;
+    }
 
+    let shelf = null, last = -1;
     for (const itemDef of shown) {
-        const el = document.createElement('div');
+        if (itemDef.shelf !== last) {
+            last = itemDef.shelf;
+            const head = document.createElement('div');
+            head.className = 'creativeShelfName';
+            head.textContent = CREATIVE_SHELVES[itemDef.shelf] ?? 'Other';
+            shelf = document.createElement('div');
+            shelf.className = 'creativeShelf';
+            grid.append(head, shelf);
+        }
+        shelf.appendChild(_creativeSlot(itemDef));
+    }
+    grid.scrollTop = 0;
+}
+
+// Each entry's slot, made once and put back each time the grid is drawn.
+const _creativeSlots = new Map();   // entry id → its element
+function _creativeSlot(itemDef) {
+    let el = _creativeSlots.get(itemDef.id);
+    if (!el) {
+        el = document.createElement('div');
         el.className = 'invGridSlot';
-        el.title = itemDef.id.replace(/_/g, ' ');
+        el.title = (itemDef.name ?? itemDef.id).replace(/_/g, ' ');
 
         const img = document.createElement('img');
-        img.src = itemTextureSrc(itemDef.id);
         img.alt = '';
         el.appendChild(img);
 
@@ -2297,9 +2789,12 @@ function _populateCreativeGrid(filter) {
             inv.addItem(itemDef.id, 1);
             refreshHotbarUI();
         });
-
-        DOM.creativeInvGrid.appendChild(el);
+        _creativeSlots.set(itemDef.id, el);
     }
+    // (The pictures of the blocks that are not cubes come a moment after the rest.)
+    const src = itemTextureSrc(itemDef.id), img = el.firstChild;
+    if (img.getAttribute('src') !== src) img.src = src;
+    return el;
 }
 
 // ── Inventory interaction state ──────────────────────────────────────────────
@@ -2768,12 +3263,17 @@ function selectRecipe(recipe, canCraft) {
     // Ingredient list with icons
     const inv = window.me.inventory;
     DOM.recipeDetail.innerHTML = recipe.ingredients.map(i => {
-        const have = inv ? (inv.countItem?.(i.itemId) ?? 0) : 0;
+        // Any of a kind (any planks, any log): all of that kind count, and the one there is most of is shown.
+        const ids = i.any ? [i.itemId, ..._groupItems(i.any).filter(id => id !== i.itemId)] : [i.itemId];
+        const counts = ids.map(id => (inv ? (inv.countItem?.(id) ?? 0) : 0));
+        const have = counts.reduce((a, b) => a + b, 0);
+        const shown = ids[counts.indexOf(Math.max(...counts))] ?? i.itemId;
         const ok   = have >= i.count;
+        const what = i.any ? `any ${i.any}` : i.itemId.replace(/_/g, ' ');
         // Green for what you have enough of, red for what you are short of.
         return `<div class="ingredient ${ok ? 'have' : 'need'}">` +
-               `<img src="${itemTextureSrc(i.itemId)}" alt="">` +
-               `<span>${i.count}× ${i.itemId.replace(/_/g, ' ')} <span class="owned">you have ${have}</span></span>` +
+               `<img src="${itemTextureSrc(have ? shown : i.itemId)}" alt="">` +
+               `<span>${i.count}× ${what} <span class="owned">you have ${have}</span></span>` +
                `</div>`;
     }).join('');
 
@@ -2794,10 +3294,30 @@ function executeCraft(recipe) {
     if (!DOM.inventoryScreen?.classList.contains('hidden')) _renderInventory();
 }
 
-function _ingredientMap(recipe) {
+/**
+ * What a recipe takes from the inventory: { itemId: count }. An ingredient
+ * that is `any` of a kind (any planks, any log: an item's "group") is made up
+ * from what is there — the item it names first, then whichever of the rest
+ * there is most of; short, it asks for what is missing of the one it names.
+ */
+function _ingredientMap(recipe, inv = window.me?.inventory) {
     const map = {};
-    for (const ing of recipe.ingredients) map[ing.itemId] = (map[ing.itemId] ?? 0) + ing.count;
+    for (const ing of recipe.ingredients) {
+        if (!ing.any || !inv) { map[ing.itemId] = (map[ing.itemId] ?? 0) + ing.count; continue; }
+        let need = ing.count;
+        const others = _groupItems(ing.any).filter(id => id !== ing.itemId).sort((a, b) => inv.countItem(b) - inv.countItem(a));
+        for (const id of [ing.itemId, ...others]) {
+            const take = Math.min(need, Math.max(0, inv.countItem(id) - (map[id] ?? 0)));
+            if (take > 0) { map[id] = (map[id] ?? 0) + take; need -= take; }
+            if (need <= 0) break;
+        }
+        if (need > 0) map[ing.itemId] = (map[ing.itemId] ?? 0) + need;
+    }
     return map;
+}
+/** The items of a kind (their "group"): any planks, any log. */
+function _groupItems(group) {
+    return (mergedGamePackData.items ?? []).filter(it => it.group === group).map(it => it.id);
 }
 
 /* =========================================================
@@ -2853,19 +3373,41 @@ async function loadFromManifest(manifest) {
     const total = categories.reduce((s, c) => s + (manifest[c]?.length ?? 0), 0) || 1;
     let loaded = 0;
 
+    // All of them in one answer, where the server can give it (/api/data/bundle):
+    // there are well over a thousand files, and a browser asks for six at a time.
+    let bundle = null;
+    try {
+        const res = await fetch(`${SERVER_URL}/api/data/bundle`);
+        if (res.ok) bundle = await res.json();
+    } catch { /* an older server: one file at a time, below */ }
+    if (bundle && categories.every(c => Array.isArray(bundle[c]))) {
+        for (const cat of categories) for (const def of bundle[cat]) if (def) _mergeDefinition(cat, def);
+        DOM.appProgressBar.style.width = '100%';
+        return _afterDefinitions();
+    }
+
+    // Many at a time (there are hundreds, one file a block: asked for one after
+    // another they were most of a second of the start), merged in the order the
+    // manifest lists them — the first of an id is the one kept.
+    const AT_ONCE = 24;
     for (const cat of categories) {
-        for (const filePath of (manifest[cat] ?? [])) {
-            try {
-                const res = await fetch(filePath);
-                if (!res.ok) continue;
-                const def = await res.json();
-                _mergeDefinition(cat, def);
-            } catch { /* skip bad file */ }
-            loaded++;
+        const files = manifest[cat] ?? [];
+        for (let i = 0; i < files.length; i += AT_ONCE) {
+            const defs = await Promise.all(files.slice(i, i + AT_ONCE).map(async (filePath) => {
+                try {
+                    const res = await fetch(filePath);
+                    return res.ok ? await res.json() : null;
+                } catch { return null; /* skip bad file */ }
+            }));
+            for (const def of defs) if (def) _mergeDefinition(cat, def);
+            loaded += defs.length;
             DOM.appProgressBar.style.width = `${Math.round((loaded / total) * 100)}%`;
         }
     }
+    return _afterDefinitions();
+}
 
+async function _afterDefinitions() {
     // Also load textures and loading texts from legacy gamepack.json if present
     try {
         const res = await fetch('data/gamepack.json');
@@ -2880,11 +3422,13 @@ async function loadFromManifest(manifest) {
     packsLoaded = 1;
 }
 
+// (The ids already merged, by category: a thousand blocks looked for one by one in the list was a million comparisons.)
+const _mergedIds = { blocks: new Set(), items: new Set() };
 function _mergeDefinition(category, def) {
     if (category === 'blocks') {
-        if (!mergedGamePackData.blocks.find(b => b.id === def.id)) mergedGamePackData.blocks.push(def);
+        if (!_mergedIds.blocks.has(def.id)) { _mergedIds.blocks.add(def.id); mergedGamePackData.blocks.push(def); }
     } else if (category === 'items') {
-        if (!mergedGamePackData.items.find(i => i.id === def.id)) mergedGamePackData.items.push(def);
+        if (!_mergedIds.items.has(def.id)) { _mergedIds.items.add(def.id); mergedGamePackData.items.push(def); }
     } else if (category === 'biomes') {
         if (!mergedGamePackData.biomes.find(b => b.name === def.name)) mergedGamePackData.biomes.push(def);
     } else if (category === 'entities') {

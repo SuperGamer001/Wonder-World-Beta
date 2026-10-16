@@ -1,0 +1,22 @@
+{
+  "id": 385,
+  "name": "MOSSY_STONE_WALL_SLAB_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.42,
+    0.5,
+    0.4
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Mossy_Stone.png",
+  "model": "vslab",
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "mossy_stone_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

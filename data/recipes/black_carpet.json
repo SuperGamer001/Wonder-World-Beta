@@ -1,0 +1,14 @@
+{
+  "id": "black_carpet",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "black_carpet",
+    "count": 3
+  },
+  "ingredients": [
+    {
+      "itemId": "black_wool",
+      "count": 2
+    }
+  ]
+}

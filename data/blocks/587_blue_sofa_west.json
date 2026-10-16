@@ -1,0 +1,31 @@
+{
+  "id": 587,
+  "name": "BLUE_SOFA_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.25,
+    0.38,
+    0.72
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Blue.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "blue_sofa",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

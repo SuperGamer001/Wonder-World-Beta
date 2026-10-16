@@ -14,5 +14,6 @@
       "count": 1
     }
   ],
-  "texture": "Wool_Block.png"
+  "texture": "Wool_Block.png",
+  "flammable": 60
 }

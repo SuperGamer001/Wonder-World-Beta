@@ -1,0 +1,32 @@
+{
+  "id": 516,
+  "name": "FENCE_GATE_OPEN_BACK",
+  "terrainType": "solid",
+  "model": "gate",
+  "facing": "east",
+  "shape": {
+    "open": true,
+    "back": true
+  },
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "fence_gate",
+      "count": 1
+    }
+  ],
+  "texture": "Wooden_Planks.png",
+  "sound": "wood",
+  "flammable": 20,
+  "use": {
+    "toggle": "FENCE_GATE",
+    "sound": "gate"
+  },
+  "variant": true
+}

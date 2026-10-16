@@ -127,6 +127,65 @@ e.send({ type: 'mp:join', worldId: 'nope', clientId: 'eee' });
 check('a world that does not exist cannot be joined', (await e.next('mp:closed')).reason === 'no-world');
 e.close();
 
+// ── Two of one name; and being sent away ─────────────────────────────────────
+{
+    const ws = `ws://${host}:${port}`;
+    const seen = async (c, test, ms = 2000) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(20)) { const m = c.got.find(test); if (m) return m; } return null; };
+    const n1 = await client(ws);
+    n1.send({ type: 'mp:join', worldId: world.id, clientId: 'n1', name: 'Alex', key: 'keyOfAlexOne' });
+    const w1 = await n1.next('mp:welcome');
+    const n2 = await client(ws);
+    n2.send({ type: 'mp:join', worldId: world.id, clientId: 'n2', name: 'alex', key: 'keyOfAlexTwo' });
+    const w2 = await n2.next('mp:welcome');
+    check('the first of a name has no number, the second is #2', w1.dup === 0 && w2.dup === 2, `${w1.dup} ${w2.dup}`);
+    const told = await seen(n1, m => m.type === 'mp:joined' && m.player.id === w2.id);
+    check('… which the others are told, with who each player is', told?.player.dup === 2 && told.player.key === 'keyOfAlexTwo' &&
+        w2.players.find(q => q.id === w1.id)?.key === 'keyOfAlexOne' && w2.players.find(q => q.id === w1.id)?.dup === 0);
+    const n3 = await client(ws);
+    n3.send({ type: 'mp:join', worldId: world.id, clientId: 'n3', name: 'ALEX', key: 'not a key!' });
+    const w3 = await n3.next('mp:welcome');
+    check('the third is #3 — and a key that is not one is not passed on', w3.dup === 3 && (await seen(n1, m => m.type === 'mp:joined' && m.player.id === w3.id))?.player.key === '');
+    n2.close();
+    await seen(n1, m => m.type === 'mp:left' && m.id === w2.id);
+    const n4 = await client(ws);
+    n4.send({ type: 'mp:join', worldId: world.id, clientId: 'n4', name: 'Alex' });
+    const w4 = await n4.next('mp:welcome');
+    check('a number that has come free is given again; nobody else\'s changes', w4.dup === 2 && w4.players.find(q => q.id === w3.id)?.dup === 3, String(w4.dup));
+    n3.send({ type: 'mp:profile', name: 'Bo', skin: {} });
+    const renamed = await seen(n1, m => m.type === 'mp:profile' && m.id === w3.id);
+    check('a new name that nobody has loses the number', renamed?.name === 'Bo' && renamed.dup === 0 && (await seen(n3, m => m.type === 'mp:you'))?.dup === 0);
+
+    n1.send({ type: 'mp:kick', id: w3.id });
+    check('only the host can send a player away', await n3.none('mp:closed', 300));
+    d.send({ type: 'mp:kick', id: w1.id });
+    check('the host sends a player away: they are told why', (await n1.next('mp:closed')).reason === 'kicked');
+    check('… and the others that they have gone', !!(await seen(n3, m => m.type === 'mp:left' && m.id === w1.id)));
+    const back = await client(ws);
+    back.send({ type: 'mp:join', worldId: world.id, clientId: 'another-machine', name: 'Somebody Else', key: 'keyOfAlexOne' });
+    check('… and whoever they are, by whatever name, they are not let back in', (await back.next('mp:closed')).reason === 'kicked');
+    d.send({ type: 'mp:kick', id: wd.id });
+    check('the host cannot send themselves away', await d.none('mp:closed', 300));
+    for (const c of [n3, n4, back]) c.close();
+    await sleep(200);
+    for (const c of [d]) c.got.length = 0;
+}
+
+// ── What went wrong ──────────────────────────────────────────────────────────
+{
+    await json(`${base}/api/reports`, 'DELETE');
+    check('there are no reports to begin with', (await (await json(`${base}/api/reports`)).json()).length === 0);
+    await json(`${base}/api/reports`, 'POST', { kind: 'error', message: 'x is not defined', stack: 'at main.js:1:1', where: 'in the menus' });
+    await json(`${base}/api/reports`, 'POST', { kind: 'error', message: 'x is not defined', stack: 'at main.js:1:1', where: 'in a world' });
+    await json(`${base}/api/reports`, 'POST', { kind: 'nonsense', message: 'm'.repeat(5000), stack: { not: 'text' }, version: 9 });
+    const kept = await (await json(`${base}/api/reports`)).json();
+    check('a report is kept; the same again is counted, not repeated', kept.length === 2 && kept[1].count === 2 && kept[1].where === 'in a world' && typeof kept[1].version === 'string', JSON.stringify(kept).slice(0, 200));
+    check('… and one that is the wrong shape is cut to shape', kept[0].kind === 'error' && kept[0].message.length === 600 && typeof kept[0].stack === 'string');
+    for (let i = 0; i < 70; i++) await json(`${base}/api/reports`, 'POST', { message: 'error ' + i });
+    check('only the latest are kept, newest first', (await (await json(`${base}/api/reports`)).json()).length === 60 && (await (await json(`${base}/api/reports`)).json())[0].message === 'error 69');
+    await json(`${base}/api/reports`, 'DELETE');
+    check('… until they are cleared', (await (await json(`${base}/api/reports`)).json()).length === 0);
+}
+
 // ── Each player's own state ──────────────────────────────────────────────────
 await json(`${base}/api/worlds/${world.id}/player-state`, 'PUT', { position: { x: 1, y: 70, z: 1 }, health: 80 });
 await json(`${base}/api/worlds/${world.id}/player-state?player=guest-1`, 'PUT', { position: { x: 50, y: 70, z: 50 }, health: 20 });
@@ -180,7 +239,10 @@ g.send({ type: 'mp:join', worldId: world.id, clientId: 'g1', name: 'Guest' });
 const wg = await g.next('mp:welcome');
 check('… but joins the one that is open', wg.hostId === wd.id);
 check('a socket from another site is turned away', await client(`ws://127.0.0.1:${opened.port}`, { origin: 'http://evil.example' }).then(() => false, () => true));
-check('the status counts the players', (await (await json(`${base}/api/lan/status`)).json()).players === 2);
+const counted = await (await json(`${base}/api/lan/status`)).json();
+check('the status counts the players — and how many came in from the network', counted.players === 2 && counted.guests === 1, JSON.stringify(counted));
+check('a guest cannot read or clear what went wrong on the host\'s machine, nor reach its mobs',
+    await status(`${net}/api/reports`) === 403 && await status(`${net}/api/reports`, 'DELETE') === 403 && await status(`${net}/api/worlds/${world.id}/mobs`) === 403);
 
 await json(`${base}/api/lan/close`, 'POST');
 check('closing sends the guests away', (await g.next('mp:closed')).reason === 'closed');

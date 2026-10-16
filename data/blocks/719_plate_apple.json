@@ -1,0 +1,41 @@
+{
+  "id": 719,
+  "name": "PLATE_APPLE",
+  "terrainType": "solid",
+  "model": "plate",
+  "color": [
+    0.92,
+    0.9,
+    0.86
+  ],
+  "hardness": 0.2,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "glass",
+  "shape": {
+    "food": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "../items/apple.png",
+    "side": "Plate.png",
+    "bottom": "Plate.png"
+  },
+  "drops": [
+    {
+      "itemId": "plate",
+      "count": 1
+    },
+    {
+      "itemId": "apple",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unplate": "apple",
+    "to": "PLATE"
+  }
+}

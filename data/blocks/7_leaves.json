@@ -16,7 +16,13 @@
       "itemId": "apple",
       "count": 1,
       "chance": 0.05
+    },
+    {
+      "itemId": "oak_sapling",
+      "count": 1,
+      "chance": 0.07
     }
   ],
-  "render": "cutout"
+  "render": "cutout",
+  "flammable": 70
 }

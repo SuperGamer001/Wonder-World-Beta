@@ -1,0 +1,23 @@
+{
+  "id": "campfire",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "campfire",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wood_log",
+      "count": 3,
+      "any": "log"
+    },
+    {
+      "itemId": "stick",
+      "count": 3
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": 334,
+  "name": "SANDSTONE_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.85,
+    0.78,
+    0.55
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "texture": "Sandstone.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "sandstone_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "SANDSTONE_SLAB",
+    "top": "SANDSTONE_SLAB_TOP",
+    "full": "SANDSTONE"
+  }
+}

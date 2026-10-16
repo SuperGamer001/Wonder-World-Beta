@@ -1,0 +1,8 @@
+{
+  "id": "birch_door",
+  "name": "Birch Door",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 16,
+  "category": "Building"
+}

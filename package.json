@@ -1,7 +1,7 @@
 {
   "name": "wonder-world",
   "productName": "Wonder World",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Wonder World is a 3D voxel sandbox game where players explore a vast, procedurally generated world.",
   "author": "Alex Fischer, Interlinked Creations",
   "license": "MIT",
@@ -20,7 +20,7 @@
     "dist": "electron-builder",
     "dist:win": "electron-builder --win",
     "dist:mac": "electron-builder --mac",
-    "test": "node test/chunkdata.test.mjs && node test/mobai.test.mjs && node test/mobshare.test.mjs && node test/physics.test.mjs && node test/mesher.test.mjs && node test/smooth.test.mjs && node test/light.test.mjs && node test/visibility.test.mjs && node test/weather.test.mjs && node test/worker.test.mjs && node test/terrain.test.mjs && node test/chunkmanager.test.mjs && node test/persistence.test.mjs && node test/worldfile.test.mjs && node test/multiplayer.test.mjs && node test/online.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
+    "test": "node test/chunkdata.test.mjs && node test/mobai.test.mjs && node test/mobshare.test.mjs && node test/physics.test.mjs && node test/mesher.test.mjs && node test/smooth.test.mjs && node test/water.test.mjs && node test/shapes.test.mjs && node test/light.test.mjs && node test/visibility.test.mjs && node test/weather.test.mjs && node test/worker.test.mjs && node test/terrain.test.mjs && node test/chunkmanager.test.mjs && node test/persistence.test.mjs && node test/worldfile.test.mjs && node test/multiplayer.test.mjs && node test/commands.test.mjs && node test/online.test.mjs && node test/version.test.mjs && node test/update.test.mjs",
     "test:smoke": "node test/smoke.mjs && node test/update-ui.test.mjs && node test/worldfile-ui.test.mjs && node test/releasenotes-ui.test.mjs && node test/play.test.mjs",
     "online:auth": "node online/server.mjs",
     "test:online:e2e": "node test/online.smoke.mjs",
@@ -32,6 +32,10 @@
     "mobtex": "node tools/gen_mob_textures.mjs",
     "sounds": "node tools/gen_sounds.mjs",
     "menuscene": "node tools/gen_menu_scene.mjs",
+    "decor": "node tools/gen_decor.mjs",
+    "decortex": "python tools/gen_decor_textures.py",
+    "itemtex": "python tools/gen_item_textures.py",
+    "test:decor": "node test/terrainshots.mjs --only spawn --eval-file test/decor.live.js",
     "blocktex": "python tools/gen_block_textures.py",
     "mobshots": "node test/mobshots.mjs",
     "shots": "node test/terrainshots.mjs"

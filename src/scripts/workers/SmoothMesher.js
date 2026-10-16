@@ -166,6 +166,9 @@ export class SmoothMesher {
             occ: this.occ,
             partial,
             read: this._get,
+            // For what stands on the ground (a plant): is this block ground, and how high is its surface.
+            isMesh: (id) => this.kind[id] === KIND_MESH,
+            topHeight: (lx, ly, lz) => this.topHeight(lx, ly, lz),
             emit: (sink) => {
                 for (let i = 0; i < list.length; i += 4) {
                     // Everything a deformed voxel draws is seen through its own

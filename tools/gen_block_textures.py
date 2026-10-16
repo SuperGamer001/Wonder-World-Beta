@@ -884,11 +884,24 @@ def _():
 # ── Blocks people build with ─────────────────────────────────────────────────
 
 PLANK = dict(base=(172, 132, 84), dark=(128, 94, 58), light=(204, 166, 114))
+# Spruce is a darker, browner wood; birch a pale, yellowish one.
+SPRUCE_PLANK = dict(base=(120, 88, 56), dark=(86, 62, 40), light=(150, 114, 74))
+BIRCH_PLANK = dict(base=(212, 190, 138), dark=(178, 154, 104), light=(234, 216, 170))
 
 
 @tex('Wooden_Planks')
 def _():
     save('Wooden_Planks', boards('Wooden_Planks', **PLANK))
+
+
+@tex('Spruce_Planks')
+def _():
+    save('Spruce_Planks', boards('Spruce_Planks', **SPRUCE_PLANK))
+
+
+@tex('Birch_Planks')
+def _():
+    save('Birch_Planks', boards('Birch_Planks', **BIRCH_PLANK))
 
 
 @tex('Stone_Bricks')

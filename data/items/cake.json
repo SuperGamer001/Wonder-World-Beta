@@ -1,0 +1,8 @@
+{
+  "id": "cake",
+  "name": "Cake",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 16,
+  "category": "Food"
+}

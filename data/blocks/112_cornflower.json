@@ -1,0 +1,29 @@
+{
+  "id": 112,
+  "name": "CORNFLOWER",
+  "terrainType": "solid",
+  "model": "cross",
+  "shape": {
+    "pick": 11
+  },
+  "color": [
+    0.3,
+    0.42,
+    0.85
+  ],
+  "hardness": 0.02,
+  "drops": [
+    {
+      "itemId": "cornflower",
+      "count": 1
+    }
+  ],
+  "texture": "Cornflower.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 70,
+  "sound": "grass"
+}

@@ -1,0 +1,39 @@
+{
+  "id": 230,
+  "name": "WHITE_CURTAIN",
+  "terrainType": "solid",
+  "model": "curtain",
+  "facing": "east",
+  "shape": {
+    "open": false
+  },
+  "color": [
+    0.94,
+    0.94,
+    0.92
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "white_curtain",
+      "count": 1
+    }
+  ],
+  "texture": "Curtain_White.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "grass",
+  "flammable": 80,
+  "use": {
+    "toggle": "WHITE_CURTAIN_OPEN"
+  },
+  "placement": {
+    "east": "WHITE_CURTAIN",
+    "west": "WHITE_CURTAIN_WEST",
+    "south": "WHITE_CURTAIN_SOUTH",
+    "north": "WHITE_CURTAIN_NORTH"
+  }
+}

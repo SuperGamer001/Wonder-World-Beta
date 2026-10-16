@@ -1,0 +1,36 @@
+{
+  "id": 372,
+  "name": "POLISHED_DIORITE_STAIRS",
+  "terrainType": "solid",
+  "color": [
+    0.88,
+    0.88,
+    0.9
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Diorite.png",
+  "model": "stairs",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "polished_diorite_stairs",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "stairs",
+    "up": {
+      "east": "POLISHED_DIORITE_STAIRS",
+      "west": "POLISHED_DIORITE_STAIRS_WEST",
+      "south": "POLISHED_DIORITE_STAIRS_SOUTH",
+      "north": "POLISHED_DIORITE_STAIRS_NORTH"
+    },
+    "down": {
+      "east": "POLISHED_DIORITE_STAIRS_TOP",
+      "west": "POLISHED_DIORITE_STAIRS_TOP_WEST",
+      "south": "POLISHED_DIORITE_STAIRS_TOP_SOUTH",
+      "north": "POLISHED_DIORITE_STAIRS_TOP_NORTH"
+    }
+  }
+}

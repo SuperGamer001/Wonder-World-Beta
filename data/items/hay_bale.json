@@ -1,0 +1,8 @@
+{
+  "id": "hay_bale",
+  "name": "Hay Bale",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

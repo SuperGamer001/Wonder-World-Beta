@@ -1,0 +1,31 @@
+{
+  "id": 536,
+  "name": "BIRCH_FENCE_GATE_WEST_OPEN",
+  "terrainType": "solid",
+  "model": "gate",
+  "facing": "west",
+  "shape": {
+    "open": true
+  },
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "birch_fence_gate",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Planks.png",
+  "sound": "wood",
+  "flammable": 20,
+  "use": {
+    "toggle": "BIRCH_FENCE_GATE_WEST",
+    "sound": "gate"
+  },
+  "variant": true
+}

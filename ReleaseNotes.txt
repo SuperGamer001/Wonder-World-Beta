@@ -1,3 +1,97 @@
+# **Wonder World 0.2.0** — The Decoration Update
+
+### Building and decoration
+- Added Slabs, Wall Slabs (vertical slabs) and Stairs in ten materials: oak, spruce and birch wood, stone, stone bricks, bricks, sandstone, polished granite, polished diorite and mossy stone. Two slabs in one block make a whole block. Stairs and slabs are walked up without jumping, and stairs placed against stairs turned the other way make an inner or outer corner, as they would be built.
+- Added Fences and Fence Gates in oak, spruce and birch, and stone brick, brick and mossy stone Walls. They join up with what stands beside them and cannot be jumped over. A Fence Gate opens away from you, from either side, and can be closed by pointing anywhere in the gateway.
+- Added Doors in oak, spruce and birch. A door is hung on the side of the block you point at, and a door placed beside another is hung on the other side, so the two make a pair of double doors. Doors and gates creak open and knock shut, and one that closes on someone standing in it lets them walk on out.
+- Added Ladders (climb one by walking into it), Bookshelves, and Tables, Chairs, Stools, Shelves and Cabinets (which store items like a chest) in oak, spruce and birch.
+- Furniture joins up with its neighbours: chairs side by side become a bench, sofas side by side one long sofa with arms only at the ends (and sofas turn corners the way stairs do), tables side by side one table standing on its outer corners, and shelves side by side one long shelf.
+- Added Sofas and Beds in nine colours, and Curtains in nine colours (use one, anywhere on it, to open or close it).
+- Added Paintings in six sizes: Small (eight pictures), Wide, Tall, Large, Grand and Huge (up to 4 by 3 blocks). A painting goes up with a picture chosen at random; use it to change the picture.
+- Added Plates: put food on one (use the plate with the food), and take it off again.
+- Added Flower Pots (use a flower on one to plant it), Vases, Carpets, Wool in eight more colours, Hay Bales, Thatch, Tiles, Chiseled Stone, and Spruce and Birch Planks.
+- Added flowers, tall grass, ferns, dead bushes and small mushrooms. They grow on newly explored land.
+- Added Saplings. Leaves sometimes drop one, and a planted sapling grows into a tree.
+- The Anvil now has an anvil shape.
+- Blocks that are not cubes are shown in the inventory as they look, and the Crafting Table, Oven, Smelter and Chest are shown as blocks.
+
+### New things to use
+- Beds: lie down in one and you really lie in it, and it becomes where you respawn. You can sleep at any time of day: every few seconds the clock moves on an hour while you rest, giving you back energy and a little health (much more if you are well fed) and making you a little hungrier. You wake at sunrise or sunset once you have slept an hour, or get up whenever you like with Shift (or jump). With other players, the clock only moves on once everyone is in bed.
+- While you sleep, the world goes on as if you had waited: water flows, fires burn, saplings grow and animals wander.
+- Chairs, Stools and Sofas can be sat on. A chair or a stool rests you a little; a sofa rests you more, and heals you a little when you first sit down. Press Shift (or jump) to get up. Other players see you sitting or lying down.
+- Cake and Pie can be put down and eaten a piece at a time.
+- Campfire: light it with Flint and Steel, then use raw meat on it to cook it. Standing in fire hurts.
+- Flint and Steel lights fires. Fire spreads to wood, leaves and wool and burns them up, and is put out by water and rain.
+- Bombs: put one down, light it with Flint and Steel (or a torch) and stand back. One bomb sets off the next.
+- Map: use it to see the land around you from above, with yourself, other players, the world spawn and your bed marked.
+- Hold sneak while clicking to put a block down against a door, a chest or anything else that would otherwise be used.
+- Clay blocks now drop Clay Balls, which can't be placed. Four Clay Balls make a block of Clay (the item that was called "Clay Ball").
+
+### Water
+- Water now flows. A block of water is a source: it spreads up to seven blocks, getting shallower as it goes, runs off edges and falls. Take the source away and the water it fed drains away.
+- Flowing water is drawn as one smooth, sloping surface instead of as blocks.
+- Two sources side by side fill the gap between them, so a pool never runs dry, and a hole dug beside a lake fills up.
+- Water washes away torches, flowers and other small things, and puts out fire.
+- Added the Bucket and the Water Bucket: scoop up a block of water and pour it out somewhere else.
+
+### Controls and the player
+- Left and Right Shift are now both just "Shift": crouch. To sprint, double-tap the key you are walking with (W, A, S or D).
+- Added a crouching animation. Crouch walking is now much harder for other players to hear.
+- Jumps are a little lower.
+- Falls hurt two and a half times as much as before.
+- Players and mobs now push each other: walk into an animal to move it out of the way, and a mob or another player walking into you nudges you aside.
+- Added Screenshots: press F2 (Screenshot in the pause menu, or View on a controller) to save a full-resolution picture of the world, without the menus or the HUD. Pause → Screenshots Folder shows where they are kept.
+
+### Mobs
+- Mobs now take fall damage from a fall higher than they would jump down on their own. Chickens flutter down unharmed, and nothing is hurt landing in water.
+
+### Multiplayer
+- Added Chat. Press T to open it (or / to start a command). Player names show in bold, in parentheses. Chat needs a keyboard.
+- Added Commands (/help lists them): /time, /weather, /gamemode, /tp, /give, /heal, /kill, /summon, /setblock, /say, /kick, /pvp and more. Most need operator status, and everyone in the game sees what a command did.
+- The host can give operator status to other players, from the Players screen or with /op.
+- The host can remove a player from the game, from the Players screen or with /kick. A removed player cannot rejoin while the game stays open.
+- Added PvP. Players can now hurt each other with blows and arrows. It can be turned off in the world's settings or with /pvp.
+- Lightning and tornadoes are now the same for every player in the game.
+- A new player can join split-screen at any time: press any button on a spare controller, then press Start when asked. The host no longer has to open the Players screen first.
+- "Open to the network" can no longer be switched off while a player from the network is in the game.
+- Two players with the same name are now told apart: the later one gets a gray #2 (#3, #4...) after their name.
+- Every player name now has a hidden player code, so the game still knows who you are in someone else's world if you change your name.
+- Split-screen players in an online game now talk to each other on your own computer. With no players from other computers in the game, playing online in split-screen no longer uses up online messages.
+
+### Adjustments
+- Removed various default Javascript Key binds that affect the game.
+- Pausing a singleplayer world now pauses everything: mobs, water, hunger, the clock and the weather. A world that is open to the network or online, or has split-screen players, does not pause.
+- The block you are pointing at now glows instead of showing a black outline, and the glow follows the shape of the ground.
+- Mobs can now only be hit where their body actually is, and the mob you are pointing at glows slightly.
+- Clouds no longer look grainy. The Clouds setting is now "Simple" or "Detailed"; Detailed clouds are rounder and lit from the sun's side.
+- The Creative Inventory is now sorted into categories: Natural, Building, Tools, Food and Materials.
+- Ore blocks and clay can now be picked from the Creative Inventory.
+- Every item has a new, more detailed picture, in the style of the new beef and chicken.
+- The game starts faster: everything it is made of is loaded at once.
+- On a Mac, closing the game's window now quits the game, instead of leaving it running in the Dock with no window.
+
+### Performance
+- Fixed the scenery behind the menus sometimes carrying on drawing, unseen, behind the world for the whole game (when a world was started before it had finished loading). Everything ran slower while it did.
+- Loading a world no longer freezes for a few seconds while the game gets its graphics ready: they are prepared in the background.
+- The title screen no longer stutters as it first appears.
+- The Creative Inventory opens and searches much faster.
+
+### Bug fixes
+- Fixed a bug where the cross hair highlights the bounding box of a mesh block even when the player isn't pointing at the mesh.
+- Mobs no longer de-spawn when you walk away or leave the world. They are saved with the world and are there when you come back.
+- Fish now appear in seas, lakes and rivers. They never spawned.
+- Typing a number into a text box no longer changes the selected hotbar slot.
+- Mining a spruce or birch log now gives a spruce or birch log instead of an oak log.
+- In third person, your body no longer disappears when the camera is close to you.
+
+### Other features
+- Added "Error Reports" to the Game settings: a list of recent crashes and errors that you can read, copy or clear. Nothing is sent anywhere.
+- The downloads are now zip files: unzip it, then run the installer (Windows) or open the disk image (Mac).
+- The Mac version is one app for both Apple silicon and Intel Macs, and is now signed as a whole. If macOS says it cannot verify the developer, open System Settings, go to Privacy & Security and click Open Anyway.
+- If the game cannot start, it now says so instead of staying open with no window, and it writes down what happened in a log file (on a Mac: Help > Show Launch Log).
+
+---
+
 # **Wonder World 0.1.2** Release Notes:
 
 ### Bug fixes

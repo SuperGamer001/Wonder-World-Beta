@@ -1,0 +1,51 @@
+{
+  "id": 842,
+  "name": "PAINTING_LARGE_3_0_1_WEST",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "west",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0.5
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [],
+  "texture": "Painting_Large_3.png",
+  "support": [
+    1,
+    0,
+    0
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      0,
+      -1,
+      0
+    ],
+    [
+      0,
+      -1,
+      1
+    ],
+    [
+      0,
+      0,
+      1
+    ]
+  ],
+  "piece": "PAINTING_LARGE_3",
+  "use": {
+    "toggle": "PAINTING_LARGE_4_0_1_WEST"
+  },
+  "variant": true
+}

@@ -1,0 +1,30 @@
+{
+  "id": 564,
+  "name": "BIRCH_CABINET_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 2,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "cabinet",
+  "interactable": true,
+  "interactType": "chest",
+  "textures": {
+    "top": "Birch_Cabinet_Front.png",
+    "side": "Birch_Planks.png",
+    "bottom": "Birch_Planks.png"
+  },
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "birch_cabinet",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

@@ -1,0 +1,22 @@
+{
+  "id": 342,
+  "name": "SANDSTONE_STAIRS_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.85,
+    0.78,
+    0.55
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "texture": "Sandstone.png",
+  "model": "stairs",
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "sandstone_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

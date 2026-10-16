@@ -190,6 +190,13 @@ export class ChunkData {
         this.transparentMesh = null;
     }
 
+    /** Whether the chunk holds any block `test(id)` is true of — by its palette, so without reading a voxel. */
+    paletteHas(test) {
+        const pal = this._palette;
+        for (let i = 0; i < pal.length; i++) if (test(pal[i])) return true;
+        return false;
+    }
+
     getVoxel(lx, ly, lz) {
         const r = ly - this._lo;
         if (r < 0 || r >= this._rows) return 0;

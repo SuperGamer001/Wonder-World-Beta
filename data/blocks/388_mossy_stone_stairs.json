@@ -1,0 +1,36 @@
+{
+  "id": 388,
+  "name": "MOSSY_STONE_STAIRS",
+  "terrainType": "solid",
+  "color": [
+    0.42,
+    0.5,
+    0.4
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Mossy_Stone.png",
+  "model": "stairs",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "mossy_stone_stairs",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "stairs",
+    "up": {
+      "east": "MOSSY_STONE_STAIRS",
+      "west": "MOSSY_STONE_STAIRS_WEST",
+      "south": "MOSSY_STONE_STAIRS_SOUTH",
+      "north": "MOSSY_STONE_STAIRS_NORTH"
+    },
+    "down": {
+      "east": "MOSSY_STONE_STAIRS_TOP",
+      "west": "MOSSY_STONE_STAIRS_TOP_WEST",
+      "south": "MOSSY_STONE_STAIRS_TOP_SOUTH",
+      "north": "MOSSY_STONE_STAIRS_TOP_NORTH"
+    }
+  }
+}

@@ -16,7 +16,7 @@
   "tool": "axe",
   "drops": [
     {
-      "itemId": "wood_log",
+      "itemId": "birch_log",
       "count": 1
     }
   ],
@@ -24,5 +24,6 @@
     "top": "Birch_Log_Top.png",
     "side": "Birch_Log.png",
     "bottom": "Birch_Log_Top.png"
-  }
+  },
+  "flammable": 15
 }

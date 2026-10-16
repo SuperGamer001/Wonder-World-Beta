@@ -1,0 +1,52 @@
+{
+  "id": 662,
+  "name": "WHITE_BED",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "east",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.94,
+    0.94,
+    0.92
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "white_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Block.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    1,
+    0,
+    0
+  ],
+  "use": {
+    "sleep": true
+  },
+  "place": {
+    "mode": "bed",
+    "foot": {
+      "east": "WHITE_BED",
+      "west": "WHITE_BED_WEST",
+      "south": "WHITE_BED_SOUTH",
+      "north": "WHITE_BED_NORTH"
+    },
+    "head": {
+      "east": "WHITE_BED_HEAD",
+      "west": "WHITE_BED_HEAD_WEST",
+      "south": "WHITE_BED_HEAD_SOUTH",
+      "north": "WHITE_BED_HEAD_NORTH"
+    }
+  }
+}

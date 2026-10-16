@@ -1,0 +1,41 @@
+{
+  "id": 127,
+  "name": "POTTED_CORNFLOWER",
+  "terrainType": "solid",
+  "model": "pot",
+  "color": [
+    0.62,
+    0.36,
+    0.24
+  ],
+  "hardness": 0.1,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "stone",
+  "shape": {
+    "plant": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "Cornflower.png",
+    "side": "Flower_Pot.png",
+    "bottom": "Dirt.png"
+  },
+  "drops": [
+    {
+      "itemId": "flower_pot",
+      "count": 1
+    },
+    {
+      "itemId": "cornflower",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unpot": "cornflower",
+    "to": "FLOWER_POT"
+  }
+}

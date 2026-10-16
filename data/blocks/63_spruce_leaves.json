@@ -11,7 +11,14 @@
     0.17
   ],
   "hardness": 0.2,
-  "drops": [],
+  "drops": [
+    {
+      "itemId": "spruce_sapling",
+      "count": 1,
+      "chance": 0.07
+    }
+  ],
   "texture": "Spruce_Leaves.png",
-  "render": "cutout"
+  "render": "cutout",
+  "flammable": 70
 }

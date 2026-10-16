@@ -1,0 +1,34 @@
+{
+  "id": 691,
+  "name": "GREEN_CURTAIN_SOUTH_OPEN",
+  "terrainType": "solid",
+  "model": "curtain",
+  "facing": "south",
+  "shape": {
+    "open": true
+  },
+  "color": [
+    0.36,
+    0.55,
+    0.24
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "green_curtain",
+      "count": 1
+    }
+  ],
+  "texture": "Curtain_Green.png",
+  "support": [
+    0,
+    0,
+    -1
+  ],
+  "sound": "grass",
+  "flammable": 80,
+  "use": {
+    "toggle": "GREEN_CURTAIN_SOUTH"
+  },
+  "variant": true
+}

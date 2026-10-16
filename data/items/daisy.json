@@ -1,0 +1,8 @@
+{
+  "id": "daisy",
+  "name": "Daisy",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Natural"
+}

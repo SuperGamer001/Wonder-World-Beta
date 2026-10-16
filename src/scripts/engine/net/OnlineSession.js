@@ -37,6 +37,15 @@
  * (`RATE`): a player standing still says so every two seconds, not fifteen
  * times a second.
  *
+ * **Games on one machine talk among themselves, not through Ably.** The
+ * further players of a split screen are games of the same machine in the same
+ * browser (their `clientId`s differ only in the slot at the end): everything
+ * is said to them over a BroadcastChannel of the page's own (`_local`), and
+ * Ably carries a message only when somebody on another machine is there to
+ * hear it (`_farAudience`). A host playing online with a split screen and
+ * nobody else in the room sends Ably nothing but who is present. A game drops
+ * what Ably brings it from its own machine: it has had that already.
+ *
  * Ably's SDK is handed in (`Ably`: the page's global, or a stand-in in a
  * test), so this file has no imports a browser cannot resolve.
  */
@@ -143,14 +152,18 @@ export class OnlineSession {
      * @param {OnlineAuth} auth
      * @param {{ now?: () => number }} [o]
      */
-    constructor(Ably, auth, { now = () => Date.now() } = {}) {
+    constructor(Ably, auth, { now = () => Date.now(), local = defaultLocal } = {}) {
         this._Ably = Ably;
         this.auth = auth;
         this._now = now;
+        this._makeLocal = local;     // (name) => a BroadcastChannel-like line between the games of this machine, or null
+        this._local = null;
         this.online = true;          // world.js: this is not the game's own server
         this.id = 0;
         this.hostId = 0;
-        this.players = new Map();    // the others: id → { id, name, skin, state, client }
+        this.players = new Map();    // the others: id → { id, name, skin, state, client, key, dup }
+        this.dup = 0;                // the number after this player's own name, if someone here had it first (0: none)
+        this._dups = new Map();      // clientId → that number, for whoever has one (the host gives them out)
         this.code = '';              // the room's code, to give to whoever should join
         this.world = null;           // the host's world, as a guest's game needs it
         this.max = HARD_MAX_PLAYERS;
@@ -177,7 +190,7 @@ export class OnlineSession {
         this._rt = null;
         this._ch = null;             // { all, host, up, inbox }
         this._out = new Map();       // the host: each guest's own channel, by name
-        this._lateIds = null;
+        this._late = null;            // a list of who is in the room that came before this game had been welcomed
         this._names = null;
         this._client = '';           // this game's clientId
         this._hostClient = '';
@@ -207,6 +220,8 @@ export class OnlineSession {
 
     get isHost() { return this.id !== 0 && this.id === this.hostId; }
     get alone() { return this.players.size === 0; }
+    /** Who this player is, as every game in the room has it (see _keyOf). */
+    get key() { return this._client ? this._keyOf(this._client, cleanPk(this._hello?.pk)) : ''; }
     get connected() { return !!this._rt && !this._closed && !this.down; }
 
     // ── Getting into a room ───────────────────────────────────────────────────
@@ -284,8 +299,8 @@ export class OnlineSession {
             if (!Number.isInteger(w?.id) || w.id < 2 || !w.world || typeof w.ids !== 'object') throw new OnlineError('unreachable');
             this.id = w.id; this.hostId = 1; this._hostClient = String(w.host ?? '');
             this.world = w.world; this.max = w.max | 0;
-            this._setIds(this._lateIds ?? w.ids, true);
-            this._lateIds = null;
+            this._setIds(this._late?.ids ?? w.ids, true, this._late ? this._late.dups : w.dups);
+            this._late = null;
             this._ready = true;
             this._welcome = { id: this.id, hostId: 1, players: [...this.players.values()], edits: [], atmos: w.atmos ?? null };
             return this._welcome;
@@ -343,6 +358,8 @@ export class OnlineSession {
             if (rt.connection.state === 'connected') done();
         }).catch((e) => { this._drop(); throw e; });
 
+        this._openLocal(code);
+
         rt.connection.on((change) => {
             if (this._closed || rt !== this._rt) return;
             if (change.current === 'disconnected' || change.current === 'connecting') {
@@ -373,7 +390,36 @@ export class OnlineSession {
 
     _presenceData() {
         const h = this._hello;
-        return { v: PROTOCOL, version: String(h.version ?? ''), content: String(h.content ?? ''), worldGen: h.worldGen | 0, name: cleanName(h.name), skin: cleanSkin(h.skin) };
+        return { v: PROTOCOL, version: String(h.version ?? ''), content: String(h.content ?? ''), worldGen: h.worldGen | 0, name: cleanName(h.name), skin: cleanSkin(h.skin), pk: cleanPk(h.pk) };
+    }
+
+    /**
+     * Who a player is, whatever they are called: the machine they play on
+     * (which their token vouches for, so it cannot be put on) and the key of
+     * the name they chose on it (which they say themselves). The games go by
+     * it for who is an operator.
+     */
+    _keyOf(client, pk) { return `${client.slice(0, -2)}|${pk || client.slice(-1)}`; }
+
+    /**
+     * The host: the number after the name of a player called what somebody
+     * here already is — 2, 3, … — or none. Given when they come in (or change
+     * their name) and kept while they stay, so nobody's number changes under them.
+     */
+    _giveDup(client) {
+        const name = (client === this._client ? cleanName(this._hello.name) : this._members.get(client)?.name ?? '').toLowerCase();
+        const used = new Set();
+        let same = false;
+        for (const other of [this._client, ...this._ids.keys()]) {
+            if (other === client) continue;
+            const theirs = (other === this._client ? cleanName(this._hello.name) : this._members.get(other)?.name ?? '').toLowerCase();
+            if (theirs !== name) continue;
+            same = true;
+            used.add(this._dups.get(other) || 1);
+        }
+        let n = 0;
+        if (same) { n = 2; while (used.has(n)) n++; }
+        if (n) this._dups.set(client, n); else this._dups.delete(client);
     }
 
     // ── Hearing ───────────────────────────────────────────────────────────────
@@ -392,7 +438,7 @@ export class OnlineSession {
     _member(client, data) {
         if (typeof client !== 'string' || !client) return null;
         const d = data && typeof data === 'object' ? data : {};
-        const m = { v: d.v, version: String(d.version ?? ''), content: String(d.content ?? ''), worldGen: d.worldGen | 0, name: cleanName(d.name), skin: cleanSkin(d.skin) };
+        const m = { v: d.v, version: String(d.version ?? ''), content: String(d.content ?? ''), worldGen: d.worldGen | 0, name: cleanName(d.name), skin: cleanSkin(d.skin), pk: cleanPk(d.pk) };
         this._members.set(client, m);
         return m;
     }
@@ -420,6 +466,10 @@ export class OnlineSession {
             if (!this._ids.has(client)) return this._admit(client, member);
             // Somebody already in, arriving again (their page was reloaded): welcomed again, as who they were.
             if (m.action === 'enter') this._welcomeTo(client);
+            // A new name may be one somebody here has — or no longer be.
+            const had = this._dups.get(client) ?? 0, was = this.players.get(this._ids.get(client))?.name ?? '';
+            if (was.toLowerCase() !== member.name.toLowerCase()) this._giveDup(client);
+            if ((this._dups.get(client) ?? 0) !== had) this._publish(this._ch.host, MSG.ROSTER, this._rosterMsg());
             return this._reconcile();
         }
         this._reconcile();
@@ -435,12 +485,13 @@ export class OnlineSession {
             seen.add(id);
             const p = this.players.get(id);
             const name = m?.name ?? p?.name ?? 'Player', skin = m?.skin ?? p?.skin ?? {}, key = JSON.stringify(skin);
+            const who = m ? this._keyOf(client, m.pk) : p?.key ?? this._keyOf(client, ''), dup = this._dups.get(client) ?? 0;
             if (!p) {
-                const fresh = { id, name, skin, state: null, client, connected: true, _skin: key };
+                const fresh = { id, name, skin, state: null, client, connected: true, _skin: key, key: who, dup };
                 this.players.set(id, fresh);
                 if (!quiet) this.onJoined?.(fresh);
-            } else if (p.name !== name || p._skin !== key) {
-                p.name = name; p.skin = skin; p._skin = key;
+            } else if (p.name !== name || p._skin !== key || p.dup !== dup || p.key !== who) {
+                p.name = name; p.skin = skin; p._skin = key; p.dup = dup; p.key = who;
                 if (!quiet) this.onProfile?.(p);
             }
         }
@@ -450,10 +501,14 @@ export class OnlineSession {
     }
 
     /** A guest: the host's list of who is in the room. */
-    _setIds(ids, quiet = false) {
+    _setIds(ids, quiet = false, dups = null) {
         const next = new Map();
         for (const [client, id] of Object.entries(ids ?? {})) if (Number.isInteger(id) && id >= 1 && id < 100000) next.set(client, id);
         this._ids = next;
+        // … and which of them have a number after their name.
+        this._dups = new Map();
+        for (const [client, n] of Object.entries(dups ?? {})) if (next.has(client) && Number.isInteger(n) && n >= 2 && n < 100) this._dups.set(client, n);
+        this.dup = this._dups.get(this._client) ?? 0;
         // Not on it any more: sent away.
         if (this._ready && !next.has(this._client)) return this._over('kicked');
         this._reconcile(quiet);
@@ -465,8 +520,8 @@ export class OnlineSession {
         return id === undefined || m.clientId === this._client ? null : this.players.get(id) ?? null;
     }
 
-    _onAll(m) {
-        if (this._closed || !this._ready) return;
+    _onAll(m, local = false) {
+        if (this._closed || !this._ready || (!local && this._mine(m.clientId))) return;
         const p = this._from(m);
         if (!p) return;
         const d = m.data;
@@ -506,11 +561,11 @@ export class OnlineSession {
     }
 
     /** A guest: what the host says to everyone. Only the host's token can publish here. */
-    _onHost(m) {
-        if (this._closed) return;
+    _onHost(m, local = false) {
+        if (this._closed || (!local && this._mine(m.clientId))) return;
         const d = m.data;
         // (One that comes while this game is still being welcomed is kept for when it has been.)
-        if (m.name === MSG.ROSTER) { if (this._ready) this._setIds(d?.ids); else this._lateIds = d?.ids; }
+        if (m.name === MSG.ROSTER) { if (this._ready) this._setIds(d?.ids, false, d?.dups); else this._late = d; }
         else if (!this._ready) return;
         else if (m.name === MSG.ATMOS) this.onAtmos?.(d);
         else if (m.name === MSG.SAY) { if (d && typeof d === 'object') this.onMsg?.(this.hostId, d); }
@@ -520,8 +575,8 @@ export class OnlineSession {
     }
 
     /** A guest: what the host says to this game alone. */
-    _onInbox(m) {
-        if (this._closed) return;
+    _onInbox(m, local = false) {
+        if (this._closed || (!local && this._mine(m.clientId))) return;
         const name = String(m.name ?? '');
         if (name === MSG.WELCOME || name === MSG.REFUSE) return this._onLetter?.(name, m.data);
         if (name === MSG.KICK) return this._over('kicked');
@@ -564,15 +619,18 @@ export class OnlineSession {
         let id = this._everIds.get(client);
         if (!id) this._everIds.set(client, id = this._nextId++);
         this._ids.set(client, id);
+        this._giveDup(client);
         this._reconcile();
         this._welcomeTo(client);
-        this._publish(this._ch.host, MSG.ROSTER, { ids: this._roster() });
+        this._publish(this._ch.host, MSG.ROSTER, this._rosterMsg());
         this._lobby();
     }
 
     _welcomeTo(client) {
-        this._publish(this._names.to(client), MSG.WELCOME, { id: this._ids.get(client), host: this._client, world: this.world, max: this.max, ids: this._roster(), atmos: this._atmos ?? null });
+        this._publish(this._names.to(client), MSG.WELCOME, { id: this._ids.get(client), host: this._client, world: this.world, max: this.max, ids: this._roster(), dups: Object.fromEntries(this._dups), atmos: this._atmos ?? null });
     }
+
+    _rosterMsg() { return { ids: this._roster(), dups: Object.fromEntries(this._dups) }; }
 
     _roster() {
         const ids = { [this._client]: 1 };
@@ -583,8 +641,9 @@ export class OnlineSession {
     /** A guest has gone (left, or sent away). */
     _gone(client) {
         if (!this._ids.delete(client)) return;
+        this._dups.delete(client);
         this._reconcile();
-        this._publish(this._ch.host, MSG.ROSTER, { ids: this._roster() });
+        this._publish(this._ch.host, MSG.ROSTER, this._rosterMsg());
         this._lobby();
     }
 
@@ -602,9 +661,19 @@ export class OnlineSession {
 
     // ── Saying ────────────────────────────────────────────────────────────────
 
-    /** Publish, and never throw: a message that could not be sent is one the others did not get, which they survive. */
+    /**
+     * Publish, and never throw: a message that could not be sent is one the
+     * others did not get, which they survive. Said over the local line to the
+     * games of this machine, and through Ably only if someone on another
+     * machine is to hear it.
+     */
     _publish(channel, name, data) {
         if (!this._rt || this._closed) return;
+        const n = this._names, line = channel === this._ch?.all ? 'all' : channel === this._ch?.host ? 'host' : channel === this._ch?.up ? 'up' : String(channel);
+        if (this._local) {
+            try { this._local.postMessage({ c: line, n: name, d: data, f: this._client }); } catch { /* not cloneable, or closed: Ably still has it */ }
+        }
+        if (!this._farAudience(line, n)) return;
         try {
             let ch = channel;
             if (typeof channel === 'string') {
@@ -614,6 +683,46 @@ export class OnlineSession {
             const p = ch.publish(name, data);
             p?.catch?.(() => { /* refused or lost */ });
         } catch { /* closing */ }
+    }
+
+    /** Is this clientId another game of this machine (a further player of the same split screen)? */
+    _mine(client) { return typeof client === 'string' && !!this._client && client !== this._client && client.slice(0, -2) === this._client.slice(0, -2); }
+
+    /** Is anyone who would hear a message on `line` on another machine (so that only Ably can reach them)? */
+    _farAudience(line, n) {
+        if (!this._local) return true;
+        const far = (c) => typeof c === 'string' && c !== this._client && !this._mine(c);
+        if (line === 'all' || line === 'host') { for (const c of this._members.keys()) if (far(c)) return true; return false; }
+        if (line === 'up') return !this._hostClient || far(this._hostClient);
+        const to = n && line.startsWith(n.to('')) ? line.slice(n.to('').length) : '';
+        return !to || far(to);
+    }
+
+    /** The line between the games of this machine: messages from the others of it, as if Ably had brought them. */
+    _openLocal(code) {
+        this._closeLocal();
+        let ch = null;
+        try { ch = this._makeLocal?.(`ww-online:${code}`) ?? null; } catch { ch = null; }
+        if (!ch) return;
+        this._local = ch;
+        ch.onmessage = (e) => {
+            const msg = e?.data;
+            if (!msg || typeof msg !== 'object' || this._closed || ch !== this._local) return;
+            // Only another game of this machine speaks here (no page of another machine can reach this line).
+            if (!this._mine(msg.f)) return;
+            const m = { name: msg.n, data: msg.d, clientId: msg.f };
+            const n = this._names;
+            if (msg.c === 'all') this._onAll(m, true);
+            else if (msg.c === 'host') { if (!this.isHost && (!this._hostClient || msg.f === this._hostClient)) this._onHost(m, true); }
+            else if (msg.c === 'up') { if (this.isHost) this._onUp(m, true); }
+            else if (n && msg.c === n.to(this._client)) this._onInbox(m, true);
+        };
+    }
+
+    _closeLocal() {
+        const ch = this._local;
+        this._local = null;
+        if (ch) { ch.onmessage = null; try { ch.close(); } catch { /* already */ } }
     }
 
     /** No oftener than every `gap` ms, in order: asks, and answers to them. */
@@ -648,9 +757,9 @@ export class OnlineSession {
         this._publish(this._ch.all, MSG.BLOCK, [x, y, z, b, was]);
     }
 
-    profile(name, skin) {
+    profile(name, skin, key = undefined) {
         if (!this._ready || this._closed) return;
-        this._hello = { ...this._hello, name, skin };
+        this._hello = { ...this._hello, name, skin, ...(key !== undefined ? { pk: key } : {}) };
         this._ch.all.presence.update(this._presenceData())?.catch?.(() => {});
         this._lobby();
     }
@@ -659,7 +768,15 @@ export class OnlineSession {
         if (!this.isHost) return;
         this._atmos = a;
         const t = this._now();
-        if (this.alone || t - this._atmosAt < RATE.ATMOS) return;
+        // One that had to wait is not lost: it goes when its turn comes (a change the host has just made —
+        // the time, the weather, a rule — would otherwise wait for the game to offer it again).
+        clearTimeout(this._atmosTimer);
+        if (this.alone) return;
+        const wait = this._atmosAt + RATE.ATMOS - t;
+        if (wait > 0) {
+            this._atmosTimer = setTimeout(() => { if (!this._closed && this.isHost && !this.alone) { this._atmosAt = this._now(); this._publish(this._ch.host, MSG.ATMOS, this._atmos); } }, wait);
+            return;
+        }
         this._atmosAt = t;
         this._publish(this._ch.host, MSG.ATMOS, a);
     }
@@ -743,8 +860,8 @@ export class OnlineSession {
 
     // ── The host: answering for its guests ────────────────────────────────────
 
-    _onUp(m) {
-        if (this._closed || !this._ids.has(m.clientId)) return;
+    _onUp(m, local = false) {
+        if (this._closed || !this._ids.has(m.clientId) || (!local && this._mine(m.clientId))) return;
         const d = m.data;
         if (!d || typeof d !== 'object') return;
         if (m.name === MSG.TO_HOST) return this.onMsg?.(this._ids.get(m.clientId), d);
@@ -796,6 +913,7 @@ export class OnlineSession {
     /** Let go of everything, saying nothing to anyone. */
     _drop() {
         const rt = this._rt;
+        this._closeLocal();
         this._closed = true; this._ready = false;
         this._rt = null; this.id = 0;
         this.players.clear(); this._ids.clear(); this._members.clear(); this._conns.clear();
@@ -812,7 +930,10 @@ export class OnlineSession {
         // Said before going, so nobody waits the quarter minute Ably takes to notice a game that just vanished.
         const said = [];
         try {
-            if (host && this._ready) said.push(ch.host.publish(MSG.BYE, {}));
+            if (host && this._ready) {
+                try { this._local?.postMessage({ c: 'host', n: MSG.BYE, d: {}, f: this._client }); } catch { /* closed */ }
+                said.push(ch.host.publish(MSG.BYE, {}));
+            }
             said.push(ch.all.presence.leave());
         } catch { /* closing anyway */ }
         this._rt = null;
@@ -822,7 +943,15 @@ export class OnlineSession {
     }
 }
 
+/** The line between the games of one machine: a BroadcastChannel, where the page has them. */
+function defaultLocal(name) {
+    return typeof BroadcastChannel === 'function' ? new BroadcastChannel(name) : null;
+}
+
 /** Why a host turns a game away, in the words sessionOver() (src/players.js) has sentences for. */
+/** The key of a player's name, as their game gives it: a few letters and digits, or nothing. */
+const cleanPk = (pk) => (typeof pk === 'string' && /^[A-Za-z0-9_-]{4,40}$/.test(pk) ? pk : '');
+
 const REFUSALS = new Set(['kicked', 'update', 'content', 'locked', 'full']);
 
 // ── A guest's stand-in for the save server ────────────────────────────────────

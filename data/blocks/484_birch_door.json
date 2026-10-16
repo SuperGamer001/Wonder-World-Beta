@@ -1,0 +1,68 @@
+{
+  "id": 484,
+  "name": "BIRCH_DOOR",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "east",
+  "shape": {
+    "open": false,
+    "part": "lower"
+  },
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "birch_door",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Door_Bottom.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    1,
+    0
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "BIRCH_DOOR_OPEN",
+    "sound": "door"
+  },
+  "place": {
+    "mode": "door",
+    "lower": {
+      "east": "BIRCH_DOOR",
+      "west": "BIRCH_DOOR_WEST",
+      "south": "BIRCH_DOOR_SOUTH",
+      "north": "BIRCH_DOOR_NORTH"
+    },
+    "upper": {
+      "east": "BIRCH_DOOR_TOP",
+      "west": "BIRCH_DOOR_WEST_TOP",
+      "south": "BIRCH_DOOR_SOUTH_TOP",
+      "north": "BIRCH_DOOR_NORTH_TOP"
+    },
+    "lowerRight": {
+      "east": "BIRCH_DOOR_RIGHT",
+      "west": "BIRCH_DOOR_WEST_RIGHT",
+      "south": "BIRCH_DOOR_SOUTH_RIGHT",
+      "north": "BIRCH_DOOR_NORTH_RIGHT"
+    },
+    "upperRight": {
+      "east": "BIRCH_DOOR_RIGHT_TOP",
+      "west": "BIRCH_DOOR_WEST_RIGHT_TOP",
+      "south": "BIRCH_DOOR_SOUTH_RIGHT_TOP",
+      "north": "BIRCH_DOOR_NORTH_RIGHT_TOP"
+    }
+  }
+}

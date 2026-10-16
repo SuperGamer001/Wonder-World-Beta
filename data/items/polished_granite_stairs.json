@@ -1,0 +1,8 @@
+{
+  "id": "polished_granite_stairs",
+  "name": "Polished Granite Stairs",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

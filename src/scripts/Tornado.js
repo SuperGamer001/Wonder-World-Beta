@@ -46,7 +46,7 @@ out vec4 fragColor;
 void main() {
     // x wraps once around the funnel: keep texture periods whole so there is no seam.
     vec2 q = vec2(vUv.x * 4.0 + uTime * 0.35 + vH * 1.5, vH * 3.0 - uTime * 0.12);
-    float n = texture(uCloudMap, q * 0.5).r * 0.6 + texture(uCloudMap, vec2(q.x * 2.0, q.y * 1.7)).r * 0.4;
+    float n = textureLod(uCloudMap, q * 0.5, 0.0).r * 0.6 + textureLod(uCloudMap, vec2(q.x * 2.0, q.y * 1.7), 0.0).r * 0.4;
     vec3 v = normalize(cameraPosition - vW);
     float rim = 1.0 - abs(dot(vN, v));
     float a = smoothstep(0.28, 0.66, n) * (0.35 + 0.65 * rim);

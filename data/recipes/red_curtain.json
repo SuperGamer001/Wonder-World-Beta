@@ -1,0 +1,18 @@
+{
+  "id": "red_curtain",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "red_curtain",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "red_wool",
+      "count": 2
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

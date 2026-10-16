@@ -74,6 +74,7 @@ await send('Runtime.enable');
 await send('Page.enable');
 // A new data folder has no player yet, and the game would stop to ask for a
 // name (src/players.js). This run is not about that: say who is playing.
+process.env.WW_RELEASE_NOTES = 'none';      // no notes file: "What is New" does not come up over this run
 await fetch(`${base}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Tester' }) });
 await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: 'Tester' }) });
 await send('Page.navigate', { url: `${base}/game.html` });

@@ -16,8 +16,14 @@
       "itemId": "apple",
       "count": 1,
       "chance": 0.03
+    },
+    {
+      "itemId": "birch_sapling",
+      "count": 1,
+      "chance": 0.07
     }
   ],
   "texture": "Birch_Leaves.png",
-  "render": "cutout"
+  "render": "cutout",
+  "flammable": 70
 }

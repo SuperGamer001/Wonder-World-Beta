@@ -1,0 +1,22 @@
+{
+  "id": "bomb",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "bomb",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "coal",
+      "count": 4
+    },
+    {
+      "itemId": "sand",
+      "count": 4
+    },
+    {
+      "itemId": "string",
+      "count": 1
+    }
+  ]
+}

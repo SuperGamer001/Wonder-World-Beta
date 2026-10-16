@@ -1,0 +1,22 @@
+{
+  "id": "map",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "map",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "leather",
+      "count": 2
+    },
+    {
+      "itemId": "coal",
+      "count": 1
+    },
+    {
+      "itemId": "stick",
+      "count": 1
+    }
+  ]
+}

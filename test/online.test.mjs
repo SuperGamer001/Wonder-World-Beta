@@ -403,6 +403,16 @@ function setup() {
     const jay = game('Jay');
     await jay.s.enter(host.s.code, jay.hello);
     check('a newcomer takes a new number; nobody inherits one', jay.s.id === 4);
+    // Two of one name: the later is #2 — and who each is does not go by the name.
+    const jay2 = game('JAY', { hello: { pk: 'keyOfSecondJay' } });
+    await jay2.s.enter(host.s.code, jay2.hello);
+    const named = (g, name) => [...g.s.players.values()].find(q => q.name === name);
+    await until(() => named(host, 'JAY')?.dup === 2 && named(jay, 'JAY')?.dup === 2 && jay2.s.dup === 2, 2000, 'the second Jay to be numbered');
+    check('the second of a name is #2: to the host, to the others, and to themselves', named(host, 'Jay')?.dup === 0 && jay.s.dup === 0 && named(jay2, 'Jay')?.dup === 0);
+    check('… and who a player is — their machine, and the key of their name — is the same to every game',
+        named(host, 'JAY').key === named(jay, 'JAY').key && named(host, 'JAY').key.endsWith('|keyOfSecondJay') && named(host, 'JAY').key !== named(host, 'Jay').key, named(host, 'JAY').key);
+    jay2.s.close();
+    await until(() => host.s.players.size === 1 && !named(jay, 'JAY'), 2000, 'the second Jay to go');
     host.s.close();
     await until(() => jay.closed, 2000, 'the guest to hear the host has gone');
     check('when the host closes the game, its guests are told at once', jay.closed === 'host');
@@ -560,6 +570,47 @@ function setup() {
     ably.down = true;
     check('when Ably cannot be asked, the list says it cannot be had (and nothing else breaks)', (await failure(list(wes)))?.reason === 'unreachable');
     ably.down = false;
+    end();
+}
+
+// ── A split screen online ─────────────────────────────────────────────────────
+// The further players of a split screen are games of the host's own machine:
+// they talk to it over a line of the page's own, not through Ably, until
+// somebody from another machine is in the room to hear them.
+{
+    const { hub, settle, game, end } = setup();
+    const host = game('Hana');
+    await host.s.open(host.hello, WORLD);
+    const pane = game('Pia', { slot: 1, device: host.store.v });
+    await pane.s.enter(host.s.code, pane.hello);
+    await until(() => host.s.players.size === 1 && pane.s.players.size === 1, 3000, 'the pane to be let in');
+    await settle();
+    hub.reset();
+    for (let i = 0; i < 6; i++) {
+        host.s.state([i, 70, 0, 0, 0, 4, 1, 0, 0]);
+        pane.s.state([i, 70, 3, 0, 0, 4, 1, 0, 0]);
+        host.s.all({ t: 'mobs', list: [1, i, 2, 3] });
+        host.s.atmos({ time: i });
+        host.set(i, 70, 9, 3);
+        pane.set(i, 71, 9, 4);
+        await sleep(RATE.STATE + 10);
+    }
+    await until(() => host.states.length >= 3 && pane.states.length >= 3 && pane.world.get('5,70,9') === 3 && host.world.get('5,71,9') === 4, 3000, 'the two to hear each other');
+    await settle();
+    check('a split screen online, with nobody from another machine: the two hear each other, and Ably carries nothing',
+        hub.messages === 0 && pane.msgs.some(([, d]) => d.t === 'mobs'), `${hub.messages} messages`);
+
+    const far = game('Gus');
+    await far.s.enter(host.s.code, far.hello);
+    await until(() => [host, pane, far].every(g => g.s.players.size === 2), 3000, 'everyone to see everyone');
+    host.states.length = pane.states.length = far.states.length = 0;
+    hub.reset();
+    await sleep(RATE.STATE + 10);
+    host.s.state([7, 70, 0, 0, 0, 0, 1, 0, 0]); pane.s.state([8, 70, 0, 0, 0, 0, 1, 0, 0]); far.s.state([9, 70, 0, 0, 0, 0, 1, 0, 0]);
+    await until(() => far.states.length >= 2 && host.states.length >= 2 && pane.states.length >= 2, 3000, 'everyone to hear everyone');
+    await settle(); await sleep(50);
+    check('… and once somebody from another machine has joined, everyone hears everyone, once, through Ably where it must',
+        hub.messages > 0 && [host, pane, far].every(g => g.states.length === 2), [host, pane, far].map(g => g.states.length).join(' '));
     end();
 }
 

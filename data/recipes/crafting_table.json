@@ -8,7 +8,8 @@
   "ingredients": [
     {
       "itemId": "wood_log",
-      "count": 4
+      "count": 4,
+      "any": "log"
     }
   ]
 }

@@ -1,0 +1,27 @@
+{
+  "id": 280,
+  "name": "WOODEN_STAIRS_TOP",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Wooden_Planks.png",
+  "model": "stairs",
+  "facing": "east",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "wooden_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

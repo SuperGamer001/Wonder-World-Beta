@@ -1,0 +1,8 @@
+{
+  "id": "bunting",
+  "name": "Bunting",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

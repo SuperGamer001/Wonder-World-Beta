@@ -1,0 +1,19 @@
+{
+  "id": 90,
+  "name": "CHISELED_STONE",
+  "terrainType": "solid",
+  "color": [
+    0.56,
+    0.56,
+    0.57
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "chiseled_stone",
+      "count": 1
+    }
+  ],
+  "texture": "Chiseled_Stone.png"
+}

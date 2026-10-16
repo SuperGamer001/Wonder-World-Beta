@@ -1,0 +1,14 @@
+{
+  "id": "clay",
+  "station": "hand",
+  "result": {
+    "itemId": "clay",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "clay_ball",
+      "count": 4
+    }
+  ]
+}

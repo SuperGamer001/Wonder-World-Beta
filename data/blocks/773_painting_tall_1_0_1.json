@@ -1,0 +1,41 @@
+{
+  "id": 773,
+  "name": "PAINTING_TALL_1_0_1",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "east",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0.5
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [],
+  "texture": "Painting_Tall_A.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      0,
+      -1,
+      0
+    ]
+  ],
+  "piece": "PAINTING_TALL_1",
+  "use": {
+    "toggle": "PAINTING_TALL_2_0_1"
+  },
+  "variant": true
+}

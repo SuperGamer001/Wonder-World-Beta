@@ -1,0 +1,40 @@
+{
+  "id": 602,
+  "name": "WHITE_SOFA",
+  "terrainType": "solid",
+  "color": [
+    0.94,
+    0.94,
+    0.92
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Block.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "white_sofa",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "WHITE_SOFA",
+      "west": "WHITE_SOFA_WEST",
+      "south": "WHITE_SOFA_SOUTH",
+      "north": "WHITE_SOFA_NORTH"
+    }
+  }
+}

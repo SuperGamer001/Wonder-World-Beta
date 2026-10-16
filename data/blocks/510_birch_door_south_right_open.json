@@ -1,0 +1,43 @@
+{
+  "id": 510,
+  "name": "BIRCH_DOOR_SOUTH_RIGHT_OPEN",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "south",
+  "shape": {
+    "open": true,
+    "part": "lower",
+    "hinge": "right"
+  },
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "birch_door",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Door_Bottom.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    1,
+    0
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "BIRCH_DOOR_SOUTH_RIGHT",
+    "sound": "door"
+  },
+  "variant": true
+}

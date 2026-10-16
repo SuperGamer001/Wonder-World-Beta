@@ -1,0 +1,31 @@
+{
+  "id": 212,
+  "name": "STREAMERS",
+  "terrainType": "solid",
+  "model": "bunting",
+  "color": [
+    0.9,
+    0.8,
+    0.3
+  ],
+  "hardness": 0.05,
+  "drops": [
+    {
+      "itemId": "streamers",
+      "count": 1
+    }
+  ],
+  "texture": "Streamers.png",
+  "sound": "grass",
+  "flammable": 80,
+  "facing": "east",
+  "place": {
+    "mode": "look",
+    "names": {
+      "east": "STREAMERS",
+      "west": "STREAMERS",
+      "south": "STREAMERS_SOUTH",
+      "north": "STREAMERS_SOUTH"
+    }
+  }
+}

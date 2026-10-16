@@ -1,0 +1,25 @@
+{
+  "id": 363,
+  "name": "POLISHED_GRANITE_STAIRS_TOP_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.42,
+    0.36
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Granite.png",
+  "model": "stairs",
+  "facing": "north",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "polished_granite_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

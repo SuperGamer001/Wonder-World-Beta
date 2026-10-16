@@ -169,7 +169,8 @@ export function buildKindTable(reg) {
     const wet  = new Uint8Array(65536);
     for (const def of reg.serialize()) {
         const id = def.id;
-        if (id === 0 || reg.isLiquid(id)) kind[id] = KIND_EMPTY;
+        // (A plant counts for nothing: the ground runs on under it as it would have.)
+        if (id === 0 || reg.isLiquid(id) || def.soft) kind[id] = KIND_EMPTY;
         else if (reg.isMesh(id))          kind[id] = KIND_MESH;
         else                              kind[id] = KIND_CUBE;
         if (id !== 0 && reg.isLiquid(id)) wet[id] = 1;
@@ -1405,6 +1406,16 @@ export class SmoothTerrain {
         if (!(top > y0 - by + EPS)) return false;
         const bot = gridExtent(shape.bot, u0, v0, u1, v1, false);
         return bot < y1 - by - EPS;
+    }
+
+    /**
+     * Height (0 … 1) of the surface at the middle of the Mesh voxel (bx, by,
+     * bz): 1 for a full cube. What the mesher's topHeight gives — a plant on
+     * the ground is drawn standing at this height, and is met there.
+     */
+    topAt(bx, by, bz) {
+        const shape = this.shapeAt(bx, by, bz);
+        return shape ? gridHeightAt(shape.top, 0.5, 0.5) : 1;
     }
 
     /** Is the world-space point inside the solid part of the Mesh voxel it is in? */

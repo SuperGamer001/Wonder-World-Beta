@@ -1,0 +1,25 @@
+{
+  "id": 331,
+  "name": "BRICK_STAIRS_TOP_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.27,
+    0.22
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Bricks.png",
+  "model": "stairs",
+  "facing": "north",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "brick_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

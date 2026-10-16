@@ -1,0 +1,33 @@
+{
+  "id": 443,
+  "name": "WOODEN_DOOR_WEST_RIGHT_OPEN_TOP",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "west",
+  "shape": {
+    "open": true,
+    "part": "upper",
+    "hinge": "right"
+  },
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [],
+  "texture": "Door_Top.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "WOODEN_DOOR_WEST_RIGHT_TOP",
+    "sound": "door"
+  },
+  "variant": true
+}

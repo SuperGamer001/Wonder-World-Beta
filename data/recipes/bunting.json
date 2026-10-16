@@ -1,0 +1,26 @@
+{
+  "id": "bunting",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "bunting",
+    "count": 6
+  },
+  "ingredients": [
+    {
+      "itemId": "string",
+      "count": 2
+    },
+    {
+      "itemId": "red_wool",
+      "count": 1
+    },
+    {
+      "itemId": "yellow_wool",
+      "count": 1
+    },
+    {
+      "itemId": "blue_wool",
+      "count": 1
+    }
+  ]
+}

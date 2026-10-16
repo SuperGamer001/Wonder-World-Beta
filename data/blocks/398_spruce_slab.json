@@ -1,0 +1,28 @@
+{
+  "id": 398,
+  "name": "SPRUCE_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Spruce_Planks.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "spruce_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "SPRUCE_SLAB",
+    "top": "SPRUCE_SLAB_TOP",
+    "full": "SPRUCE_PLANKS"
+  }
+}

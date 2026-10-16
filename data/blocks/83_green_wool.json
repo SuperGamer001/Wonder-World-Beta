@@ -1,0 +1,20 @@
+{
+  "id": 83,
+  "name": "GREEN_WOOL",
+  "terrainType": "solid",
+  "color": [
+    0.36,
+    0.55,
+    0.24
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "green_wool",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Green.png",
+  "flammable": 60,
+  "sound": "grass"
+}

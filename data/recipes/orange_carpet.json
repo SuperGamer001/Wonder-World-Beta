@@ -1,0 +1,14 @@
+{
+  "id": "orange_carpet",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "orange_carpet",
+    "count": 3
+  },
+  "ingredients": [
+    {
+      "itemId": "orange_wool",
+      "count": 2
+    }
+  ]
+}

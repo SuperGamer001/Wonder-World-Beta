@@ -1,0 +1,24 @@
+{
+  "id": 287,
+  "name": "STONE_SLAB_TOP",
+  "terrainType": "solid",
+  "color": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "hardness": 2,
+  "requiresTool": "pickaxe",
+  "texture": "Stone.png",
+  "model": "slab",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "stone_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

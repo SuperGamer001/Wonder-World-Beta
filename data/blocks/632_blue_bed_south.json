@@ -1,0 +1,38 @@
+{
+  "id": 632,
+  "name": "BLUE_BED_SOUTH",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "south",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.25,
+    0.38,
+    0.72
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "blue_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Blue.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    0,
+    0,
+    1
+  ],
+  "use": {
+    "sleep": true
+  },
+  "variant": true
+}

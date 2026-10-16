@@ -1,7 +1,9 @@
 {
   "id": "wooden_planks",
-  "name": "Wooden Planks",
+  "name": "Oak Planks",
   "type": "resource",
   "weight": 1,
-  "maxStack": 64
+  "maxStack": 64,
+  "group": "planks",
+  "category": "Building"
 }

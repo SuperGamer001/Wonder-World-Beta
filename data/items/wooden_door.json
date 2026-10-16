@@ -1,0 +1,8 @@
+{
+  "id": "wooden_door",
+  "name": "Wooden Door",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 16,
+  "category": "Building"
+}

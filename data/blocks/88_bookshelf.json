@@ -1,0 +1,25 @@
+{
+  "id": 88,
+  "name": "BOOKSHELF",
+  "terrainType": "solid",
+  "color": [
+    0.55,
+    0.4,
+    0.25
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "bookshelf",
+      "count": 1
+    }
+  ],
+  "textures": {
+    "top": "Wooden_Planks.png",
+    "side": "Bookshelf.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "flammable": 30,
+  "sound": "wood"
+}

@@ -1,0 +1,25 @@
+{
+  "id": 549,
+  "name": "BIRCH_STOOL",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "stool",
+  "drops": [
+    {
+      "itemId": "birch_stool",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Planks.png",
+  "use": {
+    "sit": true
+  }
+}

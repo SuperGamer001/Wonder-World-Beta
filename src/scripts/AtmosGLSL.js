@@ -43,7 +43,7 @@ import {
 } from './engine/CloudField.js';
 
 export const CLOUD_BASE = 192;   // world Y of the cloud layer's underside
-export const CLOUD_TOP  = 236;   // … and of the tallest cloud tops
+export const CLOUD_TOP  = 262;   // … and of the tallest cloud tops (it was 236: heaps that low for their width were pancakes)
 export const CLOUD_REACH = 360;  // furthest a line of sight is followed through the layer, blocks
 
 const f = (x) => Number(x).toFixed(6);
@@ -113,8 +113,9 @@ uniform float uIce;
 uniform float uTime;
 uniform vec4  uWind;
 
-// textureLod: the map has one level, and this is read inside loops and
-// branches, where a lookup that needs screen derivatives is not allowed.
+// textureLod, level 0: this is read inside loops and branches, where a lookup
+// that needs screen derivatives is not allowed — and the map's smaller levels
+// are a softer field (Clouds.js reads them for the look of a cloud), not this one.
 float cloudNoise(vec2 xz) {
     float a = textureLod(uCloudMap, (xz + uCloudOffA) * ${f(1 / CLOUD_PERIOD_A)}, 0.0).r;
     float b = textureLod(uCloudMap, (xz + uCloudOffB) * ${f(1 / CLOUD_PERIOD_B)} + vec2(${f(DETAIL_SHIFT[0])}, ${f(DETAIL_SHIFT[1])}), 0.0).r;

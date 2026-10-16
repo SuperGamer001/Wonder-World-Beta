@@ -1,0 +1,10 @@
+{
+  "id": "bucket",
+  "name": "Bucket",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 16,
+  "category": "Tools",
+  "use": "bucket",
+  "icon": "data/textures/items/bucket.png"
+}

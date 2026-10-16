@@ -1,0 +1,8 @@
+{
+  "id": "tall_grass",
+  "name": "Tall Grass",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Natural"
+}

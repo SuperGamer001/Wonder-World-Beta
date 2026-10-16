@@ -1,0 +1,31 @@
+{
+  "id": 255,
+  "name": "PAINTING_4_WEST",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "west",
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_5.png",
+  "support": [
+    1,
+    0,
+    0
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "use": {
+    "toggle": "PAINTING_5_WEST"
+  },
+  "variant": true
+}

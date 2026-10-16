@@ -41,9 +41,13 @@
  * colour, with no light baked in, and smooth terrain, whose normals vary
  * across a patch, is shaded smoothly rather than per triangle.
  *
- * Blocks with a model (torches, lanterns — BlockRegistry `model`) are not
- * greedy-meshed: they are skipped here and drawn by BlockModels.js, and they
- * never hide a neighbour's face.
+ * Blocks with a model (torches, slabs, stairs, fences, plants — BlockRegistry
+ * `model`) are not greedy-meshed: they are skipped here and drawn by
+ * BlockModels.js, and they never hide a neighbour's face.
+ *
+ * Standing water is a cube like any other see-through block. Water that is
+ * flowing (BlockRegistry `fluid`: a level, or falling) is drawn by
+ * _emitFluids instead: its surface slopes from one level to the next.
  *
  * The opaque mesh's triangles are put in order of section — sixteen levels of
  * the column each — so that the sections the camera cannot see (most of a
@@ -70,6 +74,11 @@
 
 import { CHUNK_SIZE, CHUNK_SIZE_Y } from '../engine/ChunkData.js';
 import { emitModel, isModel } from './BlockModels.js';
+import { compileShape, connCode } from '../engine/BlockShapes.js';
+
+// The model block whose neighbours connCode is asking about (_emitModels).
+let _cx = 0, _cy = 0, _cz = 0;
+import { FLUID_FALL, FLUID_SOURCE } from '../engine/BlockRegistry.js';
 import { packTints, packUVs, packIndices } from '../engine/MeshFormat.js';
 import { SECTIONS, SECTION_SHIFT, SECTION_SIZE } from '../engine/Visibility.js';
 
@@ -279,6 +288,12 @@ export class GreedyMesher {
         // opaque sink's each job), and where each section's go.
         this._idxSorted = new U32Buf();
         this._secFill   = new Uint32Array(SECTIONS);
+        // The chunk being meshed and the eight round it, (dx + 1) + (dz + 1) · 3
+        // (_read): models and flowing water look a block past the chunk's edge.
+        this._around = new Array(9).fill(null);
+        // One quad of flowing water: positions, uvs (_fluidQuad).
+        this._fp = new Float32Array(12);
+        this._fu = new Float32Array(8);
     }
 
     /**
@@ -316,6 +331,21 @@ export class GreedyMesher {
         this._anyBlend    = false;
         this._model       = new Uint8Array(65536);
         this._modelDef    = [];
+        // _join: a fence reaches out to it. _soft: a plant, which stands on the
+        // surface of smooth ground. _flow: how much water it is (BlockRegistry
+        // `fluid`: 0 none, 1 … 7 flowing, 8 falling, 9 standing). _dam: water
+        // does not go into it — anything but air, water, and what water takes
+        // away. _shade: it stops light — every opaque cube, and the shapes that
+        // say so (slabs, stairs). _rain: where rain stops on it, in sixteenths
+        // (0: it falls through).
+        this._join        = new Uint8Array(65536);
+        this._soft        = new Uint8Array(65536);
+        this._flow        = new Uint8Array(65536);
+        this._dam         = new Uint8Array(65536).fill(1);
+        this._shade       = new Uint8Array(65536);
+        this._rain        = new Uint8Array(65536).fill(16);
+        this._dam[0]      = 0;
+        this._rain[0]     = 0;
         this._layerTop    = new Int16Array(n).fill(-1);
         this._layerSide   = new Int16Array(n).fill(-1);
         this._layerBottom = new Int16Array(n).fill(-1);
@@ -333,11 +363,21 @@ export class GreedyMesher {
             this._solid[id] = this.reg.isSolid(id) ? 1 : 0;
             this._glow[id]  = Math.round((block.glow ?? 0) * 127);
             this._light[id] = block.light ?? 0;
+            this._shade[id] = this._solid[id] || block.shade ? 1 : 0;
+            this._join[id]  = this._solid[id] || block.joins ? 1 : 0;
             if (block.model && isModel(block.model)) {
                 this._model[id]    = 1;
                 this._airLike[id]  = 1;
-                this._modelDef[id] = { model: block.model, facing: block.facing ?? null };
+                this._modelDef[id] = compileShape(block);
+                this._soft[id]     = block.soft ? 1 : 0;
+                this._rain[id]     = Math.max(0, Math.min(16, Math.round(block.rain ?? 0)));
+                if (block.wash) this._dam[id] = 0;
+            } else if (block.fluid >= 1 && block.fluid <= FLUID_FALL) {
+                // Flowing water: drawn by _emitFluids, with a surface of its own.
+                this._flow[id] = block.fluid;
+                this._dam[id]  = 0;
             } else if (id !== 0 && !this._solid[id]) {
+                if (block.fluid === FLUID_SOURCE) { this._flow[id] = FLUID_SOURCE; this._dam[id] = 0; }
                 if (block.render === 'cutout') this._cutout[id] = 1;
                 else this._glassy[id] = 1;
             }
@@ -366,6 +406,7 @@ export class GreedyMesher {
 
         // SOLID_SENTINEL stands in for "outside the world" and must cull faces.
         this._solid[SOLID_SENTINEL] = 1;
+        this._shade[SOLID_SENTINEL] = 1;
     }
 
     /**
@@ -389,11 +430,20 @@ export class GreedyMesher {
      * @param {boolean} [models] the chunk may hold model blocks (torches,
      *   lanterns): look for them and draw them. worldWorker knows from the
      *   chunk's palette (hasModels), so chunks without any skip the scan.
+     * @param {object} [extra] { fluids, diagonals }: the chunk holds flowing
+     *   water (hasFluids), and the four diagonal chunks' voxels ("1,1" …), which
+     *   the corners of a sloping water surface at the chunk's own corners read.
      */
-    meshGroup(voxels, neighbors, faceDefIndices, yRange, smooth = null, models = false) {
+    meshGroup(voxels, neighbors, faceDefIndices, yRange, smooth = null, models = false, extra = null) {
         const opaque = _resetSink(this._opaque);
         const transp = _resetSink(this._transp);
         this._tq.n = 0;
+        const around = this._around, dg = extra?.diagonals;
+        around[4] = voxels;
+        around[5] = neighbors?.['1,0'] ?? null;  around[3] = neighbors?.['-1,0'] ?? null;
+        around[7] = neighbors?.['0,1'] ?? null;  around[1] = neighbors?.['0,-1'] ?? null;
+        around[8] = dg?.['1,1'] ?? null;         around[6] = dg?.['-1,1'] ?? null;
+        around[2] = dg?.['1,-1'] ?? null;        around[0] = dg?.['-1,-1'] ?? null;
 
         const yMin = Math.max(0,       (yRange?.min ?? 0) | 0);
         const yMax = Math.min(N_Y - 1, (yRange?.max ?? (N_Y - 1)) | 0);
@@ -423,7 +473,8 @@ export class GreedyMesher {
         }
 
         smooth?.emit?.(opaque);
-        if (models && yMax >= yMin) this._emitModels(voxels, yMin, yMax, opaque);
+        if (models && yMax >= yMin) this._emitModels(voxels, yMin, yMax, opaque, smooth);
+        if (extra?.fluids && yMax >= yMin) this._emitFluids(voxels, yMin, yMax, transp, smooth ? smooth.occ : this._solid);
         const sections = this._sortSections(opaque);
         this._orderTranslucent(transp);
 
@@ -513,10 +564,35 @@ export class GreedyMesher {
         return false;
     }
 
+    /** Whether any id in `palette` is flowing water (worldWorker, before meshing). */
+    hasFluids(palette) {
+        for (let i = 0; i < palette.length; i++) { const f = this._flow[palette[i]]; if (f !== 0 && f !== FLUID_SOURCE) return true; }
+        return false;
+    }
+
+    /**
+     * The voxel at chunk-local (lx, ly, lz) of the chunk being meshed, up to a
+     * chunk past it on every side; SOLID_SENTINEL outside the world and where
+     * no chunk is.
+     */
+    _read(lx, ly, lz) {
+        if (ly < 0 || ly >= N_Y) return SOLID_SENTINEL;
+        const dx = lx < 0 ? -1 : lx >= N_XZ ? 1 : 0, dz = lz < 0 ? -1 : lz >= N_XZ ? 1 : 0;
+        const a = this._around[(dx + 1) + (dz + 1) * 3];
+        if (a === null) return SOLID_SENTINEL;
+        return a[(lx - dx * N_XZ) + ly * SY + (lz - dz * N_XZ) * SZ];
+    }
+
     /** Draw every model block in the band (BlockModels.js). */
-    _emitModels(voxels, yMin, yMax, sink) {
+    _emitModels(voxels, yMin, yMax, sink, smooth) {
         const model = this._model;
-        const tables = { layer: -1, color: [1, 1, 1], glow: 0 };
+        const tables = { top: -1, side: -1, bottom: -1, color: [1, 1, 1], glow: 0 };
+        // What connCode reads, made once: the block beside the one being drawn, its shape, whether a fence reaches to it.
+        if (!this._idAt) {
+            this._idAt = (dx, dz) => this._read(_cx + dx, _cy, _cz + dz);
+            this._shapeOf = (id) => this._modelDef[id];
+            this._joinOf = (id) => this._join[id] === 1;
+        }
         for (let lz = 0; lz < N_XZ; lz++) {
             for (let ly = yMin; ly <= yMax; ly++) {
                 const row = ly * SY + lz * SZ;
@@ -525,12 +601,139 @@ export class GreedyMesher {
                     if (model[id] !== 1) continue;
                     markSection(sink, ly >> SECTION_SHIFT);   // a model is inside its own cell
                     const cb = id * 18 + 2 * 3;   // the top face's colour
-                    tables.layer = this._layerTop[id];
+                    tables.top    = this._layerTop[id];
+                    tables.side   = this._layerSide[id];
+                    tables.bottom = this._layerBottom[id];
                     tables.color[0] = this._colors[cb];
                     tables.color[1] = this._colors[cb + 1];
                     tables.color[2] = this._colors[cb + 2];
                     tables.glow = this._glow[id];
-                    emitModel(sink, lx, ly, lz, this._modelDef[id], tables);
+                    const shape = this._modelDef[id];
+                    // A fence reaches out to what stands beside it; stairs turn a corner; a row of chairs is a bench.
+                    let conn = 0;
+                    if (shape.connect) {
+                        _cx = lx; _cy = ly; _cz = lz;
+                        conn = connCode(shape, this._idAt, this._shapeOf, this._joinOf);
+                    }
+                    // A plant on smooth ground stands on the surface, not on the top of the voxel under it.
+                    let lift = 0;
+                    if (smooth && this._soft[id] === 1 && ly > 0 && smooth.isMesh?.(voxels[row + lx - SY])) lift = smooth.topHeight(lx, ly - 1, lz) - 1;
+                    emitModel(sink, lx, ly, lz, shape, tables, conn, lift);
+                }
+            }
+        }
+    }
+
+    // ── Flowing water ───────────────────────────────────────────────────────────
+    //
+    // A block of flowing water holds less the further it is from where it
+    // comes from (its level, 7 … 1). Drawn as cubes of those heights it would
+    // be a staircase; instead each corner of a block's surface is at a height
+    // worked out from the (up to four) blocks that meet there, and they all
+    // work it out alike, so the surface is one sheet, sloping down from the
+    // source to nothing at the edge of the flow. A corner that standing water,
+    // falling water or water under more water touches is at the full height —
+    // which is where the cube of standing water beside it has its top.
+
+    /** The height (0 … 1) of the water surface at the lattice corner (X, Z) on level ly. */
+    _fluidCorner(X, ly, Z) {
+        const flow = this._flow, dam = this._dam;
+        let sum = 0, n = 0;
+        for (let k = 0; k < 4; k++) {
+            const x = X - (k & 1), z = Z - (k >> 1);
+            const id = this._read(x, ly, z), f = flow[id];
+            if (f !== 0) {
+                if (f >= FLUID_FALL || flow[this._read(x, ly + 1, z)] !== 0) return 1;
+                sum += f / 8; n++;
+            } else if (dam[id] === 0) n++;          // open: the water thins out toward it
+        }
+        return n > 0 ? Math.max(0.03, sum / n) : 0.03;
+    }
+
+    /**
+     * One quad of water, twice (once facing each way), noted for
+     * _orderTranslucent. The four corners are in _fp, in the order a face
+     * turned toward + on `faceAxis` has them (see _greedyMerge), their uvs in _fu.
+     */
+    _fluidQuad(sink, faceAxis, plane, layer, nx, ny, nz) {
+        const p = this._fp, u = this._fu;
+        const base = (sink.pos.n / 3) | 0;
+        for (let side = 0; side < 2; side++) {
+            const sx = side ? -nx : nx, sy = side ? -ny : ny, sz = side ? -nz : nz;
+            for (let k = 0; k < 4; k++) {
+                sink.pos.push3(p[k * 3], p[k * 3 + 1], p[k * 3 + 2]);
+                sink.col.push3(0, 0, 0);
+                sink.lay.push1(layer);
+                sink.nrm.push4(sx, sy, sz, 0);
+                sink.uv.push2(u[k * 2], u[k * 2 + 1]);
+            }
+        }
+        this._tq.push3(_translucentKey(faceAxis, true, plane), base, 1);
+        this._tq.push3(_translucentKey(faceAxis, false, plane), base + 4, 0);
+    }
+
+    _emitFluids(voxels, yMin, yMax, sink, occ) {
+        const flow = this._flow, p = this._fp, u = this._fu;
+        const set = (k, x, y, z, s, t) => { p[k * 3] = x; p[k * 3 + 1] = y; p[k * 3 + 2] = z; u[k * 2] = s; u[k * 2 + 1] = t; };
+        for (let lz = 0; lz < N_XZ; lz++) {
+            for (let ly = yMin; ly <= yMax; ly++) {
+                const row = ly * SY + lz * SZ;
+                for (let lx = 0; lx < N_XZ; lx++) {
+                    const id = voxels[row + lx], f = flow[id];
+                    if (f === 0 || f === FLUID_SOURCE) continue;
+                    const layer = this._layerTop[id];
+                    const up = this._read(lx, ly + 1, lz);
+                    const under = flow[up] !== 0;        // more water over it: full to the top
+                    // The surface at the four corners: A (x, z)  B (x, z+1)  C (x+1, z+1)  D (x+1, z).
+                    const hA = under ? 1 : this._fluidCorner(lx, ly, lz),         hB = under ? 1 : this._fluidCorner(lx, ly, lz + 1);
+                    const hC = under ? 1 : this._fluidCorner(lx + 1, ly, lz + 1), hD = under ? 1 : this._fluidCorner(lx + 1, ly, lz);
+
+                    if (!under && !(occ[up] === 1 && hA + hB + hC + hD >= 4)) {
+                        // The slope's normal, from how the surface falls across the block.
+                        const gx = (hC + hD - hA - hB) * 0.5, gz = (hB + hC - hA - hD) * 0.5;
+                        const len = Math.hypot(gx, 1, gz);
+                        const nx = Math.round(-gx / len * 127), ny = Math.round(127 / len), nz = Math.round(-gz / len * 127);
+                        // Split along the diagonal whose ends are nearer in height.
+                        if (Math.abs(hA - hC) <= Math.abs(hB - hD)) {
+                            set(0, lx, ly + hA, lz, 0, 0);         set(1, lx, ly + hB, lz + 1, 1, 0);
+                            set(2, lx + 1, ly + hC, lz + 1, 1, 1); set(3, lx + 1, ly + hD, lz, 0, 1);
+                        } else {
+                            set(0, lx, ly + hB, lz + 1, 1, 0);     set(1, lx + 1, ly + hC, lz + 1, 1, 1);
+                            set(2, lx + 1, ly + hD, lz, 0, 1);     set(3, lx, ly + hA, lz, 0, 0);
+                        }
+                        this._fluidQuad(sink, 1, ly + 1, layer, nx, ny, nz);
+                    }
+                    const dn = this._read(lx, ly - 1, lz);
+                    if (flow[dn] === 0 && occ[dn] !== 1) {
+                        set(0, lx, ly, lz, 0, 0);         set(1, lx, ly, lz + 1, 1, 0);
+                        set(2, lx + 1, ly, lz + 1, 1, 1); set(3, lx + 1, ly, lz, 0, 1);
+                        this._fluidQuad(sink, 1, ly, layer, 0, 127, 0);
+                    }
+                    // The sides, where there is neither water nor a block against them.
+                    let n = this._read(lx - 1, ly, lz);
+                    if (flow[n] === 0 && occ[n] !== 1) {
+                        set(0, lx, ly, lz, 0, 0);           set(1, lx, ly + hA, lz, 0, hA);
+                        set(2, lx, ly + hB, lz + 1, 1, hB); set(3, lx, ly, lz + 1, 1, 0);
+                        this._fluidQuad(sink, 0, lx, layer, 127, 0, 0);
+                    }
+                    n = this._read(lx + 1, ly, lz);
+                    if (flow[n] === 0 && occ[n] !== 1) {
+                        set(0, lx + 1, ly, lz, 0, 0);           set(1, lx + 1, ly + hD, lz, 0, hD);
+                        set(2, lx + 1, ly + hC, lz + 1, 1, hC); set(3, lx + 1, ly, lz + 1, 1, 0);
+                        this._fluidQuad(sink, 0, lx + 1, layer, 127, 0, 0);
+                    }
+                    n = this._read(lx, ly, lz - 1);
+                    if (flow[n] === 0 && occ[n] !== 1) {
+                        set(0, lx, ly, lz, 0, 0);           set(1, lx + 1, ly, lz, 1, 0);
+                        set(2, lx + 1, ly + hD, lz, 1, hD); set(3, lx, ly + hA, lz, 0, hA);
+                        this._fluidQuad(sink, 2, lz, layer, 0, 0, 127);
+                    }
+                    n = this._read(lx, ly, lz + 1);
+                    if (flow[n] === 0 && occ[n] !== 1) {
+                        set(0, lx, ly, lz + 1, 0, 0);           set(1, lx + 1, ly, lz + 1, 1, 0);
+                        set(2, lx + 1, ly + hC, lz + 1, 1, hC); set(3, lx, ly + hB, lz + 1, 0, hB);
+                        this._fluidQuad(sink, 2, lz + 1, layer, 0, 0, 127);
+                    }
                 }
             }
         }

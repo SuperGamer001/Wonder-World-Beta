@@ -1,0 +1,8 @@
+{
+  "id": "bomb",
+  "name": "Bomb",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 16,
+  "category": "Tools"
+}

@@ -1,0 +1,20 @@
+{
+  "id": 191,
+  "name": "MOSSY_STONE_WALL",
+  "terrainType": "solid",
+  "model": "wall",
+  "color": [
+    0.42,
+    0.5,
+    0.4
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "mossy_stone_wall",
+      "count": 1
+    }
+  ],
+  "texture": "Mossy_Stone.png"
+}

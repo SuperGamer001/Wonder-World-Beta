@@ -342,10 +342,13 @@ export class WeatherSystem {
 
     /** Poisson lightning, placed under thick cloud near the player. */
     _lightning(dt, ctx) {
+        // A guest's game makes none of its own: it is shown the host's (Atmosphere.bolt).
+        if (ctx.lightning === false) return;
         const rate = this.P[LIGHTNING];
         if (rate < 0.05) return;
         if (this.rand() >= rate / 60 * dt) return;
-        const field = ctx.field, px = ctx.px ?? 0, pz = ctx.pz ?? 0;
+        // Round the player — or, with several in the world, round whichever of them the host's game picked.
+        const field = ctx.field, px = ctx.sx ?? ctx.px ?? 0, pz = ctx.sz ?? ctx.pz ?? 0;
         const ev = this._pool[this.events.length] ?? (this._pool[this.events.length] = {});
         ev.cloud = this.rand() < 0.35;      // cloud-to-cloud: a flash with no bolt
         ev.x = px; ev.z = pz; ev.dist = 0;

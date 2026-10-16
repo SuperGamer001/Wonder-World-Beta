@@ -1,0 +1,10 @@
+{
+  "id": "water_bucket",
+  "name": "Water Bucket",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 1,
+  "category": "Tools",
+  "use": "pour",
+  "icon": "data/textures/items/water_bucket.png"
+}

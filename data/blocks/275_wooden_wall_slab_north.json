@@ -1,0 +1,24 @@
+{
+  "id": 275,
+  "name": "WOODEN_WALL_SLAB_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Wooden_Planks.png",
+  "model": "vslab",
+  "facing": "north",
+  "drops": [
+    {
+      "itemId": "wooden_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

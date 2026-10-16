@@ -1,0 +1,8 @@
+{
+  "id": "birch_shelf",
+  "name": "Birch Shelf",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

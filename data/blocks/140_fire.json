@@ -1,0 +1,17 @@
+{
+  "id": 140,
+  "name": "FIRE",
+  "terrainType": "solid",
+  "model": "fire",
+  "color": [
+    1,
+    0.6,
+    0.15
+  ],
+  "hardness": 0,
+  "drops": [],
+  "texture": "Fire.png",
+  "light": 15,
+  "tick": "fire",
+  "sound": "sand"
+}

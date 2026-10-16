@@ -1,0 +1,40 @@
+{
+  "id": 198,
+  "name": "SOFA",
+  "terrainType": "solid",
+  "color": [
+    0.7,
+    0.2,
+    0.2
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Red.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "sofa",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "SOFA",
+      "west": "SOFA_WEST",
+      "south": "SOFA_SOUTH",
+      "north": "SOFA_NORTH"
+    }
+  }
+}

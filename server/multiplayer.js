@@ -28,21 +28,29 @@
  * Messages are JSON text frames on the same WebSocket as the chunk I/O
  * (server.js routes every `mp:*` type here).
  *
- *   → mp:join   { worldId, clientId, name, skin }
- *   ← mp:welcome { id, hostId, players: [{ id, name, skin, state }], edits: [x, y, z, block, …], atmos }
- *   ← mp:joined { player: { id, name, skin } }      ← mp:left { id }      ← mp:closed { reason }
+ *   → mp:join   { worldId, clientId, name, skin, key }
+ *   ← mp:welcome { id, hostId, dup, players: [{ id, name, skin, state, key, dup }], edits: [x, y, z, block, …], atmos }
+ *   ← mp:joined { player: { id, name, skin, key, dup } }   ← mp:left { id }   ← mp:closed { reason }
  *   → mp:state  { s }                                ← mp:state { id, s }
  *   → mp:block  { x, y, z, b }                       ← mp:block { x, y, z, b, id }
- *   → mp:profile { name, skin }                      ← mp:profile { id, name, skin }
+ *   → mp:profile { name, skin, key }                 ← mp:profile { id, name, skin, key, dup }
+ *   → mp:kick   { id }       (host only: that player is sent away — reason 'kicked' — and not let back in)
  *   → mp:atmos  { a }         (host only; kept for newcomers)   ← mp:atmos { a }
  *   → mp:all / mp:host / mp:to { to, d }             ← mp:msg { from, d }
  *   → mp:leave
+ *
+ * `key` is who a player is, whatever they are called (the game makes it from
+ * the hidden code kept with their name): the games go by it for who is an
+ * operator, and the session for who has been sent away. `dup` is for two
+ * players of one name: the second to arrive is #2, the next #3, and the games
+ * show that after the name, so they can be told apart.
  */
 
 const MAX_PLAYERS = 8;
 const MAX_JOURNAL = 400000;       // changed places remembered a session
 const MAX_NAME = 16;
 
+const cleanKey = (key) => (typeof key === 'string' && /^[A-Za-z0-9_-]{4,64}$/.test(key) ? key : '');
 const cleanName = (name, n) => (typeof name === 'string' && name.trim() ? name.trim().slice(0, MAX_NAME) : `Player ${n}`);
 /** A look is a small object of small whole numbers; anything else is dropped. */
 function cleanSkin(skin) {
@@ -64,8 +72,31 @@ export class MultiplayerHub {
         this.onChange = null;
     }
 
-    /** How many are playing `worldId` now. */
-    count(worldId) { return this.sessions.get(worldId)?.players.size ?? 0; }
+    /** How many are playing `worldId` now — of those `which(ws)` allows, if given. */
+    count(worldId, which = null) {
+        const players = this.sessions.get(worldId)?.players;
+        if (!players) return 0;
+        if (!which) return players.size;
+        let n = 0;
+        for (const p of players.values()) if (which(p.ws)) n++;
+        return n;
+    }
+
+    /** The number after the name of a player called what somebody here already is: 2, 3, … (0: nobody is). */
+    _dup(session, player) {
+        const name = player.name.toLowerCase(), used = new Set();
+        let same = false;
+        for (const p of session.players.values()) {
+            if (p === player || p.name.toLowerCase() !== name) continue;
+            same = true;
+            used.add(p.dup || 1);
+        }
+        if (!same) return 0;
+        let n = 2;
+        while (used.has(n)) n++;
+        return n;
+    }
+    _public(p) { return { id: p.id, name: p.name, skin: p.skin, key: p.key, dup: p.dup }; }
 
     _send(ws, msg) {
         if (ws.readyState === 1) ws.send(JSON.stringify(msg));
@@ -94,11 +125,25 @@ export class MultiplayerHub {
                 this._others(session, player, { type: 'mp:block', x, y, z, b, id: player.id });
                 break;
             }
-            case 'mp:profile':
+            case 'mp:profile': {
+                const was = player.name;
                 player.name = cleanName(msg.name, player.id);
                 player.skin = cleanSkin(msg.skin);
-                this._others(session, player, { type: 'mp:profile', id: player.id, name: player.name, skin: player.skin });
+                if (cleanKey(msg.key)) player.key = cleanKey(msg.key);
+                if (player.name.toLowerCase() !== was.toLowerCase()) player.dup = this._dup(session, player);
+                this._others(session, player, { type: 'mp:profile', ...this._public(player) });
+                this._send(ws, { type: 'mp:you', dup: player.dup });
                 break;
+            }
+            case 'mp:kick': {
+                // The host sends a player away: they are told why, and their key is not let in again this session.
+                const out = player.id === session.hostId ? session.players.get(msg.id) : null;
+                if (!out || out === player) break;
+                session.banned.add(out.key || out.clientId);
+                this._send(out.ws, { type: 'mp:closed', reason: 'kicked' });
+                this.leave(out.ws);
+                break;
+            }
             case 'mp:atmos':
                 if (player.id !== session.hostId) break;
                 session.atmos = msg.a ?? null;
@@ -129,12 +174,14 @@ export class MultiplayerHub {
         if (!worldId || !this.worldExists(worldId)) return this._send(ws, { type: 'mp:closed', reason: 'no-world' });
         let session = this.sessions.get(worldId);
         if (!session) {
-            session = { worldId, players: new Map(), journal: new Map(), hostId: 0, nextId: 1, atmos: null };
+            session = { worldId, players: new Map(), journal: new Map(), hostId: 0, nextId: 1, atmos: null, banned: new Set() };
             this.sessions.set(worldId, session);
         }
         if (session.players.size >= MAX_PLAYERS) return this._send(ws, { type: 'mp:closed', reason: 'full' });
         const id = session.nextId++;
-        const player = { id, ws, clientId: String(msg.clientId ?? '').slice(0, 80), name: cleanName(msg.name, id), skin: cleanSkin(msg.skin), state: null };
+        const player = { id, ws, clientId: String(msg.clientId ?? '').slice(0, 80), name: cleanName(msg.name, id), skin: cleanSkin(msg.skin), state: null, key: cleanKey(msg.key), dup: 0 };
+        if (session.banned.has(player.key || player.clientId)) { session.nextId--; return this._send(ws, { type: 'mp:closed', reason: 'kicked' }); }
+        player.dup = this._dup(session, player);
         if (session.players.size === 0) session.hostId = id;
         session.players.set(id, player);
         ws._mp = { session, player };
@@ -145,10 +192,10 @@ export class MultiplayerHub {
             edits.push(+c[0], +c[1], +c[2], b);
         }
         this._send(ws, {
-            type: 'mp:welcome', id, hostId: session.hostId, atmos: session.atmos, edits,
-            players: [...session.players.values()].filter(p => p !== player).map(p => ({ id: p.id, name: p.name, skin: p.skin, state: p.state })),
+            type: 'mp:welcome', id, hostId: session.hostId, dup: player.dup, atmos: session.atmos, edits,
+            players: [...session.players.values()].filter(p => p !== player).map(p => ({ ...this._public(p), state: p.state })),
         });
-        this._others(session, player, { type: 'mp:joined', player: { id, name: player.name, skin: player.skin } });
+        this._others(session, player, { type: 'mp:joined', player: this._public(player) });
         this.onChange?.(worldId);
     }
 

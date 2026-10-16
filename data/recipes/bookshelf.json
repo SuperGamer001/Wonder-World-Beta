@@ -1,0 +1,19 @@
+{
+  "id": "bookshelf",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "bookshelf",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wooden_planks",
+      "count": 6,
+      "any": "planks"
+    },
+    {
+      "itemId": "leather",
+      "count": 2
+    }
+  ]
+}

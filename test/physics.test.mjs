@@ -146,7 +146,7 @@ console.log('--- jumping ---');
         }
         return top - (FLOOR + 4);
     };
-    check('a jump just after walking off an edge still jumps', run(3) > 1.2, `rose ${run(3).toFixed(2)} blocks`);
+    check('a jump just after walking off an edge still jumps', run(3) > 1.0, `rose ${run(3).toFixed(2)} blocks`);
     check('… but not long after', run(12) < 0.1, `rose ${run(12).toFixed(2)} blocks`);
 }
 {
@@ -164,12 +164,13 @@ console.log('--- jumping ---');
         }
         return top;
     };
-    check('a jump pressed just before landing is made on landing', run(4) > 1.2, `rose ${run(4).toFixed(2)} blocks`);
+    check('a jump pressed just before landing is made on landing', run(4) > 1.0, `rose ${run(4).toFixed(2)} blocks`);
     check('… but one pressed well before is forgotten', run(20) < 0.1, `rose ${run(20).toFixed(2)} blocks`);
     const phys = new PlayerPhysics(world, reg), pos = { x: 4.5, y: FLOOR + 1, z: 4.5 };
     let top = 0;
     for (let i = 0; i < 90; i++) { phys.update(pos, { ...still, jump: i === 10 }, 1 / 60, 'SURVIVAL', {}); top = Math.max(top, pos.y - (FLOOR + 1)); }
-    check('a jump is as high as it was', Math.abs(top - 1.7) < 0.12, `${top.toFixed(2)} blocks`);
+    // 1.25 blocks (PlayerPhysics JUMP_HEIGHT): onto a block, and not over a fence (1.5: BlockShapes FENCE_TOP).
+    check('a jump is as high as it should be: over a block, not over a fence', Math.abs(top - 1.25) < 0.12 && top > 1.05 && top < 1.45, `${top.toFixed(2)} blocks`);
 }
 
 // ── Crouching ────────────────────────────────────────────────────────────────
@@ -194,7 +195,25 @@ console.log('--- crouching ---');
     const phys = new PlayerPhysics(world, reg), pos = { x: 4.5, y: FLOOR + 1, z: 4.5 };
     let top = 0;
     for (let i = 0; i < 90; i++) { phys.update(pos, { ...still, sneak: true, jump: i === 10 }, 1 / 60, 'SURVIVAL', {}); top = Math.max(top, pos.y - (FLOOR + 1)); }
-    check('a crouching player can still jump', top > 1.2, `${top.toFixed(2)} blocks`);
+    check('a crouching player can still jump', top > 1.0, `${top.toFixed(2)} blocks`);
+}
+
+// ── A door shut on the player ────────────────────────────────────────────────
+// Shut where they stood, a door does not hold the player in it: they walk on
+// out of it. Out of it, it is a door again.
+console.log('--- a door shut on the player ---');
+{
+    const DOOR = reg.getByName('WOODEN_DOOR').id, TOP = reg.getByName('WOODEN_DOOR_TOP').id;
+    world.setBlock(10, FLOOR + 1, 4, DOOR); world.setBlock(10, FLOOR + 2, 4, TOP);
+    const west = { ...still, forward: true, fwd: { x: -1, z: 0 }, rightDir: { x: 0, z: 1 } };
+    const east = { ...still, forward: true, fwd: { x: 1, z: 0 }, rightDir: { x: 0, z: -1 } };
+    // The leaf is the west three sixteenths of its block (x 10 … 10.19); the player stands half in it.
+    const phys = new PlayerPhysics(world, reg), pos = { x: 10.25, y: FLOOR + 1, z: 4.5 };
+    for (let i = 0; i < 40; i++) phys.update(pos, west, 1 / 60, 'SURVIVAL', {});
+    check('a door shut on the player is walked out of', pos.x < 9.5, `x ${pos.x.toFixed(2)}`);
+    for (let i = 0; i < 60; i++) phys.update(pos, east, 1 / 60, 'SURVIVAL', {});
+    check('… and, once out of it, stops them like any door', pos.x > 9.6 && pos.x < 9.71, `x ${pos.x.toFixed(3)} (the leaf is at 10)`);
+    world.setBlock(10, FLOOR + 1, 4, 0); world.setBlock(10, FLOOR + 2, 4, 0);
 }
 
 // ── Ice ──────────────────────────────────────────────────────────────────────

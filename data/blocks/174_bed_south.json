@@ -1,0 +1,38 @@
+{
+  "id": 174,
+  "name": "BED_SOUTH",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "south",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.7,
+    0.2,
+    0.2
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Red.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    0,
+    0,
+    1
+  ],
+  "use": {
+    "sleep": true
+  },
+  "variant": true
+}

@@ -222,6 +222,48 @@ function go(ai, mob, tx, ty, tz, seconds = 30) {
     check('… and swims about', far > 2, `${far.toFixed(1)} blocks`);
 }
 
+// ── Falling ──────────────────────────────────────────────────────────────────
+{
+    // Dropped from a height onto flat ground: hurt a point a block past its own deepest drop (3) and half a block.
+    const flat = world(() => G - 1);
+    const fall = (def, height) => {
+        const { ai, mob } = spawn(flat, def, 0.5, G + height, 0.5);
+        mob.state = 'IDLE'; mob.stateTimer = 999;
+        run(ai, mob, 4, FAR, () => !mob.onGround || mob.pos.y > G + 0.01);
+        return mob.fallHurt ?? 0;
+    };
+    const cow12 = fall(COW, 12), cow3 = fall(COW, 3), cow5 = fall(COW, 5);
+    check('a mob that falls further than it would drop is hurt for it, a point a block', cow12 > 7.5 && cow12 < 9.5 && cow5 > 0.8 && cow5 < 2.2 && cow3 === 0,
+        `12 blocks: ${cow12.toFixed(2)}, 5: ${cow5.toFixed(2)}, 3: ${cow3}`);
+    const CHICKEN = { id: 'chicken', width: 0.4, height: 0.7, speed: 3, fallDamage: false };
+    check('… but not a hen, which flutters down', fall(CHICKEN, 12) === 0);
+    // Into water: no harm.
+    const pool = world(() => G - 1, (x, y, z) => (Math.abs(x) <= 2 && Math.abs(z) <= 2 && y >= G - 4 && y <= G - 1 ? WATER : undefined));
+    const { ai, mob } = spawn(pool, COW, 0.5, G + 12, 0.5);
+    run(ai, mob, 4);
+    check('… nor one that falls into water', !(mob.fallHurt > 0));
+}
+
+// ── Pushed ───────────────────────────────────────────────────────────────────
+{
+    // A push (EntityManager._push sets it) moves a mob for one step, through the same collision.
+    const flat = world(() => G - 1);
+    const { ai, mob } = spawn(flat, PIG, 0.5, G, 0.5);
+    mob.state = 'IDLE'; mob.stateTimer = 999;
+    run(ai, mob, 0.5);
+    const x0 = mob.pos.x;
+    for (let i = 0; i < 30; i++) { mob.pushX = 2; ai.beginFrame(); ai.update(mob, 1 / 60, FAR); }
+    const moved = mob.pos.x - x0;
+    // … but not off the edge of a cliff it would not take.
+    const cliff = world((x) => (x >= 2 ? G - 9 : G - 1));
+    const c = spawn(cliff, PIG, 1.2, G, 0.5);
+    c.mob.state = 'IDLE'; c.mob.stateTimer = 999;
+    run(c.ai, c.mob, 0.5);
+    for (let i = 0; i < 120; i++) { c.mob.pushX = 2.5; c.ai.beginFrame(); c.ai.update(c.mob, 1 / 60, FAR); }
+    check('a pushed mob is moved, but not off a cliff it would not take', moved > 0.8 && moved < 1.2 && c.mob.pos.y > G - 0.5,
+        `moved ${moved.toFixed(2)}; at the cliff, y ${c.mob.pos.y.toFixed(2)}`);
+}
+
 // ── Models: the definitions the renderer and the texture tool share ──────────
 {
     let ok = true, why = '';

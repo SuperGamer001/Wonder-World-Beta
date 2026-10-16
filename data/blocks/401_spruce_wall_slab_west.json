@@ -1,0 +1,24 @@
+{
+  "id": 401,
+  "name": "SPRUCE_WALL_SLAB_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Spruce_Planks.png",
+  "model": "vslab",
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "spruce_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

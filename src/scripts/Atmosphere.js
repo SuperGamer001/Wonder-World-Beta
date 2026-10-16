@@ -39,6 +39,7 @@ import { Tornado } from './Tornado.js';
 import { WeatherAudio } from './WeatherAudio.js';
 
 const CLOUD_WIND = 1.8;       // clouds move faster than the wind at the ground
+const SKIP_STEP = 5;          // seconds: the steps time passing at once is taken in (skip)
 const FOG_BASE   = 62;        // ground fog is densest at about sea level
 const TORNADO_REACH = 45;     // blocks within which a tornado pulls the player
 
@@ -67,6 +68,10 @@ export class Atmosphere {
         this.skyMode = 'simple';
         this.particleScale = 0.6;
         this.onStrike = null;            // (x, y, z) => void — world.js: damage near a strike
+        this.onBolt = null;              // (x, z, cloud, seed) => void — world.js, the host: tell the other games
+        this.guest = false;              // this game follows a host's storm: no lightning or tornado of its own
+        this._torNet = null;             // … the host's tornado, as last heard: { x, z, heading }
+        this._bolts = [];                // … and its lightning, to show on the next frame
 
         // Read by world.js
         this.mobLight = 1;
@@ -124,10 +129,47 @@ export class Atmosphere {
         this.precip.enabled = false;
         this.precip.heightmap.reset();
         this.lightning.clear();
+        this.guest = false; this._torNet = null; this._bolts.length = 0;
         this._tor.on = false; this._tor.alpha = 0;
         this.tornado.update(0, 0, 0, 0, this._light);
         this.audio.silence();
         this.push.x = this.push.y = this.push.z = 0;
+    }
+
+    // ── With other players ───────────────────────────────────────────────────
+    // The host's game runs the weather, and the storm with it: where each bolt
+    // of lightning comes down and where the tornado is. A guest's game (`guest`)
+    // makes neither for itself. It is told of every bolt (`onBolt` on the host
+    // → `bolt()` here: the place, and a seed, so the same jagged channel is
+    // drawn in every game) and, with the clock and the weather, of the tornado
+    // (`tornadoState()` → `sync()`), which it moves the same way between words.
+    // (Each game used to make its own: two players watched different lightning
+    // strike different places, and stood in different tornadoes.)
+
+    /** The tornado as it is, for the other games: [x, z, heading], or null when there is none. */
+    tornadoState() {
+        const T = this._tor;
+        return T.on && this.weather?.tornadoActive ? [Math.round(T.x * 10) / 10, Math.round(T.z * 10) / 10, Math.round(T.heading * 1000) / 1000] : null;
+    }
+
+    /** A guest: the host's game says lightning came down here (or flashed in the cloud). Shown on the next frame. */
+    bolt(x, z, cloud, seed) {
+        if (!this.active || ![x, z].every(Number.isFinite) || this._bolts.length > 8) return;
+        this._bolts.push({ x, z, cloud: !!cloud, seed: seed | 0 });
+    }
+
+    /** One bolt: the flash, the channel (the same from the same seed), its thunder as far off as this player is, and what it strikes. */
+    _strike(x, z, cloud, seed, f) {
+        let a = seed | 0;
+        const rand = () => { a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+        const dist = Math.hypot(x - f.px, z - f.pz);
+        const gy = this.groundAt(x, z);
+        if (cloud) this.lightning.cloudFlash(x, z, CLOUD_BASE, dist, rand);
+        else {
+            this.lightning.strike(x, z, gy, CLOUD_BASE - 2, dist, rand);
+            this.onStrike?.(x, gy, z);
+        }
+        if (dist < 1400) this.audio.thunder(dist + (cloud ? 60 : 0));
     }
 
     toJSON() {
@@ -152,6 +194,11 @@ export class Atmosphere {
         const c = a.clouds;
         if (c?.a?.length === 2) { this.field.offA[0] = +c.a[0] || 0; this.field.offA[1] = +c.a[1] || 0; }
         if (c?.b?.length === 2) { this.field.offB[0] = +c.b[0] || 0; this.field.offB[1] = +c.b[1] || 0; }
+        // Where the host's tornado is (it comes with every word of the weather; none: there is none).
+        if ('tor' in a) {
+            const t = a.tor;
+            this._torNet = Array.isArray(t) && t.length >= 3 && t.every(Number.isFinite) ? { x: t[0], z: t[1], heading: t[2] } : null;
+        }
     }
 
     // ── Settings ─────────────────────────────────────────────────────────────
@@ -166,10 +213,30 @@ export class Atmosphere {
     setWeatherMode(mode, immediate = false) { this.weather.setMode(mode, immediate); }
     setHours(h) { this.day.setHours(h); }
 
+    /**
+     * `seconds` pass at once (players asleep: world.js _cut): the clock, the
+     * weather's chain and the clouds on the wind go on as they would have,
+     * in steps of a few seconds — with no lightning made meanwhile, and the
+     * weather's own colours and particles caught up on the next frame.
+     */
+    skip(seconds) {
+        const W = this.weather, field = this.field;
+        for (let t = 0; t < seconds; t += SKIP_STEP) {
+            const dt = Math.min(SKIP_STEP, seconds - t);
+            this.day.advance(dt);
+            const st = this.day.sample(this.state);
+            W.update(dt, { hours: st.hours, climate: this.climateModel ? this.climate : null, field, lightning: false });
+            field.setCoverage(W.P[COVER]);
+            field.drift(W.wind[0] * CLOUD_WIND * dt, W.wind[1] * CLOUD_WIND * dt, dt);
+        }
+        W.events.length = 0;
+    }
+
     /** Offscreen work for this frame (fancy clouds), after update() and before the scene renders. */
     prerender(renderer, camera) { this.clouds.prerender(renderer, camera); }
     /** Compile shaders that are drawn off screen, ahead of first use. */
     warm(renderer, camera) { this.clouds.warm(renderer, camera); }
+    compileAsync(renderer, camera) { return this.clouds.compileAsync(renderer, camera); }
 
     /** A chunk was (re-)meshed: `heights` is where rain stops in it (geo.rain from the worker). */
     setColumnHeights(cx, cz, heights) { this.precip.heightmap.setChunk(cx, cz, heights); }
@@ -213,7 +280,8 @@ export class Atmosphere {
 
         const W = this.weather;
         W.update(dt, { hours: st.hours, climate: this.climateModel ? this.climate : null,
-            field: this.field, px: f.px, pz: f.pz, paused });
+            field: this.field, px: f.px, pz: f.pz, paused,
+            lightning: !this.guest, sx: f.strikeX, sz: f.strikeZ });
         const P = W.P;
         this.wind[0] = W.wind[0]; this.wind[1] = W.wind[1];
         this.ice = W.ice;
@@ -235,14 +303,13 @@ export class Atmosphere {
 
         // Lightning first: its flash feeds every colour below.
         for (const ev of W.events) {
-            const gy = this.groundAt(ev.x, ev.z);
-            if (ev.cloud) this.lightning.cloudFlash(ev.x, ev.z, CLOUD_BASE, ev.dist, W.rand);
-            else {
-                this.lightning.strike(ev.x, ev.z, gy, CLOUD_BASE - 2, ev.dist, W.rand);
-                this.onStrike?.(ev.x, gy, ev.z);
-            }
-            this.audio.thunder(ev.dist + (ev.cloud ? 60 : 0));
+            const seed = (W.rand() * 0x7fffffff) | 0;
+            this.onBolt?.(ev.x, ev.z, ev.cloud, seed);
+            this._strike(ev.x, ev.z, ev.cloud, seed, f);
         }
+        // … and, a guest, the host's.
+        for (const b of this._bolts) this._strike(b.x, b.z, b.cloud, b.seed, f);
+        this._bolts.length = 0;
         this.lightning.update(dt);
         const flash = this.lightning.flash;
 
@@ -375,11 +442,20 @@ export class Atmosphere {
     /** Move the tornado (if any), draw it, and work out its pull on the player. */
     _tornado(dt, paused, f) {
         const T = this._tor, W = this.weather;
-        const want = this.active && W.tornadoActive;
+        const net = this.guest ? this._torNet : null;
+        const want = this.active && (this.guest ? !!net : W.tornadoActive);
         const pu = this.push;
         pu.x = pu.y = pu.z = 0;
 
-        if (want && !T.on) {
+        if (this.guest) {
+            // The host's tornado: where it said, carried on the way it was going between words, and eased onto each new one.
+            if (net) {
+                if (!T.on) { T.x = net.x; T.z = net.z; T.on = true; }
+                if (!paused) { net.x += Math.cos(net.heading) * 7 * dt; net.z += Math.sin(net.heading) * 7 * dt; }
+                const k = 1 - Math.exp(-dt * 3);
+                T.x += (net.x - T.x) * k; T.z += (net.z - T.z) * k; T.heading = net.heading;
+            }
+        } else if (want && !T.on) {
             // Spawn upwind, heading roughly toward the player.
             const a = W.windAngle, side = (W.rand() - 0.5) * 140;
             T.x = f.px - Math.cos(a) * 170 - Math.sin(a) * side;
@@ -389,13 +465,13 @@ export class Atmosphere {
         }
         if (!T.on) { this.tornado.update(0, 0, 0, 0, this._light); return; }
 
-        if (!paused) {
+        if (!paused && !this.guest) {
             T.heading += (W.rand() - 0.5) * 0.5 * dt;
             T.x += Math.cos(T.heading) * 7 * dt;
             T.z += Math.sin(T.heading) * 7 * dt;
         }
         const dx = T.x - f.px, dz = T.z - f.pz, d = Math.hypot(dx, dz);
-        if (d > 520) {
+        if (d > 520 && !this.guest) {
             if (want) { T.on = false; return; }     // passed by: a new one forms upwind
             T.alpha = 0;
         }

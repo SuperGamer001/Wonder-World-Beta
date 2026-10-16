@@ -1,0 +1,10 @@
+{
+  "id": "flint_and_steel",
+  "name": "Flint And Steel",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 1,
+  "category": "Tools",
+  "use": "ignite",
+  "icon": "data/textures/items/flint_and_steel.png"
+}

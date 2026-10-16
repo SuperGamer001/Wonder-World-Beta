@@ -1,0 +1,14 @@
+{
+  "id": "birch_planks",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "birch_planks",
+    "count": 4
+  },
+  "ingredients": [
+    {
+      "itemId": "birch_log",
+      "count": 1
+    }
+  ]
+}

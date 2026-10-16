@@ -1,0 +1,31 @@
+{
+  "id": 122,
+  "name": "BIRCH_SAPLING",
+  "terrainType": "solid",
+  "model": "cross",
+  "shape": {
+    "pick": 13
+  },
+  "color": [
+    0.45,
+    0.62,
+    0.3
+  ],
+  "hardness": 0.02,
+  "drops": [
+    {
+      "itemId": "birch_sapling",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Sapling.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 70,
+  "sound": "grass",
+  "tick": "sapling",
+  "grows": "birch_tree"
+}

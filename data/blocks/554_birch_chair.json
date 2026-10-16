@@ -1,0 +1,36 @@
+{
+  "id": 554,
+  "name": "BIRCH_CHAIR",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "chair",
+  "texture": "Birch_Planks.png",
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "birch_chair",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "BIRCH_CHAIR",
+      "west": "BIRCH_CHAIR_WEST",
+      "south": "BIRCH_CHAIR_SOUTH",
+      "north": "BIRCH_CHAIR_NORTH"
+    }
+  }
+}

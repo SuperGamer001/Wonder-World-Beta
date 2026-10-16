@@ -1,0 +1,14 @@
+{
+  "id": "sandstone_wall_slab",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "sandstone_wall_slab",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "sandstone",
+      "count": 1
+    }
+  ]
+}

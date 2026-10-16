@@ -1,0 +1,29 @@
+{
+  "id": 154,
+  "name": "LADDER_SOUTH",
+  "terrainType": "solid",
+  "model": "ladder",
+  "facing": "south",
+  "color": [
+    0.6,
+    0.45,
+    0.26
+  ],
+  "hardness": 0.4,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "ladder",
+      "count": 1
+    }
+  ],
+  "texture": "Ladder.png",
+  "support": [
+    0,
+    0,
+    -1
+  ],
+  "flammable": 30,
+  "sound": "wood",
+  "variant": true
+}

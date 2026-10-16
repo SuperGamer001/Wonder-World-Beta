@@ -1,0 +1,21 @@
+{
+  "id": 430,
+  "name": "SPRUCE_PLANKS",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "spruce_planks",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Planks.png",
+  "flammable": 25,
+  "sound": "wood"
+}

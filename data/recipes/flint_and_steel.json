@@ -1,0 +1,18 @@
+{
+  "id": "flint_and_steel",
+  "station": "hand",
+  "result": {
+    "itemId": "flint_and_steel",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "flint",
+      "count": 1
+    },
+    {
+      "itemId": "iron_ingot",
+      "count": 1
+    }
+  ]
+}

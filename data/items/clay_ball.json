@@ -3,5 +3,7 @@
   "name": "Clay Ball",
   "type": "resource",
   "weight": 1,
-  "maxStack": 64
+  "maxStack": 64,
+  "placeable": false,
+  "category": "Materials"
 }

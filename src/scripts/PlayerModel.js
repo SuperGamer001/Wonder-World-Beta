@@ -111,6 +111,11 @@ export class PlayerModel {
      *   light       how lit the body is, 0 … 1 (default 1)
      *   lightDir    unit vector toward the sun or moon, or null
      *   still       do not advance the animation (the game is paused)
+     *   crouch      crouching
+     *   sit         sitting (the feet are where world.js puts a sitter: SIT_HIP below the seat)
+     *   lie         lying on their back, in bed (asleep: eyes shut)
+     *   body        the way the body faces while sitting or lying (the model's yaw;
+     *               lying, the head is that way), whichever way the head looks
      * }
      */
     update(dt, s) {
@@ -118,14 +123,17 @@ export class PlayerModel {
         // The model faces +z; a camera yaw of 0 looks along −z.
         const look = s.yaw + Math.PI;
         if (this.bodyYaw == null) this.bodyYaw = look;
+        const resting = (s.sit || s.lie) && Number.isFinite(s.body);
+        if (resting) this.bodyYaw = s.lie ? s.body + Math.PI : s.body;
         if (!s.still) {
             // The body follows the head: at once when moving, lazily when
             // standing — and never lets the head turn further than a neck does.
             let off = wrap(look - this.bodyYaw);
             const moving = s.speed > 0.4 || this._swing > 0;
-            if (moving) this.bodyYaw += off * (1 - Math.exp(-12 * dt));
+            if (resting) { /* the body stays as it sits or lies */ }
+            else if (moving) this.bodyYaw += off * (1 - Math.exp(-12 * dt));
             else if (Math.abs(off) > NECK) this.bodyYaw += off - Math.sign(off) * NECK;
-            off = wrap(look - this.bodyYaw);
+            off = s.lie ? 0 : wrap(look - this.bodyYaw);
 
             a.time += dt;
             a.move = ease(a.move, Math.min(1, s.speed / WALK), 10, dt);
@@ -138,19 +146,27 @@ export class PlayerModel {
             a.air = ease(a.air, !s.dead && !s.onGround && !s.inWater ? 1 : 0, 12, dt);
             a.swim = ease(a.swim, s.inWater ? 1 : 0, 6, dt);
             a.hurt = s.hurt ?? 0;
+            a.crouch = ease(a.crouch, s.crouch && !s.sit && !s.lie ? 1 : 0, 12, dt);
+            a.sit = ease(a.sit, s.sit ? 1 : 0, 10, dt);
+            a.lie = s.lie ? 1 : 0;
+            a.sleep = !!s.lie;
             if (this._swing > 0) {
                 this._swing += dt;
                 if (this._swing >= SWING_TIME) this._swing = 0;
             }
             a.attack = this._swing / SWING_TIME;
             a.lookYaw = ease(a.lookYaw, Math.max(-NECK, Math.min(NECK, off)), 14, dt);
-            a.lookPitch = ease(a.lookPitch, Math.max(-0.9, Math.min(0.9, -s.pitch * 0.8)), 14, dt);
+            a.lookPitch = ease(a.lookPitch, s.lie ? 0 : Math.max(-0.9, Math.min(0.9, -s.pitch * 0.8)), 14, dt);
             inst.death = ease(inst.death, s.dead ? 1 : 0, 6, dt);
             inst.tint[1] = inst.tint[2] = 1 - 0.5 * (s.hurt ?? 0);
         }
         this.mesh.position.set(s.x, s.y, s.z);
+        // Lying in bed: on its back (front up), the head the way the bed's head is.
+        this.mesh.rotation.order = 'YXZ';
+        this.mesh.rotation.x = s.lie ? -Math.PI / 2 : 0;
         this.mesh.rotation.y = this.bodyYaw;
-        this.models.pose(inst, s.light ?? 1, s.lightDir ? MobModels.toModelSpace(s.lightDir, this.bodyYaw, this._dir) : null);
+        // Not drawn and casting no shadow (first person, shadows off): nothing to pose.
+        if (this.mesh.visible) this.models.pose(inst,s.light ?? 1, s.lightDir ? MobModels.toModelSpace(s.lightDir, this.bodyYaw, this._dir) : null);
     }
 
     _drop() {

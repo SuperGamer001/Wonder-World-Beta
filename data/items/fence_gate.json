@@ -1,0 +1,8 @@
+{
+  "id": "fence_gate",
+  "name": "Fence Gate",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

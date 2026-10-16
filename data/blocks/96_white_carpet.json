@@ -1,0 +1,26 @@
+{
+  "id": 96,
+  "name": "WHITE_CARPET",
+  "terrainType": "solid",
+  "model": "carpet",
+  "color": [
+    0.95,
+    0.95,
+    0.95
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "white_carpet",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Block.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 60,
+  "sound": "grass"
+}

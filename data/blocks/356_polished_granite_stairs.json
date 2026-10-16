@@ -1,0 +1,36 @@
+{
+  "id": 356,
+  "name": "POLISHED_GRANITE_STAIRS",
+  "terrainType": "solid",
+  "color": [
+    0.62,
+    0.42,
+    0.36
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Granite.png",
+  "model": "stairs",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "polished_granite_stairs",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "stairs",
+    "up": {
+      "east": "POLISHED_GRANITE_STAIRS",
+      "west": "POLISHED_GRANITE_STAIRS_WEST",
+      "south": "POLISHED_GRANITE_STAIRS_SOUTH",
+      "north": "POLISHED_GRANITE_STAIRS_NORTH"
+    },
+    "down": {
+      "east": "POLISHED_GRANITE_STAIRS_TOP",
+      "west": "POLISHED_GRANITE_STAIRS_TOP_WEST",
+      "south": "POLISHED_GRANITE_STAIRS_TOP_SOUTH",
+      "north": "POLISHED_GRANITE_STAIRS_TOP_NORTH"
+    }
+  }
+}

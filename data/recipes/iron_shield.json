@@ -12,7 +12,8 @@
     },
     {
       "itemId": "wood_log",
-      "count": 1
+      "count": 1,
+      "any": "log"
     }
   ]
 }

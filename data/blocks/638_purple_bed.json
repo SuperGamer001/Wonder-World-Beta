@@ -1,0 +1,52 @@
+{
+  "id": 638,
+  "name": "PURPLE_BED",
+  "terrainType": "solid",
+  "model": "bed",
+  "facing": "east",
+  "shape": {
+    "part": "foot"
+  },
+  "color": [
+    0.5,
+    0.3,
+    0.66
+  ],
+  "hardness": 0.4,
+  "drops": [
+    {
+      "itemId": "purple_bed",
+      "count": 1
+    }
+  ],
+  "sound": "grass",
+  "flammable": 30,
+  "textures": {
+    "top": "Wool_Purple.png",
+    "side": "Wool_Block.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "twin": [
+    1,
+    0,
+    0
+  ],
+  "use": {
+    "sleep": true
+  },
+  "place": {
+    "mode": "bed",
+    "foot": {
+      "east": "PURPLE_BED",
+      "west": "PURPLE_BED_WEST",
+      "south": "PURPLE_BED_SOUTH",
+      "north": "PURPLE_BED_NORTH"
+    },
+    "head": {
+      "east": "PURPLE_BED_HEAD",
+      "west": "PURPLE_BED_HEAD_WEST",
+      "south": "PURPLE_BED_HEAD_SOUTH",
+      "north": "PURPLE_BED_HEAD_NORTH"
+    }
+  }
+}

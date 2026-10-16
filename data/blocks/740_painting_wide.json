@@ -1,0 +1,124 @@
+{
+  "id": 740,
+  "name": "PAINTING_WIDE",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "east",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0.5
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting_wide",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_Wide_A.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      0,
+      0,
+      -1
+    ]
+  ],
+  "piece": "PAINTING_WIDE_1",
+  "use": {
+    "toggle": "PAINTING_WIDE_2_0_0"
+  },
+  "place": {
+    "mode": "painting",
+    "w": 2,
+    "h": 1,
+    "pictures": [
+      {
+        "east": [
+          "PAINTING_WIDE",
+          "PAINTING_WIDE_1_1_0"
+        ],
+        "west": [
+          "PAINTING_WIDE_1_0_0_WEST",
+          "PAINTING_WIDE_1_1_0_WEST"
+        ],
+        "south": [
+          "PAINTING_WIDE_1_0_0_SOUTH",
+          "PAINTING_WIDE_1_1_0_SOUTH"
+        ],
+        "north": [
+          "PAINTING_WIDE_1_0_0_NORTH",
+          "PAINTING_WIDE_1_1_0_NORTH"
+        ]
+      },
+      {
+        "east": [
+          "PAINTING_WIDE_2_0_0",
+          "PAINTING_WIDE_2_1_0"
+        ],
+        "west": [
+          "PAINTING_WIDE_2_0_0_WEST",
+          "PAINTING_WIDE_2_1_0_WEST"
+        ],
+        "south": [
+          "PAINTING_WIDE_2_0_0_SOUTH",
+          "PAINTING_WIDE_2_1_0_SOUTH"
+        ],
+        "north": [
+          "PAINTING_WIDE_2_0_0_NORTH",
+          "PAINTING_WIDE_2_1_0_NORTH"
+        ]
+      },
+      {
+        "east": [
+          "PAINTING_WIDE_3_0_0",
+          "PAINTING_WIDE_3_1_0"
+        ],
+        "west": [
+          "PAINTING_WIDE_3_0_0_WEST",
+          "PAINTING_WIDE_3_1_0_WEST"
+        ],
+        "south": [
+          "PAINTING_WIDE_3_0_0_SOUTH",
+          "PAINTING_WIDE_3_1_0_SOUTH"
+        ],
+        "north": [
+          "PAINTING_WIDE_3_0_0_NORTH",
+          "PAINTING_WIDE_3_1_0_NORTH"
+        ]
+      },
+      {
+        "east": [
+          "PAINTING_WIDE_4_0_0",
+          "PAINTING_WIDE_4_1_0"
+        ],
+        "west": [
+          "PAINTING_WIDE_4_0_0_WEST",
+          "PAINTING_WIDE_4_1_0_WEST"
+        ],
+        "south": [
+          "PAINTING_WIDE_4_0_0_SOUTH",
+          "PAINTING_WIDE_4_1_0_SOUTH"
+        ],
+        "north": [
+          "PAINTING_WIDE_4_0_0_NORTH",
+          "PAINTING_WIDE_4_1_0_NORTH"
+        ]
+      }
+    ]
+  }
+}

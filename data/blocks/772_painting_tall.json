@@ -1,0 +1,124 @@
+{
+  "id": 772,
+  "name": "PAINTING_TALL",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "east",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting_tall",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_Tall_A.png",
+  "support": [
+    -1,
+    0,
+    0
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      0,
+      1,
+      0
+    ]
+  ],
+  "piece": "PAINTING_TALL_1",
+  "use": {
+    "toggle": "PAINTING_TALL_2_0_0"
+  },
+  "place": {
+    "mode": "painting",
+    "w": 1,
+    "h": 2,
+    "pictures": [
+      {
+        "east": [
+          "PAINTING_TALL",
+          "PAINTING_TALL_1_0_1"
+        ],
+        "west": [
+          "PAINTING_TALL_1_0_0_WEST",
+          "PAINTING_TALL_1_0_1_WEST"
+        ],
+        "south": [
+          "PAINTING_TALL_1_0_0_SOUTH",
+          "PAINTING_TALL_1_0_1_SOUTH"
+        ],
+        "north": [
+          "PAINTING_TALL_1_0_0_NORTH",
+          "PAINTING_TALL_1_0_1_NORTH"
+        ]
+      },
+      {
+        "east": [
+          "PAINTING_TALL_2_0_0",
+          "PAINTING_TALL_2_0_1"
+        ],
+        "west": [
+          "PAINTING_TALL_2_0_0_WEST",
+          "PAINTING_TALL_2_0_1_WEST"
+        ],
+        "south": [
+          "PAINTING_TALL_2_0_0_SOUTH",
+          "PAINTING_TALL_2_0_1_SOUTH"
+        ],
+        "north": [
+          "PAINTING_TALL_2_0_0_NORTH",
+          "PAINTING_TALL_2_0_1_NORTH"
+        ]
+      },
+      {
+        "east": [
+          "PAINTING_TALL_3_0_0",
+          "PAINTING_TALL_3_0_1"
+        ],
+        "west": [
+          "PAINTING_TALL_3_0_0_WEST",
+          "PAINTING_TALL_3_0_1_WEST"
+        ],
+        "south": [
+          "PAINTING_TALL_3_0_0_SOUTH",
+          "PAINTING_TALL_3_0_1_SOUTH"
+        ],
+        "north": [
+          "PAINTING_TALL_3_0_0_NORTH",
+          "PAINTING_TALL_3_0_1_NORTH"
+        ]
+      },
+      {
+        "east": [
+          "PAINTING_TALL_4_0_0",
+          "PAINTING_TALL_4_0_1"
+        ],
+        "west": [
+          "PAINTING_TALL_4_0_0_WEST",
+          "PAINTING_TALL_4_0_1_WEST"
+        ],
+        "south": [
+          "PAINTING_TALL_4_0_0_SOUTH",
+          "PAINTING_TALL_4_0_1_SOUTH"
+        ],
+        "north": [
+          "PAINTING_TALL_4_0_0_NORTH",
+          "PAINTING_TALL_4_0_1_NORTH"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": 369,
+  "name": "POLISHED_DIORITE_WALL_SLAB_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.88,
+    0.88,
+    0.9
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Diorite.png",
+  "model": "vslab",
+  "facing": "west",
+  "drops": [
+    {
+      "itemId": "polished_diorite_wall_slab",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

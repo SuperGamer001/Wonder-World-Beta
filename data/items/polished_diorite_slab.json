@@ -1,0 +1,8 @@
+{
+  "id": "polished_diorite_slab",
+  "name": "Polished Diorite Slab",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

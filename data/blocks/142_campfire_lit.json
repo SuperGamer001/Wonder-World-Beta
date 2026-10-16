@@ -1,0 +1,40 @@
+{
+  "id": 142,
+  "name": "CAMPFIRE_LIT",
+  "terrainType": "solid",
+  "model": "campfire",
+  "color": [
+    0.4,
+    0.28,
+    0.16
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "campfire",
+      "count": 1
+    }
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "wood",
+  "textures": {
+    "top": "Fire.png",
+    "side": "Campfire_Log.png",
+    "bottom": "Log_Top.png"
+  },
+  "shape": {
+    "lit": true
+  },
+  "variant": true,
+  "light": 14,
+  "use": {
+    "cook": true,
+    "douse": "CAMPFIRE"
+  },
+  "tick": "campfire"
+}

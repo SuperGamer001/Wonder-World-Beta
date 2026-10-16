@@ -1,0 +1,40 @@
+{
+  "id": 586,
+  "name": "BLUE_SOFA",
+  "terrainType": "solid",
+  "color": [
+    0.25,
+    0.38,
+    0.72
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Blue.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "blue_sofa",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "BLUE_SOFA",
+      "west": "BLUE_SOFA_WEST",
+      "south": "BLUE_SOFA_SOUTH",
+      "north": "BLUE_SOFA_NORTH"
+    }
+  }
+}

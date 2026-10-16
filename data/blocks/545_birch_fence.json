@@ -1,0 +1,22 @@
+{
+  "id": 545,
+  "name": "BIRCH_FENCE",
+  "terrainType": "solid",
+  "model": "fence",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "birch_fence",
+      "count": 1
+    }
+  ],
+  "texture": "Birch_Planks.png",
+  "sound": "wood",
+  "flammable": 20
+}

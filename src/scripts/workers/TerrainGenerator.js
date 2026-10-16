@@ -37,6 +37,23 @@ import { normaliseFlat } from '../engine/FlatWorld.js';
 /** The generator version new worlds are stamped with (server.js WORLD_GEN). */
 export const WORLD_GEN = 2;
 
+// Small plants — grass, ferns, flowers, mushrooms — by the ground they grow
+// on: how much of that ground has one (`cover`), and which (`mix`, by
+// share). They stand in the block over the ground (a model: BlockShapes
+// "cross"), are walked through, and take nothing's place. Some biomes have
+// more of them, or fewer (PLANT_COVER, by the biome's name).
+const SMALL_PLANTS = {
+    GRASS:       { cover: 0.085, mix: { TALL_GRASS: 70, FERN: 6, DANDELION: 6, POPPY: 5, DAISY: 5, CORNFLOWER: 3, TULIP: 3, VIOLET: 2 } },
+    PODZOL:      { cover: 0.07,  mix: { FERN: 60, TALL_GRASS: 20, BROWN_MUSHROOM: 12, RED_MUSHROOM: 8 } },
+    MOSS:        { cover: 0.06,  mix: { FERN: 70, TALL_GRASS: 20, BROWN_MUSHROOM: 10 } },
+    DRY_GRASS:   { cover: 0.05,  mix: { TALL_GRASS: 80, DEAD_BUSH: 20 } },
+    COARSE_DIRT: { cover: 0.015, mix: { DEAD_BUSH: 60, TALL_GRASS: 40 } },
+    SAND:        { cover: 0.004, mix: { DEAD_BUSH: 100 }, inland: true },
+    RED_SAND:    { cover: 0.006, mix: { DEAD_BUSH: 100 }, inland: true },
+    MYCELIUM:    { cover: 0.03,  mix: { RED_MUSHROOM: 50, BROWN_MUSHROOM: 50 } },
+};
+const PLANT_COVER = [[/MEADOW/, 1.8], [/PLAINS/, 1.3], [/JUNGLE|SWAMP/, 1.6], [/DENSE_FOREST|TAIGA/, 0.8], [/SNOWY|TUNDRA|PEAKS|FROZEN/, 0.25]];
+
 const N = CHUNK_SIZE;
 const SZ = N * CHUNK_SIZE_Y;
 const BEDROCK_TOP = WORLD_MIN_Y + 2;
@@ -146,6 +163,25 @@ export class TerrainGenerator {
         }
         this.topBlocks = new Uint16Array(N * N);
         this._cv = { cover: null, top: 0, first: -1, snowy: false, steep: false, glacier: 0 };
+
+        // Small plants (SMALL_PLANTS), by the id of the ground: its cover, and
+        // the plants with their shares running up to 1. A pack without the
+        // plants — or whose plant of that name is a block one cannot walk
+        // through — has none: never a stand-in, which would be a cube.
+        this.smallPlants = [];
+        for (const [ground, spec] of Object.entries(SMALL_PLANTS)) {
+            const g = blockRegistry.getByName(ground);
+            const list = Object.entries(spec.mix).map(([n, w]) => [blockRegistry.getByName(n), w]).filter(([d]) => d?.model && d.soft);
+            const total = list.reduce((t, [, w]) => t + w, 0);
+            if (!g || !total) continue;
+            let run = 0;
+            this.smallPlants[g.id] = { cover: spec.cover, inland: !!spec.inland, ids: list.map(([d]) => d.id), upTo: list.map(([, w]) => (run += w / total)) };
+        }
+        this.plantCover = this.biomes.list.map(b => {
+            const name = String(b.name ?? '');
+            const k = PLANT_COVER.find(([re]) => re.test(name))?.[1] ?? 1;
+            return b.category === 'beach' || b.category === 'ocean' || b.category === 'river' ? -k : k;      // (< 0: not inland)
+        });
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -154,7 +190,44 @@ export class TerrainGenerator {
     generate(cx, cz) {
         const voxels = this.generateChunk(cx, cz);
         this.placer.apply(voxels, cx, cz, this.lastColumns, this.topBlocks);
+        if (this.placer.plants) this._smallPlants(voxels, cx, cz, this.lastColumns);
         return voxels;
+    }
+
+    /**
+     * Grass, ferns, flowers and mushrooms on the ground of chunk (cx, cz):
+     * for each column a hash of the seed and the place says whether one
+     * stands there, and which — so a chunk is the same whenever it is made,
+     * and no column has to know its neighbour. Thicker in some places than
+     * others (a noise): a meadow has its bare patches. Only on the ground as
+     * the terrain left it, with air over it: not under a tree that took the
+     * place, not where a cave came up through the ground, not under water.
+     */
+    _smallPlants(vox, cx, cz, cols) {
+        const table = this.smallPlants;
+        if (table.length === 0) return;
+        const ox = cx * N, oz = cz * N;
+        for (let lx = 0; lx < N; lx++) {
+            for (let lz = 0; lz < N; lz++) {
+                const c = lx * N + lz;
+                if (cols.water[c] !== NO_WATER) continue;
+                const ly = cols.top[c] - WORLD_MIN_Y;
+                if (ly < 0 || ly >= CHUNK_SIZE_Y - 1) continue;
+                const i = lx + ly * N + lz * SZ;
+                const spec = table[vox[i]];
+                if (spec === undefined || vox[i + N] !== 0) continue;
+                const k = this.plantCover[cols.biome[c]] ?? 1;
+                if (k < 0 && spec.inland) continue;
+                const x = ox + lx, z = oz + lz;
+                const h = hashSeed(this.seed, 0x51a17, x, z);
+                const thick = 0.35 + 1.3 * Math.max(0, 0.5 + this.nPatch.noise2(x / 29, z / 29));
+                if ((h & 0xffff) / 65536 >= spec.cover * Math.abs(k) * thick) continue;
+                const r = (h >>> 16) / 65536;
+                let p = 0;
+                while (p < spec.upTo.length - 1 && r >= spec.upTo[p]) p++;
+                vox[i + N] = spec.ids[p];
+            }
+        }
     }
 
     /**

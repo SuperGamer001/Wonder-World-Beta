@@ -55,19 +55,56 @@ function _setProfiles(list) {
     _settings = { ...(_settings ?? {}), profiles: list };
     try { localStorage.setItem('ww_settings', JSON.stringify(_settings)); } catch { /* storage unavailable */ }
 }
-/** Add a name to the list, or change the look kept with it. */
+/** A new hidden code for a name: sixteen hex digits nobody is shown. */
+const newProfileCode = () => { const b = new Uint8Array(8); crypto.getRandomValues(b); return [...b].map(x => x.toString(16).padStart(2, '0')).join(''); };
+
+/** Add a name to the list, or change the look kept with it. A name without a code (one from before there were any) is given one. */
 function saveProfile(name, skin = undefined) {
     const list = getProfiles().map(p => ({ ...p }));
     let p = list.find(q => q.name === name);
     if (!p) list.push(p = { name, skin: null });
     if (skin !== undefined) p.skin = skin;
+    if (!/^[0-9a-f]{16,32}$/.test(p.code ?? '')) p.code = newProfileCode();
     _setProfiles(list);
     if (_lanGuest) return;                   // a guest's names are kept by their own browser
     fetch(`${SERVER_URL}/api/profiles`, {
         method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, skin: p.skin }),
+        body: JSON.stringify({ name, skin: p.skin, code: p.code }),
+    }).then(r => (r.ok ? r.json() : null)).then((kept) => {
+        // What the server keeps is what there is: a code it had already given this name stands.
+        if (Array.isArray(kept) && kept.some(q => q?.name === name)) _setProfiles(kept);
     }).catch(() => { /* offline: localStorage has it */ });
 }
+
+// ── Who a player is ──────────────────────────────────────────────────────────
+// A name can be anyone's, and can be changed. So each name on this machine has
+// a **code** kept with it that nobody is shown (`profiles`: { name, skin, code }),
+// and it is the code that says who a player is: their place in a world they
+// are a guest in is kept under it, and a host's game knows its operators by
+// it. The code itself never leaves the machine. What is given out is its
+// **key** — the code put through a one-way sum — so that somebody who is told
+// a player's key cannot go to another game as them.
+
+/** The code kept with the name being played as (given now, if that name had none). */
+function currentPlayerCode() {
+    const name = getSettings().playerName;
+    let p = getProfiles().find(q => q.name === name);
+    if (name && !/^[0-9a-f]{16,32}$/.test(p?.code ?? '')) { saveProfile(name); p = getProfiles().find(q => q.name === name); }
+    return p?.code ?? '';
+}
+/** The key of a code: what other games are told. Twenty-six letters and digits; the code cannot be had back from it. */
+function playerKeyOf(code) {
+    if (!code) return '';
+    const sum = (text, seed) => {           // cyrb53
+        let a = 0xdeadbeef ^ seed, b = 0x41c6ce57 ^ seed;
+        for (let i = 0; i < text.length; i++) { const c = text.charCodeAt(i); a = Math.imul(a ^ c, 2654435761); b = Math.imul(b ^ c, 1597334677); }
+        a = Math.imul(a ^ (a >>> 16), 2246822507) ^ Math.imul(b ^ (b >>> 13), 3266489909);
+        b = Math.imul(b ^ (b >>> 16), 2246822507) ^ Math.imul(a ^ (a >>> 13), 3266489909);
+        return (4294967296 * (2097151 & b) + (a >>> 0)).toString(36).padStart(11, '0');
+    };
+    return 'k' + sum(`ww-player:${code}`, 11) + sum(`${code}:key`, 97);
+}
+const currentPlayerKey = () => playerKeyOf(currentPlayerCode());
 function removeProfile(name) {
     _setProfiles(getProfiles().filter(p => p.name !== name));
     if (!_lanGuest) fetch(`${SERVER_URL}/api/profiles/${encodeURIComponent(name)}`, { method: 'DELETE' }).catch(() => {});
@@ -85,6 +122,7 @@ async function refreshProfiles() {
 function selectProfile(name) {
     const s = getSettings(), p = getProfiles().find(q => q.name === name);
     const next = { ...s, playerName: name, skin: p?.skin ?? s.skin ?? null };
+    if (name && !/^[0-9a-f]{16,32}$/.test(p?.code ?? '')) saveProfile(name);      // a name from before names had codes
     saveSettings(next);
     applyPlayerSettings(next);
     _showPlayerName();
@@ -252,8 +290,18 @@ window.addEventListener('ww_notice', (e) => showNotice(e.detail?.text ?? ''));
 
 // ── Starting up ──────────────────────────────────────────────────────────────
 
-/** Where this player's place in someone else's world is kept: by name (and, from another machine, by machine). */
+/**
+ * Where this player's place in someone else's world is kept: by who they are
+ * (the code kept with their name — so it is still theirs under another name),
+ * and, from another machine, by machine.
+ */
 function guestStateKey() {
+    const s = getSettings(), code = currentPlayerCode();
+    if (!code) return guestStateKeyOld();
+    return PANE > 0 ? `p-${code}` : `${String(s.clientId ?? 'guest').slice(0, 40)}-${code}`;
+}
+/** … and where it was kept before names had codes: by name. Looked in when the other has nothing. */
+function guestStateKeyOld() {
     const s = getSettings(), name = (s.playerName || 'player').replace(/[^A-Za-z0-9]/g, '_');
     return PANE > 0 ? `p-${name}` : `${String(s.clientId ?? 'guest').slice(0, 40)}-${name}`;
 }
@@ -269,6 +317,7 @@ async function enterGame() {
     if (PANE > 0 && sound) { sound.shared = false; sound._applyVolumes?.(); }   // the first screen plays what everyone hears
     if (PANE === 0) {
         try { _lanGuest = !!(await (await fetch(`${SERVER_URL}/api/lan/info`)).json()).guest; } catch { _lanGuest = false; }
+        window.__wwLanGuest = _lanGuest;          // (world.js: a screenshot is not this server's to keep)
     }
     // A machine keeps one id, so its player finds their things again in a world they have been a guest in.
     if (!getSettings().clientId) saveSettings({ ...getSettings(), clientId: (crypto.randomUUID?.() ?? String(Math.random()).slice(2)) });
@@ -290,7 +339,7 @@ async function enterGame() {
         const code = PANE > 0 ? PARAMS.get('online') : null, theirs = PARAMS.get('world') === 'online';
         if (code) {
             try {
-                await window.__wwOnline.join(code, { name, skin: getSettings().skin, slot: SLOT, gamepack: mergedGamePackData }, !theirs);
+                await window.__wwOnline.join(code, { name, skin: getSettings().skin, slot: SLOT, gamepack: mergedGamePackData, key: currentPlayerKey() }, !theirs);
             } catch (e) { return sessionOver(e?.reason ?? 'unreachable'); }
         }
         try {
@@ -392,17 +441,32 @@ async function _refreshPlayers() {
     const list = document.getElementById('playersList');
     const players = window.__wwPlayers?.() ?? [];
     const net = window.__wwWorld?.online?.() ?? null;       // this world's online room, if it is in one
-    // Online, the host can send a player away (and their game is not let back in).
-    const removable = (p) => net?.host && !p.you ? `<span class="menuButton small quiet playerKick" data-kick="${p.id}">Remove</span>` : '';
+    // What the host can do about each player: make them an operator (the world's owner can — it is kept with the
+    // world), and send them away (their game is not let back in while the world stays open).
+    const amHost = !!players.find(p => p.you)?.host, owner = !isGuest() && !_onlineGuest;
+    const called = (p) => `${escapeHtml(p.name)}${p.dup ? `<span class="dupTag"> #${p.dup | 0}</span>` : ''}`;
+    const note = (p) => [p.you ? 'you' : '', p.host ? 'host' : p.op ? 'operator' : ''].filter(Boolean).join(' · ');
+    const buttons = (p) => p.you || p.host ? '' :
+        (owner ? `<span class="menuButton small quiet playerOp${p.op ? ' on' : ''}" data-op="${p.id}" data-on="${p.op ? 0 : 1}">${p.op ? 'Operator ✓' : 'Make operator'}</span>` : '') +
+        (amHost ? `<span class="menuButton small quiet playerKick" data-kick="${p.id}">Remove</span>` : '');
     const html = players.map(p =>
-        `<div class="playerRow"><span class="playerName">${escapeHtml(p.name)}</span>` +
-        `<span class="playerNote">${p.you ? 'you' : ''}${p.you && p.host ? ' · ' : ''}${p.host ? 'host' : ''}</span>${removable(p)}</div>`).join('') ||
+        `<div class="playerRow"><span class="playerName">${called(p)}</span>` +
+        `<span class="playerNote">${note(p)}</span>${buttons(p)}</div>`).join('') ||
         '<div class="formNote">Only you, so far.</div>';
     // Only when it has changed: the list is rebuilt twice a second, and a button rebuilt under a press is not pressed.
     if (list.dataset.html !== html) {
         list.dataset.html = html;
         list.innerHTML = html;
-        for (const b of list.querySelectorAll('[data-kick]')) b.addEventListener('click', () => { window.__wwWorld?.kick(Number(b.dataset.kick)); });
+        for (const b of list.querySelectorAll('[data-op]')) b.addEventListener('click', () => {
+            window.__wwChat?.setOp(Number(b.dataset.op), b.dataset.on === '1');
+            _refreshPlayers();
+        });
+        for (const b of list.querySelectorAll('[data-kick]')) b.addEventListener('click', () => {
+            const id = Number(b.dataset.kick), who = (window.__wwPlayers?.() ?? []).find(p => p.id === id);
+            if (!who) return;
+            openConfirm('Remove this player?', `${who.name}${who.dup ? ' #' + who.dup : ''} will be sent out of the game, and will not be able to come back while it stays open.`,
+                () => { window.__wwWorld?.kick(id); _refreshPlayers(); });
+        });
     }
 
     const split = splitManager(), own = !isGuest() && !_onlineGuest;
@@ -412,7 +476,7 @@ async function _refreshPlayers() {
     if (mine && split) {
         const n = split.count();
         document.getElementById('splitNote').textContent = n >= split.max ? 'The screen is full: four players.'
-            : 'To join on this screen, press  A  on another controller.';
+            : 'To join on this screen, press any button on another controller — at any time, not only here — and then Start.';
     }
     // The network: the host's to open.
     document.getElementById('lanSection').classList.toggle('hidden', !own);
@@ -420,11 +484,17 @@ async function _refreshPlayers() {
         let st = null;
         try { st = await (await fetch(`${SERVER_URL}/api/lan/status`)).json(); } catch { /* no server */ }
         const open = !!st?.open && st.worldId === activeWorld?.id;
+        // Somebody is here from the network: it stays open while they are (it is not turned off under them).
+        const guests = open ? st.guests | 0 : 0;
         const toggle = document.getElementById('lanOpenToggle');
         if (toggle && document.activeElement !== toggle) toggle.checked = open;
-        if (toggle) toggle.disabled = !!net;                   // a world is in one session: the network's, or the online room's
+        // (… and a world is in one session: the network's, or the online room's.)
+        if (toggle) { toggle.disabled = !!net || guests > 0; toggle.closest('.settingsToggle')?.classList.toggle('cannot', toggle.disabled); }
+        // Open for others to come into, the world does not stop for this player's pause menu.
+        callWorldJS('setShared', { lan: open });
         document.getElementById('lanNote').innerHTML = !st ? 'There is no game server to open.'
             : net ? 'This world is online. Close it there to open it to your network instead.'
+            : guests > 0 ? `Open. ${guests === 1 ? 'A player from your network is' : guests + ' players from your network are'} here, so it stays open: it can be closed again when they have left.`
             : !open ? 'Lets other computers on your network join this world.'
             : !st.addresses.length ? 'Open — but this computer is not on a network.'
             : 'Open. Others on your network can join from <b>Play → Join a game → On your network</b>.';
@@ -486,7 +556,89 @@ async function setLanOpen(on) {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ worldId: activeWorld.id }),
         });
     } catch { /* shown as closed by the next refresh */ }
+    callWorldJS('setShared', { lan: !!on });
     _refreshPlayers();
+}
+
+// ── A controller nobody is using ─────────────────────────────────────────────
+// In a world, a press on a controller that is not the first player's own is
+// somebody wanting to play. They are asked — "Press Start to play" — and Start
+// on that controller brings them in on this screen, with nobody having to open
+// the Players panel for them. (It had to be open, and the press had to be A.)
+// B says no: the controller is then the first player's to pick up. Asked and
+// not answered, it is asked again at the next press.
+//
+// While it is being asked about, a controller is nobody's: index.js holds it
+// (`hold`), so the first player's game does not take its presses for its own
+// (gamepad.js asks here first: `__wwPadJoin`).
+
+const JOIN_ASK_MS = 12000;          // how long the question stays up
+const JOIN_START = 9, JOIN_NO = 1;  // Start, and B
+const _join = { pad: null, until: 0, at: 0, mine: new Set(), prev: [] };
+
+/** The split-screen manager, if another player could join on this screen now. */
+function _joinable() {
+    const split = splitManager();
+    return split && PANE === 0 && !_lanGuest && gameStarted && activeWorld && !_loadingActive && !_onlineBusy && split.count() < split.max ? split : null;
+}
+
+/** Ask the player on controller `i` whether they want to play. Returns whether they are being asked. */
+function _joinAsk(i) {
+    if (_join.pad === i) return true;
+    const split = _joinable();
+    if (!split || _join.pad !== null || _join.mine.has(i) || split.padTaken(i)) return false;
+    _join.pad = i;
+    _join.at = performance.now();
+    _join.until = _join.at + JOIN_ASK_MS;
+    split.hold(i);
+    const el = document.getElementById('joinPrompt');
+    if (el) {
+        document.getElementById('joinPromptTitle').textContent = `Player ${split.count() + 1}`;
+        el.classList.remove('hidden');
+    }
+    return true;
+}
+
+/** The question is over: `join` brings them in; `theirs` (they said no) leaves the controller to the first player. */
+function _joinEnd(join, theirs = false) {
+    const i = _join.pad;
+    if (i === null) return;
+    _join.pad = null;
+    document.getElementById('joinPrompt')?.classList.add('hidden');
+    const split = splitManager();
+    split?.release(i);
+    if (theirs) _join.mine.add(i);
+    if (!join || !split || !_joinable()) return;
+    const taken = [getSettings().playerName, ...split.names()].filter(Boolean);
+    // Online, the new player joins the room this one is in; otherwise the world on this machine's own server.
+    split.add(i, activeWorld.id, taken, window.__wwWorld?.online?.()?.code ?? '');
+    showNotice(`Player ${split.count()} is joining`);
+}
+
+function _joinWatch(now) {
+    requestAnimationFrame(_joinWatch);
+    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    // The controller the first player is using is theirs.
+    if (window.__wwPad?.active && window.__wwPad.index != null) _join.mine.add(window.__wwPad.index);
+    for (let i = 0; i < pads.length; i++) {
+        const gp = pads[i], was = _join.prev[i] ?? (_join.prev[i] = []);
+        if (!gp?.connected) { was.length = 0; _join.mine.delete(i); if (_join.pad === i) _joinEnd(false); continue; }
+        let any = false, start = false, no = false;
+        for (let b = 0; b < gp.buttons.length; b++) {
+            const down = !!gp.buttons[b]?.pressed;
+            if (down && !was[b]) { any = true; if (b === JOIN_START) start = true; if (b === JOIN_NO) no = true; }
+            was[b] = down;
+        }
+        if (_join.pad === i) {
+            // (Not the press that brought the question up, if that was Start or B.)
+            if (now - _join.at > 300) { if (start) _joinEnd(true); else if (no) _joinEnd(false, true); }
+        } else if (any && !_playersTimer) _joinAsk(i);       // (with the Players panel up, A joins at once, as it did)
+    }
+    if (_join.pad !== null && (now > _join.until || !_joinable())) _joinEnd(false);
+}
+if (PANE === 0) {
+    window.__wwPadJoin = (i) => _joinAsk(i);
+    window.addEventListener('gamepadconnected', function once() { window.removeEventListener('gamepadconnected', once); requestAnimationFrame(_joinWatch); });
 }
 
 /** While the Players panel is up: a controller nobody is using that presses A joins on this screen. */
@@ -641,7 +793,7 @@ async function joinOnline(text, listed = false) {
     note.textContent = 'Joining…';
     try {
         const s = getSettings();
-        await window.__wwOnline.join(code, { name: s.playerName, skin: s.skin, slot: 0, gamepack: mergedGamePackData });
+        await window.__wwOnline.join(code, { name: s.playerName, skin: s.skin, slot: 0, gamepack: mergedGamePackData, key: currentPlayerKey() });
     } catch (e) {
         _joiningOnline = false;
         // A public game that has gone or filled since the list was drawn: say so, and draw the list again.

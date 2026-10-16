@@ -58,11 +58,16 @@ export function resetPose(pose) {
  *   attack   0 none, else 0 → 1 through one swing
  *   panic    0 … 1 running for its life
  *   hurt     1 when just hit, fading to 0
+ *   crouch   0 … 1 crouched low (a Quiddle: the player sneaking)
+ *   sit      0 … 1 sitting down (on a chair: the model stands where the seat
+ *            puts its hips — world.js SIT_HIP)
+ *   lie      0 … 1 lying straight (in bed; the body is laid down by its mesh)
+ *   sleep    eyes shut
  *   seed     0 … 1, different for every mob, so a herd is not in step
  */
 export function makeAnimState(seed = Math.random()) {
     return { time: seed * 100, phase: seed * TAU, move: 0, run: 0, lookYaw: 0, lookPitch: 0, air: 0, swim: 0,
-             graze: 0, attack: 0, panic: 0, hurt: 0, seed };
+             graze: 0, attack: 0, panic: 0, hurt: 0, crouch: 0, sit: 0, lie: 0, sleep: false, seed };
 }
 
 // ── Skinning ─────────────────────────────────────────────────────────────────
@@ -550,11 +555,11 @@ function quiddleAnim(model, o) {
         // steps); a hip forward with its leg; a sway toward the leg that stands.
         const beat = cos(2 * a.phase - lerp(3.76, 5.4, run));
         t[hips * 3 + 1] = (lerp(W.bob, T.bob, run) * (beat - 1) * 0.5 - run * 0.5) * move * ground
-                        - a.hurt * 0.6 + idle * 0.03 - a.air * 0.3;
+                        - a.hurt * 0.6 + idle * 0.03 - a.air * 0.3 - a.crouch * o.crouch.drop;
         t[hips * 3]     = -sin(a.phase - 0.9) * lerp(0.4, 0.2, run) * move;
         r[hips * 3 + 1] = -swing * lerp(0.08, 0.13, run) * move;
         r[hips * 3 + 2] = -sin(a.phase - 0.9) * 0.035 * move;
-        r[hips * 3]     = run * move * 0.08 + afloat * 0.9;
+        r[hips * 3]     = run * move * 0.08 + afloat * 0.9 + a.crouch * o.crouch.hips;
         const lean = r[hips * 3];
 
         for (const l of legs) {
@@ -582,10 +587,29 @@ function quiddleAnim(model, o) {
             placeLeg(leg, pose, p, tip * (1 - loose) + loose * 0.5, lean);
         }
 
+        // Sitting: thighs forward along the seat, shins hanging from the knees,
+        // feet level. Lying: legs straight out, together.
+        if (a.sit > 0 || a.lie > 0) {
+            for (const l of legs) {
+                const [hipB, shinB, footB] = l.leg.idx;
+                const k = a.sit;
+                r[hipB * 3]  = lerp(lerp(r[hipB * 3], 0, a.lie), -1.5, k);
+                r[shinB * 3] = lerp(lerp(r[shinB * 3], 0, a.lie), 1.45, k);
+                r[footB * 3] = lerp(lerp(r[footB * 3], 0, a.lie), 0.05, k);
+                r[hipB * 3 + 2] = lerp(r[hipB * 3 + 2], l.side * 0.04, Math.max(k, a.lie));
+                r[hipB * 3 + 1] = lerp(r[hipB * 3 + 1], 0, Math.max(k, a.lie));
+                t[hipB * 3] = lerp(t[hipB * 3], 0, Math.max(k, a.lie));
+                t[hipB * 3 + 1] = lerp(t[hipB * 3 + 1], 0, Math.max(k, a.lie));
+                t[hipB * 3 + 2] = lerp(t[hipB * 3 + 2], 0, Math.max(k, a.lie));
+            }
+            const still = Math.max(a.sit, a.lie);
+            t[hips * 3] *= 1 - still; t[hips * 3 + 1] *= 1 - still; r[hips * 3 + 1] *= 1 - still; r[hips * 3 + 2] *= 1 - still; r[hips * 3] *= 1 - still;
+        }
+
         // The trunk above the waist: turned against the hips, leaning into a
         // run, upright again over a pelvis that has tipped; it breathes.
         r[P.torso * 3 + 1] = swing * lerp(0.15, 0.24, run) * move;
-        r[P.torso * 3]     = move * lerp(0.03, 0.2, run) - a.hurt * 0.25 + idle * 0.008 - afloat * 0.55;
+        r[P.torso * 3]     = move * lerp(0.03, 0.2, run) - a.hurt * 0.25 + idle * 0.008 - afloat * 0.55 + a.crouch * o.crouch.lean;
         r[P.torso * 3 + 2] = sin(a.phase - 0.9) * 0.03 * move;
         t[P.torso * 3 + 1] = idle * 0.03;
 
@@ -609,6 +633,10 @@ function quiddleAnim(model, o) {
                 out += m.side * afloat * 0.25;
             }
             if (a.hurt > 0) { sh -= a.hurt * 0.5; out += m.side * a.hurt * 0.35; el -= a.hurt * 0.6; }
+            // Crouched, the arms come forward for balance; sitting, the hands rest on the thighs; lying, by the sides.
+            if (a.crouch > 0) { sh -= a.crouch * 0.35; el -= a.crouch * 0.35; }
+            if (a.sit > 0) { sh = lerp(sh, -0.55, a.sit); el = lerp(el, -1.05, a.sit); out = lerp(out, m.side * 0.12, a.sit); grip = lerp(grip, 0.25, a.sit); }
+            if (a.lie > 0) { sh = lerp(sh, 0, a.lie); el = lerp(el, -0.15, a.lie); out = lerp(out, m.side * 0.1, a.lie); }
             if (m.side < 0 && a.attack > 0) {
                 // A blow with the right hand: drawn back past the shoulder with
                 // the elbow cocked, then thrown forward and straightened.
@@ -632,8 +660,15 @@ function quiddleAnim(model, o) {
         r[P.head * 3 + 1] = a.lookYaw - r[P.torso * 3 + 1] - r[hips * 3 + 1];
         r[P.head * 3 + 2] = now_and_then(a.time, a.seed + 0.13, 11, 2.2) * 0.12 - r[P.torso * 3 + 2];
 
-        // A blink every few seconds; eyes shut when hurt.
-        const blink = Math.max(now_and_then(a.time, a.seed, 3.7, 0.16), a.hurt > 0.5 ? 1 : 0);
+        // Sitting, the trunk is upright, a little back; lying, straight.
+        if (a.sit > 0 || a.lie > 0) {
+            const still = Math.max(a.sit, a.lie);
+            r[P.torso * 3 + 1] *= 1 - still; r[P.torso * 3 + 2] *= 1 - still;
+            r[P.torso * 3] = lerp(r[P.torso * 3], -0.06 * a.sit, still);
+        }
+
+        // A blink every few seconds; eyes shut when hurt, and asleep.
+        const blink = Math.max(now_and_then(a.time, a.seed, 3.7, 0.16), a.hurt > 0.5 || a.sleep ? 1 : 0);
         s[P.lids] = blink > 0.5 ? 1 : 0;
 
         // Long hair hangs straight whatever the head does, and streams back on the move.
@@ -674,4 +709,6 @@ ANIMATORS.quiddle = quiddleAnim(MODELS.quiddle, {
     // Where the ball of the foot and the heel are from the ankle, px down and
     // forward; and how far the toe is up as the heel lands, radians.
     ball: [-1.5, 2.3], heel: [-1.5, -0.9], heelUp: 0.26,
+    // Crouched: how far the hips come down (px), and the pelvis and the trunk lean forward (radians).
+    crouch: { drop: 2.6, hips: 0.32, lean: 0.38 },
 });

@@ -1,0 +1,41 @@
+{
+  "id": 131,
+  "name": "POTTED_FERN",
+  "terrainType": "solid",
+  "model": "pot",
+  "color": [
+    0.62,
+    0.36,
+    0.24
+  ],
+  "hardness": 0.1,
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "sound": "stone",
+  "shape": {
+    "plant": true
+  },
+  "variant": true,
+  "textures": {
+    "top": "Fern.png",
+    "side": "Flower_Pot.png",
+    "bottom": "Dirt.png"
+  },
+  "drops": [
+    {
+      "itemId": "flower_pot",
+      "count": 1
+    },
+    {
+      "itemId": "fern",
+      "count": 1
+    }
+  ],
+  "use": {
+    "unpot": "fern",
+    "to": "FLOWER_POT"
+  }
+}

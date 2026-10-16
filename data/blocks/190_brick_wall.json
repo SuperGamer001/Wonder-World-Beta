@@ -1,0 +1,20 @@
+{
+  "id": 190,
+  "name": "BRICK_WALL",
+  "terrainType": "solid",
+  "model": "wall",
+  "color": [
+    0.62,
+    0.27,
+    0.22
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "drops": [
+    {
+      "itemId": "brick_wall",
+      "count": 1
+    }
+  ],
+  "texture": "Bricks.png"
+}

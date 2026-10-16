@@ -1,0 +1,8 @@
+{
+  "id": "wooden_stairs",
+  "name": "Oak Stairs",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

@@ -110,6 +110,8 @@ export class WorldState {
         const chunk = this.getChunk(cx, cz);
         if (!chunk) return false;
         chunk.setVoxel(lx, ly, lz, id);
+        // What reacts to a block changing where it can be seen to (world.js: water, fire).
+        this.onEdit?.(wx, wy, wz, id);
         return true;
     }
 

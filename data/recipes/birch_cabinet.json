@@ -1,0 +1,14 @@
+{
+  "id": "birch_cabinet",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "birch_cabinet",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "birch_planks",
+      "count": 8
+    }
+  ]
+}

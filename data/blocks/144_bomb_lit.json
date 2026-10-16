@@ -1,0 +1,23 @@
+{
+  "id": 144,
+  "name": "BOMB_LIT",
+  "terrainType": "solid",
+  "model": "bomb",
+  "color": [
+    0.2,
+    0.2,
+    0.22
+  ],
+  "hardness": 0.3,
+  "sound": "stone",
+  "drops": [],
+  "variant": true,
+  "textures": {
+    "top": "Bomb_Top.png",
+    "side": "Bomb_Lit.png",
+    "bottom": "Bomb_Top.png"
+  },
+  "light": 7,
+  "glow": 0.7,
+  "tick": "bomb"
+}

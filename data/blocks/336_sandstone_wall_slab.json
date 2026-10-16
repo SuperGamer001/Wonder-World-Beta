@@ -1,0 +1,31 @@
+{
+  "id": 336,
+  "name": "SANDSTONE_WALL_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.85,
+    0.78,
+    0.55
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "texture": "Sandstone.png",
+  "model": "vslab",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "sandstone_wall_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "wallslab",
+    "names": {
+      "east": "SANDSTONE_WALL_SLAB",
+      "west": "SANDSTONE_WALL_SLAB_WEST",
+      "south": "SANDSTONE_WALL_SLAB_SOUTH",
+      "north": "SANDSTONE_WALL_SLAB_NORTH"
+    },
+    "full": "SANDSTONE"
+  }
+}

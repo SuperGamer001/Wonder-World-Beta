@@ -1,0 +1,26 @@
+{
+  "id": 382,
+  "name": "MOSSY_STONE_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.42,
+    0.5,
+    0.4
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Mossy_Stone.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "mossy_stone_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "MOSSY_STONE_SLAB",
+    "top": "MOSSY_STONE_SLAB_TOP",
+    "full": "MOSSY_STONE"
+  }
+}

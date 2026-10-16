@@ -1,0 +1,42 @@
+{
+  "id": 464,
+  "name": "SPRUCE_DOOR_NORTH",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "north",
+  "shape": {
+    "open": false,
+    "part": "lower"
+  },
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "spruce_door",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Door_Bottom.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    1,
+    0
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "SPRUCE_DOOR_NORTH_OPEN",
+    "sound": "door"
+  },
+  "variant": true
+}

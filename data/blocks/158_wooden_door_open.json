@@ -1,0 +1,42 @@
+{
+  "id": 158,
+  "name": "WOODEN_DOOR_OPEN",
+  "terrainType": "solid",
+  "model": "door",
+  "facing": "east",
+  "shape": {
+    "open": true,
+    "part": "lower"
+  },
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "drops": [
+    {
+      "itemId": "wooden_door",
+      "count": 1
+    }
+  ],
+  "texture": "Door_Bottom.png",
+  "sound": "wood",
+  "flammable": 20,
+  "twin": [
+    0,
+    1,
+    0
+  ],
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "use": {
+    "toggle": "WOODEN_DOOR",
+    "sound": "door"
+  },
+  "variant": true
+}

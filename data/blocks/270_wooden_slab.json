@@ -1,0 +1,28 @@
+{
+  "id": 270,
+  "name": "WOODEN_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.55,
+    0.33
+  ],
+  "hardness": 1.5,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 25,
+  "texture": "Wooden_Planks.png",
+  "model": "slab",
+  "drops": [
+    {
+      "itemId": "wooden_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "slab",
+    "bottom": "WOODEN_SLAB",
+    "top": "WOODEN_SLAB_TOP",
+    "full": "WOODEN_PLANKS"
+  }
+}

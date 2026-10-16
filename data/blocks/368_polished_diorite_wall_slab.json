@@ -1,0 +1,31 @@
+{
+  "id": 368,
+  "name": "POLISHED_DIORITE_WALL_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.88,
+    0.88,
+    0.9
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Polished_Diorite.png",
+  "model": "vslab",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "polished_diorite_wall_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "wallslab",
+    "names": {
+      "east": "POLISHED_DIORITE_WALL_SLAB",
+      "west": "POLISHED_DIORITE_WALL_SLAB_WEST",
+      "south": "POLISHED_DIORITE_WALL_SLAB_SOUTH",
+      "north": "POLISHED_DIORITE_WALL_SLAB_NORTH"
+    },
+    "full": "POLISHED_DIORITE"
+  }
+}

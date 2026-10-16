@@ -1,0 +1,40 @@
+{
+  "id": 574,
+  "name": "ORANGE_SOFA",
+  "terrainType": "solid",
+  "color": [
+    0.86,
+    0.5,
+    0.16
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Orange.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "orange_sofa",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "ORANGE_SOFA",
+      "west": "ORANGE_SOFA_WEST",
+      "south": "ORANGE_SOFA_SOUTH",
+      "north": "ORANGE_SOFA_NORTH"
+    }
+  }
+}

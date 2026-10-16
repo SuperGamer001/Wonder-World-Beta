@@ -1,0 +1,29 @@
+{
+  "id": 116,
+  "name": "TALL_GRASS",
+  "terrainType": "solid",
+  "model": "cross",
+  "shape": {
+    "pick": 13
+  },
+  "color": [
+    0.36,
+    0.58,
+    0.22
+  ],
+  "hardness": 0.02,
+  "drops": [
+    {
+      "itemId": "tall_grass",
+      "count": 1
+    }
+  ],
+  "texture": "Tall_Grass.png",
+  "support": [
+    0,
+    -1,
+    0
+  ],
+  "flammable": 70,
+  "sound": "grass"
+}

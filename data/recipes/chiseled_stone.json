@@ -1,0 +1,14 @@
+{
+  "id": "chiseled_stone",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "chiseled_stone",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stone_slab",
+      "count": 2
+    }
+  ]
+}

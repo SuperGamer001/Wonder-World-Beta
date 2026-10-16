@@ -1,0 +1,8 @@
+{
+  "id": "polished_granite_wall_slab",
+  "name": "Polished Granite Wall Slab",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

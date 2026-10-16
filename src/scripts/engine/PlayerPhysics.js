@@ -16,8 +16,9 @@ const PLAYER_HALF_W = PLAYER_WIDTH / 2;
 // without silently changing what the player can climb. Raising gravity alone
 // shortens the arc (less floaty) while JUMP_HEIGHT keeps reachability fixed.
 const GRAVITY     = -34;     // m/s²
-const JUMP_HEIGHT = 1.7;     // blocks — apex above the takeoff point
-const JUMP_VEL    = Math.sqrt(2 * -GRAVITY * JUMP_HEIGHT);   // ≈10.75 m/s
+// 1.25: onto a block with a little to spare, and not over a fence (BlockShapes FENCE_TOP, 1.5).
+const JUMP_HEIGHT = 1.25;    // blocks — apex above the takeoff point
+const JUMP_VEL    = Math.sqrt(2 * -GRAVITY * JUMP_HEIGHT);   // ≈9.2 m/s
 const TERMINAL_VEL = -50;    // m/s (air)
 
 // ── Water ─────────────────────────────────────────────────────────────────────
@@ -65,17 +66,21 @@ const SAFE_FALL_BLOCKS      = 4;
 const FALL_DAMAGE_THRESHOLD = -Math.sqrt(2 * -GRAVITY * SAFE_FALL_BLOCKS);  // ≈-16.5 m/s
 // Tuned so damage per block of fall matches the original curve: the old build
 // used 0.2 at gravity 24, and excess velocity scales with sqrt(gravity).
-const FALL_DAMAGE_FACTOR    = 0.2 * Math.sqrt(24 / -GRAVITY);               // ≈0.168
+// … and then made 2.5 times as hard (FALL_DAMAGE_SCALE): a fall hardly hurt.
+const FALL_DAMAGE_SCALE     = 2.5;
+const FALL_DAMAGE_FACTOR    = 0.2 * Math.sqrt(24 / -GRAVITY) * FALL_DAMAGE_SCALE;   // ≈0.42
 const DOUBLE_TAP_MS         = 300; // ms window for double-tap
 
-// ── Smooth terrain ────────────────────────────────────────────────────────────
-// Only active in smooth worlds. Axis-separated movement blocks the player on
-// any slope — walking into a ramp is a horizontal move into a surface — so a
-// blocked grounded move may lift the player by up to STEP_HEIGHT. It is below
-// one block on purpose: a full cube (or an un-smoothed one-block cliff) still
-// needs a jump. SNAP_DOWN keeps a grounded player glued to a downward slope
-// instead of launching into a string of tiny falls, which would otherwise
-// flicker onGround and swap in air acceleration.
+// ── Slopes and steps ──────────────────────────────────────────────────────────
+// Axis-separated movement blocks the player on any slope — walking into a
+// ramp is a horizontal move into a surface — so a blocked grounded move may
+// lift the player by up to STEP_HEIGHT. It is below one block on purpose: a
+// full cube (or an un-smoothed one-block cliff) still needs a jump. SNAP_DOWN
+// keeps a grounded player glued to a downward slope instead of launching into
+// a string of tiny falls, which would otherwise flicker onGround and swap in
+// air acceleration. Made for smooth terrain, and what walks the player up and
+// down a flight of stairs or onto a slab in any world: in a blocky world of
+// cubes alone nothing is ever half a block high, and neither does anything.
 const STEP_HEIGHT = 0.6;
 const SNAP_DOWN   = 0.6;
 const STEP_ITERS  = 10;    // binary-search steps — resolves to ~0.0006 blocks
@@ -115,6 +120,14 @@ const CONTACT_ITERS = 12;    // of at most MAX_MOVE: to within 0.0001 of a block
 const COYOTE      = 0.1;     // seconds
 const JUMP_BUFFER = 0.1;     // seconds
 
+// ── Ladders ───────────────────────────────────────────────────────────────────
+// In a block that is climbed (BlockRegistry `climb`) nothing falls: the player
+// goes up while they jump or walk into what the ladder is on, slides down
+// slowly otherwise, and stays put while they sneak.
+const CLIMB_SPEED = 3.4;     // m/s up
+const CLIMB_SLIDE = -2.4;    // m/s down, hands off
+const CLIMB_RATE  = 18;      // 1/s — how fast the speed comes to those
+
 /**
  * Frame-rate independent exponential approach factor.
  * Returns the fraction of the remaining gap to close this frame for a given
@@ -148,6 +161,16 @@ export class PlayerPhysics {
 
         // SmoothTerrain collider in smooth worlds; null keeps blocky collision.
         this.smooth = null;
+        // The blocks that are not cubes (slabs, stairs, fences, doors): what
+        // of each stops a body (BlockShapes.ShapeSet). Null with a registry
+        // that has none.
+        this.shapes = blockRegistry.shapes ?? null;
+        this.climbing = false;   // on a ladder
+        this._blockedH = false;  // the last step ran into something sideways
+        // Doors and gates that have shut on the player where they stood (in
+        // the doorway): x, y, z of each. Walked through until the player is
+        // out of them (_shutOn).
+        this._through = [];
 
         // Set by the caller from the weather each frame:
         //   external — velocity the surroundings push the player toward (a
@@ -215,6 +238,7 @@ export class PlayerPhysics {
 
     _flyUpdate(pos, input, dt, speed, noClip) {
         const { fwd, rightDir: rd } = input;
+        if (!noClip) this._shutOn(pos);
         let dx = 0, dy = 0, dz = 0;
 
         if (input.forward)  { dx += fwd.x; dz += fwd.z;   }
@@ -253,6 +277,7 @@ export class PlayerPhysics {
 
     _groundUpdate(pos, input, dt, isCreative, isSurvival, stats) {
         const { fwd, rightDir: rd } = input;
+        this._shutOn(pos);
 
         // Sprint requires the key in every mode. Previously `!isSurvival || …`
         // made canSprint unconditionally true outside survival, so Creative and
@@ -281,6 +306,7 @@ export class PlayerPhysics {
         if (len > 1) { dx /= len; dz /= len; }
 
         this.inWater = this._isLiquidAt(pos.x, pos.y + 0.5, pos.z);
+        this.climbing = !this.inWater && this._climbAt(pos);
 
         // ── Horizontal velocity ──────────────────────────────────────────────
         // Ease toward the target instead of snapping to it. Stopping uses its
@@ -307,6 +333,11 @@ export class PlayerPhysics {
             if (input.jump) {
                 this.vel.y = Math.min(this.vel.y + WATER_SWIM_ACCEL * dt, WATER_SWIM_SPEED);
             }
+        } else if (this.climbing) {
+            const want = input.jump || (moving && this._blockedH) ? CLIMB_SPEED : input.sneak || this.onGround ? 0 : CLIMB_SLIDE;
+            this.vel.y += (want - this.vel.y) * approach(CLIMB_RATE, dt);
+            this._sinceGround = 0;
+            this._jumpWant = 0;
         } else {
             this._sinceGround = this.onGround ? 0 : this._sinceGround + dt;
             this._jumpWant = input.jump ? JUMP_BUFFER : Math.max(0, this._jumpWant - dt);
@@ -331,8 +362,9 @@ export class PlayerPhysics {
         const prevOnGround = this.onGround;
         if (!this.onGround) this._prevFallVel = this.vel.y;
 
-        // Stepping is for walking on slopes, so it needs footing (or water).
-        const canStep = this.smooth !== null && (prevOnGround || this.inWater);
+        // Stepping is for walking on slopes and stairs, so it needs footing (or water).
+        const canStep = prevOnGround || this.inWater;
+        let blockedH = false;
 
         // Crouching, a step that would leave the ground behind is not taken.
         const drop = crouch && prevOnGround && this.vel.y <= 0 ? (this.smooth !== null ? CROUCH_DROP_SMOOTH : CROUCH_DROP_BLOCKY) : 0;
@@ -341,15 +373,16 @@ export class PlayerPhysics {
         const nx = pos.x + this.vel.x * dt;
         if (drop > 0 && this._canMoveTo(nx, pos.y, pos.z) && this._canMoveTo(nx, pos.y - drop, pos.z)) this.vel.x = 0;
         else if (this._canMoveTo(nx, pos.y, pos.z))         pos.x = nx;
-        else if (!(canStep && this._stepUp(pos, nx, pos.z))) { this._moveAxis(pos, 'x', nx); this.vel.x = 0; }
+        else if (!(canStep && this._stepUp(pos, nx, pos.z))) { this._moveAxis(pos, 'x', nx); this.vel.x = 0; blockedH = true; }
 
         // Move Z
         const nz = pos.z + this.vel.z * dt;
         if (drop > 0 && this._canMoveTo(pos.x, pos.y, nz) && this._canMoveTo(pos.x, pos.y - drop, nz)) this.vel.z = 0;
         else if (this._canMoveTo(pos.x, pos.y, nz))         pos.z = nz;
-        else if (!(canStep && this._stepUp(pos, pos.x, nz))) { this._moveAxis(pos, 'z', nz); this.vel.z = 0; }
+        else if (!(canStep && this._stepUp(pos, pos.x, nz))) { this._moveAxis(pos, 'z', nz); this.vel.z = 0; blockedH = true; }
+        this._blockedH = blockedH;
 
-        if (this.smooth !== null && prevOnGround && !this.inWater && this.vel.y <= 0) {
+        if (prevOnGround && !this.inWater && !this.climbing && this.vel.y <= 0) {
             this._snapDown(pos);
         }
 
@@ -365,7 +398,9 @@ export class PlayerPhysics {
 
         // Fall damage (survival + creative creative = no damage, survival = yes)
         let fallDamage = 0;
-        if (!isCreative && this.onGround && !prevOnGround && !this.inWater) {
+        // (Nor from one that ends in water, however thin: a flow too shallow to swim in still breaks a fall.)
+        if (!isCreative && this.onGround && !prevOnGround && !this.inWater &&
+            !this.reg.isLiquid(this.world.getBlock(Math.floor(pos.x), Math.floor(pos.y + 0.05), Math.floor(pos.z)))) {
             if (this._prevFallVel < FALL_DAMAGE_THRESHOLD) {
                 const excess = Math.abs(this._prevFallVel - FALL_DAMAGE_THRESHOLD);
                 fallDamage   = excess * FALL_DAMAGE_FACTOR * 10;
@@ -398,6 +433,31 @@ export class PlayerPhysics {
 
     _canMoveTo(x, y, z) { return !this._collidesAt(x, y, z); }
 
+    /** Is there room for the player standing at (x, y, z)? */
+    fits(x, y, z) { return !this._collidesAt(x, y, z); }
+
+    /**
+     * Which doors and gates (BlockShapes `closes`) the player is inside now: one
+     * that shut on them as they stood in the doorway does not hold them there —
+     * it is walked through until they are out of it. Asked at the start of
+     * every step.
+     */
+    _shutOn(pos) {
+        const t = this._through, shapes = this.shapes;
+        t.length = 0;
+        if (!shapes) return;
+        const x0 = pos.x - PLAYER_HALF_W, x1 = pos.x + PLAYER_HALF_W - 0.001, y0 = pos.y, y1 = pos.y + PLAYER_HEIGHT - 0.001;
+        const z0 = pos.z - PLAYER_HALF_W, z1 = pos.z + PLAYER_HALF_W - 0.001;
+        for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
+            for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
+                for (let by = Math.floor(y0) - 1; by <= Math.floor(y1); by++) {
+                    const sh = shapes.of(this.world.getBlock(bx, by, bz));
+                    if (sh?.closes && shapes.boxHits(sh, this.world, bx, by, bz, x0, y0, z0, x1, y1, z1)) t.push(bx, by, bz);
+                }
+            }
+        }
+    }
+
     /**
      * Move along one axis to `to`, or — if something is in the way — as far
      * toward it as is clear (see *Contact*). Returns whether it got there.
@@ -419,7 +479,7 @@ export class PlayerPhysics {
     }
 
     /**
-     * Smooth worlds: try to climb onto what blocked a horizontal move. Succeeds
+     * Try to climb onto what blocked a horizontal move (a slope, a stair, a slab). Succeeds
      * when the destination is clear at most STEP_HEIGHT higher (with headroom
      * both here and there), then settles at the lowest clear height.
      */
@@ -437,7 +497,7 @@ export class PlayerPhysics {
     }
 
     /**
-     * Smooth worlds: after walking off the high side of a slope, drop straight
+     * After walking off the high side of a slope (or down a stair), drop straight
      * onto the surface if it is within SNAP_DOWN. Leaves the player a hair
      * above it, so gravity's move this frame is what registers the landing.
      */
@@ -459,14 +519,23 @@ export class PlayerPhysics {
         const y0 = y,                 y1 = y + PLAYER_HEIGHT  - 0.001;
         const z0 = z - PLAYER_HALF_W, z1 = z + PLAYER_HALF_W - 0.001;
 
-        const smooth = this.smooth;
+        const smooth = this.smooth, shapes = this.shapes, yLo = Math.floor(y0);
         for (let bx = Math.floor(x0); bx <= Math.floor(x1); bx++) {
             for (let bz = Math.floor(z0); bz <= Math.floor(z1); bz++) {
                 // Unloaded chunk → treat as solid wall to prevent walking into void
                 if (!this.world.getChunk(bx >> CHUNK_SHIFT, bz >> CHUNK_SHIFT)?.generated) return true;
-                for (let by = Math.floor(y0); by <= Math.floor(y1); by++) {
+                // (From one block lower: a fence stands half a block above its own.)
+                for (let by = yLo - 1; by <= Math.floor(y1); by++) {
                     const id = this.world.getBlock(bx, by, bz);
                     if (id === 0 || this.reg.isNoCollision(id)) continue;
+                    // A block that is not a cube stops a body with its own boxes.
+                    const sh = shapes?.of(id);
+                    if (sh) {
+                        if (sh.closes && this._isThrough(bx, by, bz)) continue;
+                        if ((by >= yLo || sh.tall) && shapes.boxHits(sh, this.world, bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
+                        continue;
+                    }
+                    if (by < yLo) continue;
                     // Mesh blocks collide with their rendered shape, not their cube.
                     if (smooth === null || !smooth.isMesh(id)) return true;
                     if (smooth.cellBlocks(bx, by, bz, x0, y0, z0, x1, y1, z1)) return true;
@@ -476,9 +545,26 @@ export class PlayerPhysics {
         return false;
     }
 
+    _isThrough(bx, by, bz) {
+        const t = this._through;
+        for (let i = 0; i < t.length; i += 3) if (t[i] === bx && t[i + 1] === by && t[i + 2] === bz) return true;
+        return false;
+    }
+
+    /** Is the point in water — under the surface of the block of it there, which a thin flow does not fill? */
     _isLiquidAt(x, y, z) {
-        return this.reg.isLiquid(
-            this.world.getBlock(Math.floor(x), Math.floor(y), Math.floor(z))
-        );
+        const bx = Math.floor(x), by = Math.floor(y), bz = Math.floor(z);
+        const id = this.world.getBlock(bx, by, bz);
+        if (!this.reg.isLiquid(id)) return false;
+        const h = this.reg.fluidHeight?.(id) ?? 1;
+        return h >= 1 || y - by < h || this.reg.isLiquid(this.world.getBlock(bx, by + 1, bz));
+    }
+
+    /** Is the player on a ladder: a block that is climbed at their feet or their middle? */
+    _climbAt(pos) {
+        const reg = this.reg;
+        if (!reg.isClimb) return false;
+        const bx = Math.floor(pos.x), bz = Math.floor(pos.z);
+        return reg.isClimb(this.world.getBlock(bx, Math.floor(pos.y + 0.1), bz)) || reg.isClimb(this.world.getBlock(bx, Math.floor(pos.y + 1), bz));
     }
 }

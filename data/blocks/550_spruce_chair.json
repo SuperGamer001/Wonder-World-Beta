@@ -1,0 +1,36 @@
+{
+  "id": 550,
+  "name": "SPRUCE_CHAIR",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "chair",
+  "texture": "Spruce_Planks.png",
+  "use": {
+    "sit": true
+  },
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "spruce_chair",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "look",
+    "back": true,
+    "names": {
+      "east": "SPRUCE_CHAIR",
+      "west": "SPRUCE_CHAIR_WEST",
+      "south": "SPRUCE_CHAIR_SOUTH",
+      "north": "SPRUCE_CHAIR_NORTH"
+    }
+  }
+}

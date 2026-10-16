@@ -1,0 +1,8 @@
+{
+  "id": "white_sofa",
+  "name": "White Sofa",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

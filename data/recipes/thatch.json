@@ -1,0 +1,14 @@
+{
+  "id": "thatch",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "thatch",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "tall_grass",
+      "count": 4
+    }
+  ]
+}

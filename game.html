@@ -8,6 +8,7 @@
     <link rel="icon" href="./data/textures/favicon.ico" sizes="any">
     <script src="src/main.js" defer></script>
     <script src="src/players.js" defer></script>
+    <script src="src/chat.js" defer></script>
     <script src="src/gamepad.js" defer></script>
     <!-- Minified build: three.module.js + three.core.js is ~2 MB of source the
          browser parses at every startup, against ~0.7 MB for the minified pair.
@@ -21,6 +22,7 @@
     </script>
     <script type="module" src="src/scripts/world.js" defer></script>
     <script type="module" src="src/scripts/Character.js" defer></script>
+    <script type="module" src="src/scripts/BlockIcons.js" defer></script>
     <script type="module" src="src/scripts/MenuScene.js" defer></script>
 </head>
 <body>
@@ -32,6 +34,12 @@
 
     <!-- "Controller connected" (gamepad.js) -->
     <div id="padNotice" class="chip"></div>
+    <!-- A controller nobody is using has been pressed in a world: its player is asked (players.js: _joinAsk). -->
+    <div id="joinPrompt" class="chip hidden">
+        <span id="joinPromptTitle">Player 2</span>
+        <span>Press <kbd class="pad">Start</kbd> to play</span>
+        <small><kbd class="pad">B</kbd> to use this controller as Player 1 instead</small>
+    </div>
 
     <!-- Shared confirm popup -->
     <div id="confirmPopup" class="scrim top hidden">
@@ -141,6 +149,8 @@
                 </select>
                 <label class="formLabel">Daylight Cycle</label>
                 <label class="settingsToggle"><input type="checkbox" id="worldSettingsDaylightCycle" checked><span class="track"></span></label>
+                <label class="formLabel">PvP</label>
+                <label class="settingsToggle"><input type="checkbox" id="worldSettingsPvp" checked><span class="track"></span></label>
                 <label class="formLabel">Weather</label>
                 <select class="settingsSelect" id="worldSettingsWeather">
                     <option value="dynamic">Dynamic (changes naturally)</option>
@@ -341,8 +351,8 @@
                         <div class="settingsRow">
                             <span class="settingsLabel">Clouds</span>
                             <select class="settingsSelect seg" id="settingClouds">
-                                <option value="fast">Fast</option>
-                                <option value="fancy">Fancy</option>
+                                <option value="fast">Simple</option>
+                                <option value="fancy">Detailed</option>
                             </select>
                         </div>
                         <div class="settingsRow">
@@ -396,14 +406,16 @@
                             <span>Move</span><span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd></span><span><kbd class="pad">Left stick</kbd></span>
                             <span>Look around</span><span><kbd>Mouse</kbd></span><span><kbd class="pad">Right stick</kbd></span>
                             <span>Jump, swim up</span><span><kbd>Space</kbd></span><span><kbd class="pad">A</kbd></span>
-                            <span>Sprint</span><span><kbd>Shift</kbd></span><span>click <kbd class="pad">Left stick</kbd></span>
-                            <span>Crouch, fly down</span><span><kbd>Right Shift</kbd> or <kbd>Q</kbd></span><span><kbd class="pad">B</kbd></span>
+                            <span>Sprint</span><span>double-tap <kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd> or <kbd>D</kbd> (whichever you walk with)</span><span>click <kbd class="pad">Left stick</kbd></span>
+                            <span>Crouch, fly down, get up from a chair or a bed</span><span><kbd>Shift</kbd></span><span><kbd class="pad">B</kbd></span>
                             <span>Mine, attack</span><span><kbd>Left-click</kbd></span><span><kbd class="pad">RT</kbd></span>
                             <span>Place, use, eat</span><span><kbd>Right-click</kbd></span><span><kbd class="pad">LT</kbd></span>
                             <span>Hotbar slot</span><span><kbd>1</kbd> – <kbd>0</kbd></span><span><kbd class="pad">LB</kbd> <kbd class="pad">RB</kbd></span>
                             <span>Inventory</span><span><kbd>E</kbd></span><span><kbd class="pad">Y</kbd></span>
                             <span>Crafting</span><span><kbd>C</kbd></span><span><kbd class="pad">X</kbd></span>
                             <span>Change the view</span><span><kbd>V</kbd> or <kbd>F5</kbd></span><span>click <kbd class="pad">Right stick</kbd></span>
+                            <span>Screenshot</span><span><kbd>F2</kbd></span><span><kbd class="pad">View</kbd></span>
+                            <span>Chat</span><span><kbd>T</kbd>, or <kbd>/</kbd> for a command; <kbd>Enter</kbd> to say it</span><span>needs a keyboard</span>
                             <span>Pause</span><span><kbd>Esc</kbd></span><span><kbd class="pad">Start</kbd></span>
                             <span>In a menu</span><span>click, <kbd>Esc</kbd> to go back</span><span><kbd class="pad">D-pad</kbd> <kbd class="pad">A</kbd> choose, <kbd class="pad">B</kbd> back</span>
                         </div>
@@ -490,6 +502,10 @@
                             <div class="menuButton small" id="settingReleaseNotes">View</div>
                         </div>
                         <div class="settingsRow">
+                            <span class="settingsLabel">Error Reports<small>recent crashes and errors, to read or copy</small></span>
+                            <div class="menuButton small" id="settingReports">View</div>
+                        </div>
+                        <div class="settingsRow">
                             <span class="settingsLabel">All Settings<small>put every setting back as it came</small></span>
                             <div class="menuButton small danger" id="settingsResetBtn">Reset to Defaults</div>
                         </div>
@@ -513,6 +529,10 @@
                                 <option value="NORMAL">Normal</option>
                                 <option value="HARD">Hard</option>
                             </select>
+                        </div>
+                        <div class="settingsRow">
+                            <span class="settingsLabel">PvP<small>players can hurt each other</small></span>
+                            <label class="settingsToggle"><input type="checkbox" id="settingPvp" checked><span class="track"></span></label>
                         </div>
                         <div class="settingsSectionTitle">Time &amp; Weather</div>
                         <div class="settingsRow">
@@ -602,6 +622,37 @@
     <!-- What this version added and fixed (ReleaseNotes.txt). Settings → Game
          opens it, and it comes up by itself the first time a newer version
          is played (main.js: RELEASE NOTES). -->
+    <!-- The map (main.js: THE MAP): a map in hand, used. -->
+    <div class="scrim top hidden" id="MapScreen">
+        <div class="panel popup mapPanel">
+            <div class="popupTitle">Map</div>
+            <canvas id="mapCanvas" width="768" height="768"></canvas>
+            <div class="formNote" id="mapNote"></div>
+            <div class="popupButtons">
+                <select class="settingsSelect seg" id="mapZoom">
+                    <option value="2">Near</option>
+                    <option value="8" selected>Country</option>
+                    <option value="32">Far</option>
+                </select>
+                <div class="menuButton primary" id="mapCloseBtn">Close</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- What went wrong lately (main.js: REPORTS). Settings → Game → Error Reports. -->
+    <div class="scrim top hidden" id="ReportsScreen">
+        <div class="panel popup wide releaseNotesPanel">
+            <div class="popupTitle">Recent crash and error reports</div>
+            <div class="formNote" id="reportsSub"></div>
+            <div class="releaseNotesBody reportsBody" id="reportsBody"></div>
+            <div class="popupButtons">
+                <div class="menuButton" id="reportsCopyBtn">Copy All</div>
+                <div class="menuButton danger" id="reportsClearBtn">Clear</div>
+                <div class="menuButton primary" id="reportsCloseBtn">Close</div>
+            </div>
+        </div>
+    </div>
+
     <div class="scrim top hidden" id="ReleaseNotesScreen">
         <div class="panel popup wide releaseNotesPanel">
             <div class="popupTitle" id="releaseNotesTitle">Release Notes</div>
@@ -854,8 +905,9 @@
                             <li><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move</li>
                             <li><kbd>Mouse</kbd> look around</li>
                             <li><kbd>Space</kbd> jump, swim up</li>
-                            <li><kbd>Left Shift</kbd> sprint</li>
-                            <li><kbd>Right Shift</kbd> or <kbd>Q</kbd> crouch (slow, quiet, and you will not step off an edge); fly down</li>
+                            <li>Double-tap the key you are walking with (<kbd>W</kbd>, <kbd>A</kbd>, <kbd>S</kbd> or <kbd>D</kbd>) to sprint</li>
+                            <li><kbd>Shift</kbd> crouch (slow, quiet, and you will not step off an edge); fly down; get up from a chair or a bed</li>
+                            <li><kbd>F2</kbd> screenshot (it is kept in the Screenshots folder: Pause → Screenshots Folder)</li>
                             <li><kbd>V</kbd> see yourself from behind, from in front, or through your own eyes</li>
                         </ul>
 
@@ -983,6 +1035,20 @@
             </div>
         </div>
 
+        <!-- Asleep in bed: the room dims, and goes dark for a moment each time the clock cuts forward (main.js: ww_drowsy, ww_sleepCut). -->
+        <div id="sleepFade"></div>
+        <!-- A screenshot was taken (world.js: F2): the screen flashes. -->
+        <div id="shotFlash"></div>
+
+        <!-- Chat (src/chat.js): what the players say, and the box to say it in (T, or / for a command). -->
+        <div id="chat">
+            <div id="chatLog"></div>
+            <div id="chatBar" class="hidden">
+                <input id="chatInput" class="worldFormInput" type="text" maxlength="200" autocomplete="off" spellcheck="false"
+                       placeholder="Say something, or / for a command (/help)">
+            </div>
+        </div>
+
         <!-- Playing, but the browser has not given the game the pointer: a click takes it (main.js: pointerLoose) -->
         <div id="clickToPlay" class="chip hidden">Click to play</div>
 
@@ -1048,6 +1114,8 @@
                     <div class="menuButton small primary" id="creativeInvClose">Close</div>
                 </div>
             </div>
+            <!-- The shelves to look on (main.js: _renderCreativeTabs) -->
+            <div class="segGroup" id="creativeInvTabs"></div>
             <div id="creativeInvGrid"></div>
             <div class="formNote">Click something to add it to your hotbar.</div>
         </div>
@@ -1062,6 +1130,8 @@
                     <div class="menuButton small" id="pauseCharacterBtn">Character</div>
                     <div class="menuButton small" id="pauseSettingsBtn">Settings</div>
                     <div class="menuButton small" id="pauseHowToBtn">How to Play</div>
+                    <div class="menuButton small" id="pauseScreenshotBtn">Screenshot</div>
+                    <div class="menuButton small" id="pauseShotsFolderBtn">Screenshots Folder</div>
                 </div>
                 <div class="menuButton quiet" id="pauseQuitBtn" onclick="leaveWorld()">Save &amp; Quit</div>
             </div>

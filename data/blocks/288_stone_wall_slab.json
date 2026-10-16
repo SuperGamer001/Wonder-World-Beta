@@ -1,0 +1,31 @@
+{
+  "id": 288,
+  "name": "STONE_WALL_SLAB",
+  "terrainType": "solid",
+  "color": [
+    0.5,
+    0.5,
+    0.5
+  ],
+  "hardness": 2,
+  "requiresTool": "pickaxe",
+  "texture": "Stone.png",
+  "model": "vslab",
+  "facing": "east",
+  "drops": [
+    {
+      "itemId": "stone_wall_slab",
+      "count": 1
+    }
+  ],
+  "place": {
+    "mode": "wallslab",
+    "names": {
+      "east": "STONE_WALL_SLAB",
+      "west": "STONE_WALL_SLAB_WEST",
+      "south": "STONE_WALL_SLAB_SOUTH",
+      "north": "STONE_WALL_SLAB_NORTH"
+    },
+    "full": "STONE"
+  }
+}

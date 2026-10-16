@@ -30,7 +30,7 @@
     'use strict';
 
     // Button numbers of the standard layout.
-    const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, START = 9, L3 = 10, R3 = 11;
+    const A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, LT = 6, RT = 7, VIEW = 8, START = 9, L3 = 10, R3 = 11;
     const UP = 12, DOWN = 13, LEFT = 14, RIGHT = 15;
 
     const DEAD         = 0.2;    // a stick this near its centre is at rest
@@ -130,7 +130,13 @@
         const gp = current();
         // A pane waits for its controller (it shows up on its next press); the
         // first screen stops looking when there is none.
-        if (!gp) { release(); pad.index = null; if (OWN_PANE) requestAnimationFrame(frame); else running = false; return; }
+        // (… while none is connected at all: one that is being asked about, or has a screen of its own, may yet be this player's.)
+        if (!gp) {
+            release(); pad.index = null;
+            const some = [...(navigator.getGamepads ? navigator.getGamepads() : [])].some(g => g?.connected);
+            if (OWN_PANE || some) requestAnimationFrame(frame); else running = false;
+            return;
+        }
         requestAnimationFrame(frame);
         pad.index = gp.index;
 
@@ -143,6 +149,12 @@
             let used = Math.abs(gp.axes[0] ?? 0) > 0.5 || Math.abs(gp.axes[1] ?? 0) > 0.5 ||
                        Math.abs(gp.axes[2] ?? 0) > 0.5 || Math.abs(gp.axes[3] ?? 0) > 0.5;
             for (let i = 0; i < gp.buttons.length && !used; i++) used = down(i);
+            // In a world, a controller this player has not been using may be somebody else's, wanting to
+            // join: they are asked (players.js), and until they have answered it is not this player's.
+            if (used && !OWN_PANE && window.__wwPadJoin?.(gp.index)) {
+                for (let i = 0; i < gp.buttons.length; i++) prev[i] = down(i);
+                return;
+            }
             if (used) setActive(true);
         }
 
@@ -183,6 +195,7 @@
         if (hit(Y)) { release(); window.dispatchEvent(new CustomEvent('ww_toggleInventory')); }
         if (hit(X)) { release(); window.dispatchEvent(new CustomEvent('ww_toggleCraftMenu', { detail: {} })); }
         if (hit(R3)) window.dispatchEvent(new CustomEvent('ww_toggleCamera'));
+        if (hit(VIEW)) window.dispatchEvent(new CustomEvent('ww_screenshot'));
         if (hit(START)) pauseGame();
     }
 
@@ -201,6 +214,9 @@
     const click = (sel) => () => document.querySelector(sel)?.click();
     const SCOPES = [
         ['#UpdatePrompt',           click('#updateLaterBtn')],
+        ['#chatBar',                () => closeChat()],
+        ['#ReportsScreen',          click('#reportsCloseBtn')],
+        ['#MapScreen',              click('#mapCloseBtn')],
         ['#confirmPopup',           click('#confirmNo')],
         ['#GuestOverScreen',        null],
         ['#NameScreen',             () => window.__wwName?.cancel()],

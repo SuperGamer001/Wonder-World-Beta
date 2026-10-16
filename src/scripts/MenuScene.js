@@ -378,6 +378,9 @@ async function build() {
         made.add(inst.mesh);
         animals.push({ inst, yaw, grazes: a.type !== 'chicken' ? 1 : 0.6, next: 2 + rnd() * 8, graze: rnd() < 0.5 });
     }
+    // Its shaders made ready in the background: the first frame used to wait
+    // for them, which held up the title screen for half a second.
+    await renderer.compileAsync(made, camera).catch(() => {});
     scene = made;
 }
 
@@ -428,16 +431,33 @@ function frame(now) {
     renderer.render(scene, camera);
 }
 
+/** Give everything back to the graphics card (a world is about to want it). */
+function release() {
+    if (!scene) return;
+    scene.traverse((o) => { o.geometry?.dispose(); if (o.material?.isShaderMaterial) o.material.dispose(); });
+    shared.uTex.value.dispose(); shared.uNoise.value.dispose();
+    figure?.dispose(); figure = null; animals = [];
+    models?.dispose(); models = null;
+    renderer.renderLists.dispose();
+    scene = shared = null;
+}
+
+let wanted = false;       // show() was asked for last, not hide(): what a load that finishes is for
+
 const api = {
     /** Start showing the place, resting at `view`. Resolves true once it is drawn, false if there is none to show. */
     async show(view = 'title') {
         canvas ??= document.getElementById('menuCanvas');
         if (!canvas || failed) return false;
+        wanted = true;
         if (!scene) {
             loading ??= build().catch((e) => { failed = true; console.warn('[menu] no scene behind the menus:', e.message); });
             await loading;
             loading = null;
             if (failed || !scene) return false;
+            // Put away while it loaded (a world was started): it is not shown, and what it loaded is let go.
+            // (It used to start drawing anyway, and went on drawing behind the world, unseen, all game.)
+            if (!wanted) { if (!running) release(); return false; }
         }
         if (!travel && info.views[view]) { at = view; place(info.views[view]); }
         if (!running) { running = true; lastT = 0; lastDraw = 0; raf = requestAnimationFrame(frame); }
@@ -446,16 +466,11 @@ const api = {
 
     /** Stop, and let go of everything on the graphics card: a world is about to want it. */
     hide() {
+        wanted = false;
         running = false;
         cancelAnimationFrame(raf);
         if (travel) { const done = travel.done; travel = null; done(); }
-        if (!scene) return;
-        scene.traverse((o) => { o.geometry?.dispose(); if (o.material?.isShaderMaterial) o.material.dispose(); });
-        shared.uTex.value.dispose(); shared.uNoise.value.dispose();
-        figure?.dispose(); figure = null; animals = [];
-        models?.dispose(); models = null;
-        renderer.renderLists.dispose();
-        scene = shared = null;
+        release();
     },
 
     /** Travel to a view. Resolves when the camera is there (at once if it already is, or there is no scene). */

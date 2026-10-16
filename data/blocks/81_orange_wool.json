@@ -1,0 +1,20 @@
+{
+  "id": 81,
+  "name": "ORANGE_WOOL",
+  "terrainType": "solid",
+  "color": [
+    0.86,
+    0.5,
+    0.16
+  ],
+  "hardness": 0.6,
+  "drops": [
+    {
+      "itemId": "orange_wool",
+      "count": 1
+    }
+  ],
+  "texture": "Wool_Orange.png",
+  "flammable": 60,
+  "sound": "grass"
+}

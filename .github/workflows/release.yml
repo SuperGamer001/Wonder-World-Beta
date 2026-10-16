@@ -2,9 +2,16 @@ name: Release
 
 # Push a version tag (e.g. v1.0.0-beta.1) to build the Windows + macOS
 # installers and attach them to a GitHub Release. The tag MUST match the
-# "version" in package.json, prefixed with "v".
+# "version" in package.json, prefixed with "v" (the build stops if it does not).
 #
-# workflow_dispatch lets you dry-run the build (installers are uploaded as
+# What a release carries (electron-builder.yml says where each goes):
+#   WonderWorld-<version>-Windows-x64.zip      the Windows installer (.exe), zipped
+#   WonderWorld-<version>-macOS-universal.zip  the macOS disk image (.dmg), zipped —
+#                                              one app for Apple silicon and Intel
+#   WonderWorld-<version>-x64.exe.blockmap     the Windows updater's
+#   latest.yml / beta.yml                      the Windows updater's feed
+#
+# workflow_dispatch lets you dry-run the build (the same files are uploaded as
 # workflow artifacts, but nothing is published to a Release).
 on:
   push:
@@ -50,12 +57,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Only the NSIS installer, 64-bit.
           - os: windows-latest
             platform: win
+            targets: --win nsis --x64
+          # Only the dmg, holding one universal app: an Intel and an Apple
+          # silicon build merged into one. Asked for here by name rather than
+          # left to electron-builder.yml, so the release cannot quietly come
+          # out for the build machine's own kind of Mac alone.
           - os: macos-latest
             platform: mac
+            targets: --mac dmg --universal
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -69,69 +83,112 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # The file names come from package.json's version, so a tag that says
+      # another would publish files named for a version they are not.
+      - name: Read the version
+        id: version
+        shell: bash
+        env:
+          TAG: ${{ github.ref_name }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Building Wonder World $version"
+          if [ "$IS_TAG" = "true" ] && [ "$TAG" != "v$version" ]; then
+            echo "::error::The tag $TAG does not match package.json's version $version (it should be v$version)."
+            exit 1
+          fi
+
       # The update feed is the Interlinked library (publish.provider: generic),
       # which electron-builder cannot upload to — so never ask it to publish.
       # The release assets are attached to the GitHub Release below instead, and
       # that is where you fetch them from to upload to the library host.
-      - name: Build ${{ matrix.platform }} installer
+      - name: Build the ${{ matrix.platform }} installer
         env:
-          # No Apple Developer cert available — skip code signing on macOS.
+          # No Apple Developer certificate: the app is signed ad hoc
+          # (identity "-" in electron-builder.yml), which needs none.
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx --no-install electron-builder --${{ matrix.platform }} --publish never
+        run: npx --no-install electron-builder ${{ matrix.targets }} --publish never
 
-      # latest.yml and the .blockmap are what make auto-update work at all:
-      # latest.yml is the feed the app reads, and the .blockmap is what lets it
-      # download only the changed parts of the installer. Losing either silently
-      # degrades updates, so they are collected explicitly.
-      - name: Upload release assets as workflow artifacts
+      # What players get is the app inside the dmg, so that is what is checked:
+      # every piece of machine code in it must hold both an Intel (x86_64) and an
+      # Apple silicon (arm64) half, and the app's signature must be whole. A
+      # single-architecture file does not start on the other kind of Mac, and
+      # a broken signature is "damaged" to Gatekeeper.
+      - name: Check the macOS app is universal and its signature whole
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dmg="dist/WonderWorld-$VERSION-universal.dmg"
+          [ -f "$dmg" ] || { echo "::error::$dmg was not built"; ls -la dist; exit 1; }
+          mnt="$RUNNER_TEMP/ww-dmg"
+          mkdir -p "$mnt"
+          hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$dmg" >/dev/null
+          trap 'hdiutil detach "$mnt" -quiet || true' EXIT
+          app="$mnt/Wonder World.app"
+          [ -d "$app" ] || { echo "::error::Wonder World.app is not in the dmg"; ls -la "$mnt"; exit 1; }
+
+          bad=0; n=0
+          while IFS= read -r -d '' f; do
+            case "$(file -b "$f")" in Mach-O*) ;; *) continue ;; esac
+            n=$((n + 1))
+            archs=$(lipo -archs "$f" 2>/dev/null || true)
+            case " $archs " in *" x86_64 "*) ;; *) echo "::error::no Intel (x86_64) code in ${f#"$app"/}: $archs"; bad=1 ;; esac
+            case " $archs " in *" arm64 "*) ;; *) echo "::error::no Apple silicon (arm64) code in ${f#"$app"/}: $archs"; bad=1 ;; esac
+          done < <(find "$app" -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.node' -o -name '*.so' \) -print0)
+          echo "$n pieces of machine code checked"
+          [ "$n" -gt 0 ] || { echo "::error::no machine code found in the app"; exit 1; }
+          [ "$bad" = 0 ] || exit 1
+
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign -dv "$app" 2>&1 | grep -E '^(Identifier|Format|Signature)' || true
+
+      - name: Zip the Windows installer
+        if: matrix.platform == 'win'
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $installer = "dist/WonderWorld-$env:VERSION-x64.exe"
+          if (-not (Test-Path $installer)) { Get-ChildItem dist; throw "$installer was not built" }
+          New-Item -ItemType Directory -Force dist/release | Out-Null
+          Compress-Archive -LiteralPath $installer -DestinationPath "dist/release/WonderWorld-$env:VERSION-Windows-x64.zip" -CompressionLevel Optimal
+          # The Windows updater's own files go alongside. It downloads the .exe
+          # itself, by the name and sha512 in the feed file (electron-builder.yml
+          # says what goes on the library host); without the feed and the
+          # blockmap the next release could not be installed by it.
+          Copy-Item "$installer.blockmap" dist/release/
+          $feeds = Get-ChildItem dist/*.yml | Where-Object Name -ne 'builder-debug.yml'
+          if (-not $feeds) { throw 'no update feed (latest.yml / beta.yml) was written' }
+          $feeds | Copy-Item -Destination dist/release/
+          Get-ChildItem dist/release | Format-Table Name, Length
+
+      - name: Zip the macOS disk image
+        if: matrix.platform == 'mac'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          dmg="WonderWorld-$VERSION-universal.dmg"
+          mkdir -p dist/release
+          (cd dist && zip "release/WonderWorld-$VERSION-macOS-universal.zip" "$dmg")
+          ls -la dist/release
+
+      - name: Upload the release files as workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: installers-${{ matrix.platform }}
-          path: |
-            dist/*.exe
-            dist/*.exe.blockmap
-            dist/*.dmg
-            dist/*.zip
-            dist/*.blockmap
-            dist/*.yml
-            !dist/builder-debug.yml
-          if-no-files-found: ignore
+          name: release-${{ matrix.platform }}
+          path: dist/release/*
+          if-no-files-found: error
 
-      - name: Attach assets to the GitHub Release
+      - name: Attach the release files to the GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         shell: bash
-        run: |
-          shopt -s nullglob
-          # dist/*.yml, not dist/latest*.yml: the feed file is named after the
-          # channel, so a 1.0.0-beta.N build emits beta.yml. Matching only
-          # "latest*" would silently drop the one file the updater reads.
-          # builder-debug.yml is build diagnostics and must not ship.
-          # Globs overlap (*.exe.blockmap also matches *.blockmap), so dedupe —
-          # gh rejects the same asset twice. Skip the NSIS uninstaller stub and
-          # build diagnostics, which are not release assets.
-          # No associative array for the dedupe: macOS runners have bash 3.2,
-          # which has none ("declare: -A: invalid option"). The names seen are
-          # kept in one string, each between slashes — a file name has none.
-          seen="/"
-          files=()
-          for f in dist/*.exe dist/*.dmg dist/*.zip dist/*.blockmap dist/*.yml; do
-            base=$(basename "$f")
-            case "$base" in
-              builder-debug.yml|*__uninstaller*) continue ;;
-            esac
-            case "$seen" in
-              */"$base"/*) continue ;;
-            esac
-            seen="$seen$base/"
-            files+=("$f")
-          done
-          if [ ${#files[@]} -eq 0 ]; then
-            echo "No release assets produced — nothing to attach."
-            exit 0
-          fi
-          printf 'attaching: %s\n' "${files[@]}"
-          gh release upload "$TAG" "${files[@]}" --repo "$REPO" --clobber
+        run: gh release upload "$TAG" dist/release/* --repo "$REPO" --clobber

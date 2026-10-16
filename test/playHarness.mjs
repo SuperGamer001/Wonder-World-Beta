@@ -119,6 +119,7 @@ async function backToPlay() {
 await send('Runtime.enable');
 await send('Page.enable');
 // Who is playing (a new data folder would stop to ask), and a world to play in.
+process.env.WW_RELEASE_NOTES = 'none';      // no notes file: "What is New" does not come up over this run
 await fetch(`${base}/api/profiles`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Tester' }) });
 await fetch(`${base}/api/settings`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ playerName: 'Tester', graphics: 'simple' }) });
 const world = await (await fetch(`${base}/api/worlds`, {

@@ -1,0 +1,18 @@
+{
+  "id": "painting_huge",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "painting_huge",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "stick",
+      "count": 20
+    },
+    {
+      "itemId": "wool_block",
+      "count": 8
+    }
+  ]
+}

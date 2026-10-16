@@ -1,0 +1,8 @@
+{
+  "id": "yellow_carpet",
+  "name": "Yellow Carpet",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

@@ -1,0 +1,25 @@
+{
+  "id": 395,
+  "name": "MOSSY_STONE_STAIRS_TOP_NORTH",
+  "terrainType": "solid",
+  "color": [
+    0.42,
+    0.5,
+    0.4
+  ],
+  "hardness": 2.5,
+  "requiresTool": "pickaxe",
+  "texture": "Mossy_Stone.png",
+  "model": "stairs",
+  "facing": "north",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "mossy_stone_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

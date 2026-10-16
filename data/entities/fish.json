@@ -24,9 +24,10 @@
     "biomes": [
       "OCEAN"
     ],
-    "minY": 0,
-    "maxY": 60,
+    "minY": -60,
+    "maxY": 300,
     "minGroupSize": 3,
     "maxGroupSize": 8
-  }
+  },
+  "fallDamage": false
 }

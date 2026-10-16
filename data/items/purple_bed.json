@@ -1,0 +1,8 @@
+{
+  "id": "purple_bed",
+  "name": "Purple Bed",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 1,
+  "category": "Building"
+}

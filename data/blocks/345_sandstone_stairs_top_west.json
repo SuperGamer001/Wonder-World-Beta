@@ -1,0 +1,25 @@
+{
+  "id": 345,
+  "name": "SANDSTONE_STAIRS_TOP_WEST",
+  "terrainType": "solid",
+  "color": [
+    0.85,
+    0.78,
+    0.55
+  ],
+  "hardness": 1.5,
+  "requiresTool": "pickaxe",
+  "texture": "Sandstone.png",
+  "model": "stairs",
+  "facing": "west",
+  "shape": {
+    "half": "top"
+  },
+  "drops": [
+    {
+      "itemId": "sandstone_stairs",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

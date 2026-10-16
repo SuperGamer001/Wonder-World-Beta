@@ -1,0 +1,18 @@
+{
+  "id": "blue_wool",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "blue_wool",
+    "count": 1
+  },
+  "ingredients": [
+    {
+      "itemId": "wool_block",
+      "count": 1
+    },
+    {
+      "itemId": "cornflower",
+      "count": 1
+    }
+  ]
+}

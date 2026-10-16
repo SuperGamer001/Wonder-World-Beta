@@ -1,0 +1,20 @@
+{
+  "id": 92,
+  "name": "THATCH",
+  "terrainType": "solid",
+  "color": [
+    0.72,
+    0.6,
+    0.3
+  ],
+  "hardness": 0.5,
+  "drops": [
+    {
+      "itemId": "thatch",
+      "count": 1
+    }
+  ],
+  "texture": "Thatch.png",
+  "flammable": 80,
+  "sound": "grass"
+}

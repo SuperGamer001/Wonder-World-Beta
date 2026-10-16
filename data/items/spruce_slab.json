@@ -1,0 +1,8 @@
+{
+  "id": "spruce_slab",
+  "name": "Spruce Slab",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

@@ -1,0 +1,22 @@
+{
+  "id": 546,
+  "name": "SPRUCE_TABLE",
+  "terrainType": "solid",
+  "color": [
+    0.45,
+    0.32,
+    0.2
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "table",
+  "drops": [
+    {
+      "itemId": "spruce_table",
+      "count": 1
+    }
+  ],
+  "texture": "Spruce_Planks.png"
+}

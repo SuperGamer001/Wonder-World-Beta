@@ -1,0 +1,27 @@
+{
+  "id": 556,
+  "name": "BIRCH_CHAIR_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.82,
+    0.74,
+    0.54
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "wood",
+  "flammable": 20,
+  "model": "chair",
+  "texture": "Birch_Planks.png",
+  "use": {
+    "sit": true
+  },
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "birch_chair",
+      "count": 1
+    }
+  ],
+  "variant": true
+}

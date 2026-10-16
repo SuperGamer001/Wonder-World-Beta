@@ -1,0 +1,9 @@
+{
+  "id": "spruce_planks",
+  "name": "Spruce Planks",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building",
+  "group": "planks"
+}

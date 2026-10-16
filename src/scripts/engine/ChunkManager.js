@@ -355,6 +355,7 @@ export class ChunkManager {
                 const chunk = ChunkData.deserialize(cx, cz, saved);
                 this._applyPendingChanges(chunk, cx, cz);
                 this.world.setChunk(cx, cz, chunk);
+                this.onChunkLoaded?.(cx, cz, chunk);
                 chunk.dirty = true;
                 this._schedule(cx, cz);
                 this._remeshNeighbors(cx, cz);
@@ -385,6 +386,8 @@ export class ChunkManager {
                 this._applyPendingChanges(chunk, cx, cz);
 
                 this.world.setChunk(cx, cz, chunk);
+                // (For what goes on in a chunk by itself — water on its way, a fire: world.js.)
+                this.onChunkLoaded?.(cx, cz, chunk);
 
                 chunk.dirty = true;
                 this._schedule(cx, cz);

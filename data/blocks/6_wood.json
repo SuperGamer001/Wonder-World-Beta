@@ -19,5 +19,6 @@
       "itemId": "wood_log",
       "count": 1
     }
-  ]
+  ],
+  "flammable": 15
 }

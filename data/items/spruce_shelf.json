@@ -1,0 +1,8 @@
+{
+  "id": "spruce_shelf",
+  "name": "Spruce Shelf",
+  "type": "resource",
+  "weight": 1,
+  "maxStack": 64,
+  "category": "Building"
+}

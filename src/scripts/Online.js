@@ -84,10 +84,10 @@ async function auth() {
 }
 
 /** What every game says of itself at the door. */
-async function hello({ name, skin, slot = 0, gamepack }) {
+async function hello({ name, skin, slot = 0, gamepack, key = '' }) {
     const c = await config();
     const { WORLD_GEN } = await import('./workers/TerrainGenerator.js');
-    return { version: c.version, content: contentHash(gamepack), worldGen: WORLD_GEN, name: String(name ?? ''), skin: skin ?? {}, slot };
+    return { version: c.version, content: contentHash(gamepack), worldGen: WORLD_GEN, name: String(name ?? ''), skin: skin ?? {}, slot, pk: String(key ?? '') };
 }
 
 /** A world.json, as a guest's game needs it — and nothing else that is in one. */

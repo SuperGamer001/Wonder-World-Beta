@@ -1,0 +1,14 @@
+{
+  "id": "polished_diorite_wall_slab",
+  "station": "crafting_table",
+  "result": {
+    "itemId": "polished_diorite_wall_slab",
+    "count": 2
+  },
+  "ingredients": [
+    {
+      "itemId": "polished_diorite",
+      "count": 1
+    }
+  ]
+}

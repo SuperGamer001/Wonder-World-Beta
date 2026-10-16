@@ -1,0 +1,76 @@
+{
+  "id": 924,
+  "name": "PAINTING_GRAND_2_0_0_NORTH",
+  "terrainType": "solid",
+  "model": "painting",
+  "facing": "north",
+  "shape": {
+    "tile": [
+      0.5,
+      0,
+      0
+    ]
+  },
+  "color": [
+    0.5,
+    0.36,
+    0.2
+  ],
+  "hardness": 0.1,
+  "drops": [
+    {
+      "itemId": "painting_grand",
+      "count": 1
+    }
+  ],
+  "texture": "Painting_Grand_2_L.png",
+  "support": [
+    0,
+    0,
+    1
+  ],
+  "sound": "wood",
+  "flammable": 60,
+  "group": [
+    [
+      -1,
+      0,
+      0
+    ],
+    [
+      -2,
+      0,
+      0
+    ],
+    [
+      -3,
+      0,
+      0
+    ],
+    [
+      0,
+      1,
+      0
+    ],
+    [
+      -1,
+      1,
+      0
+    ],
+    [
+      -2,
+      1,
+      0
+    ],
+    [
+      -3,
+      1,
+      0
+    ]
+  ],
+  "piece": "PAINTING_GRAND_2",
+  "use": {
+    "toggle": "PAINTING_GRAND_1_0_0_NORTH"
+  },
+  "variant": true
+}

@@ -1,0 +1,31 @@
+{
+  "id": 576,
+  "name": "ORANGE_SOFA_SOUTH",
+  "terrainType": "solid",
+  "color": [
+    0.86,
+    0.5,
+    0.16
+  ],
+  "hardness": 1,
+  "tool": "axe",
+  "sound": "grass",
+  "flammable": 20,
+  "model": "sofa",
+  "textures": {
+    "top": "Wool_Orange.png",
+    "side": "Wooden_Planks.png",
+    "bottom": "Wooden_Planks.png"
+  },
+  "use": {
+    "sit": true
+  },
+  "facing": "south",
+  "drops": [
+    {
+      "itemId": "orange_sofa",
+      "count": 1
+    }
+  ],
+  "variant": true
+}
